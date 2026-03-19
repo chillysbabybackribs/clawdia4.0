@@ -34,8 +34,10 @@ import { promisify } from 'util';
 const execAsync = promisify(exec);
 
 async function cmdExists(cmd: string): Promise<boolean> {
+  const safeCmd = cmd.replace(/[^a-z0-9-]/gi, '');
+  if (!safeCmd) return false;
   try {
-    await execAsync(`which ${cmd} 2>/dev/null`, { timeout: 3000 });
+    await execAsync(`which ${safeCmd} 2>/dev/null`, { timeout: 3000 });
     return true;
   } catch {
     return false;
@@ -120,24 +122,30 @@ export async function runPreLLMSetup(
       if (targetApp) {
         // ── NEW: Install app if binary is missing ──
         const binaryMissing = !(await cmdExists(targetApp));
+        let appAvailable = !binaryMissing;
         if (binaryMissing) {
-          onProgress?.(`Installing ${targetApp}...`);
-          await installApp(targetApp, onProgress ?? (() => {}));
+          appAvailable = await installApp(targetApp, onProgress ?? (() => {}));
         }
 
-        // ── NEW: Generate harness if none exists ──
-        const existingProfile = getAppProfile(targetApp);
-        const hasHarness = existingProfile?.cliAnything?.installed === true;
-        if (!hasHarness) {
-          onProgress?.(`No CLI harness found for ${targetApp} — building one now. This takes a few minutes...`);
-          const built = await runHarnessPipeline(targetApp, {
-            apiKey,
-            onProgress: onProgress ?? (() => {}),
-            onRegisterCancel: registerNestedCancel,
-          });
-          clearNestedCancel();
-          if (!built) {
-            onProgress?.(`Harness generation failed — falling back to available surfaces.`);
+        // ── NEW: Generate harness if none exists (only when app is available) ──
+        if (appAvailable) {
+          const existingProfile = getAppProfile(targetApp);
+          const hasHarness = existingProfile?.cliAnything?.installed === true;
+          if (!hasHarness) {
+            onProgress?.(`No CLI harness found for ${targetApp} — building one now. This takes a few minutes...`);
+            let built = false;
+            try {
+              built = await runHarnessPipeline(targetApp, {
+                apiKey,
+                onProgress: onProgress ?? (() => {}),
+                onRegisterCancel: registerNestedCancel,
+              });
+            } finally {
+              clearNestedCancel();
+            }
+            if (!built) {
+              onProgress?.(`Harness generation failed — falling back to available surfaces.`);
+            }
           }
         }
 
