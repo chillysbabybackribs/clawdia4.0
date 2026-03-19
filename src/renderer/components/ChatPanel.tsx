@@ -78,18 +78,38 @@ function AssistantMessage({ message, streamMap }: { message: Message; streamMap?
 
   // Live path: flat append-only feed
   if (message.feed && message.feed.length > 0) {
+    // Collapse consecutive tool items into groups for rendering
+    type RenderGroup =
+      | { kind: 'tools'; tools: ToolCall[]; startIdx: number }
+      | { kind: 'text'; text: string; isStreaming?: boolean; idx: number };
+
+    const groups: RenderGroup[] = [];
+    for (let i = 0; i < message.feed.length; i++) {
+      const item = message.feed[i];
+      if (item.kind === 'tool') {
+        const last = groups[groups.length - 1];
+        if (last && last.kind === 'tools') {
+          last.tools.push(item.tool);
+        } else {
+          groups.push({ kind: 'tools', tools: [item.tool], startIdx: i });
+        }
+      } else {
+        groups.push({ kind: 'text', text: item.text, isStreaming: item.isStreaming, idx: i });
+      }
+    }
+
     return (
       <div className="flex justify-start animate-slide-up group">
         <div className="max-w-[92%] px-1 py-2 text-text-primary flex flex-col gap-3">
-          {message.feed.map((item, i) =>
-            item.kind === 'tool' ? (
-              <ToolActivity key={i} tools={[item.tool]} streamMap={activeStreamMap} />
+          {groups.map((g, i) =>
+            g.kind === 'tools' ? (
+              <ToolActivity key={g.startIdx} tools={g.tools} streamMap={activeStreamMap} />
             ) : (
-              <MarkdownRenderer key={i} content={item.text} isStreaming={item.isStreaming === true} />
+              <MarkdownRenderer key={g.idx} content={g.text} isStreaming={g.isStreaming === true} />
             )
           )}
           {!message.isStreaming && message.content && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 mt-1">
               <span className="text-[10px] text-text-secondary/70">{message.timestamp}</span>
               <CopyButton text={message.content} />
             </div>
@@ -427,7 +447,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
       </header>
 
       <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto overflow-x-hidden scroll-smooth">
-        <div className="flex flex-col gap-4 px-4 py-5 max-w-[720px]">
+        <div className="flex flex-col gap-4 px-4 pt-5 pb-8 max-w-[720px]">
           {messages.length === 0 && (
             <div className="flex items-center justify-center h-[60vh] text-text-muted">
               <div className="flex flex-col items-center gap-3">
