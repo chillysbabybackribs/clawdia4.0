@@ -13,61 +13,46 @@ Clawdia is an Electron desktop agent that gives Claude direct access to your fil
 - **Smart model routing** — Classifier auto-selects Haiku for greetings, Sonnet for tasks, Opus for deep analysis
 - **Streaming responses** — Real-time markdown rendering with GFM tables, code blocks, and enterprise-grade styling
 
-## Prerequisites
-
-- **Node.js** 20+ (check with `node -v`)
-- **Anthropic API key** — Get one at [console.anthropic.com](https://console.anthropic.com)
-- **Linux, macOS, or Windows** with build tools for native modules
-
-### Platform-specific build tools
-
-**Ubuntu/Debian:**
-```bash
-sudo apt install build-essential python3
-```
-
-**macOS:**
-```bash
-xcode-select --install
-```
-
-**Windows:**
-```bash
-npm install -g windows-build-tools
-```
-
 ## Quick Start
 
 ```bash
-# Clone
 git clone https://github.com/chillysbabybackribs/clawdia4.0.git
 cd clawdia4.0
-
-# Install dependencies (also rebuilds native modules for Electron)
-npm install
-
-# Build TypeScript
-npm run build:main
-
-# Run in development mode
+./setup.sh
 npm run dev
 ```
 
-On first launch, go to **Settings** (gear icon in sidebar) and paste your Anthropic API key. Select your preferred model (Sonnet 4.6 recommended).
+That's it. The setup script checks prerequisites, installs dependencies, builds TypeScript, and detects GPU issues. On first launch, a welcome screen walks you through adding your Anthropic API key.
+
+### Manual setup (if you prefer)
+
+```bash
+npm install          # Install deps + rebuild native modules
+npm run dev          # Builds TypeScript automatically, then starts
+```
+
+### Windows
+
+```bash
+npm install
+npm run dev
+```
+
+The setup script is bash-only. On Windows, `npm install` and `npm run dev` are all you need — the `predev` hook auto-builds TypeScript.
 
 ## GPU Issues
 
-If you experience crashes or rendering glitches (common on Linux with hybrid NVIDIA/Intel GPUs), use the GPU-disabled mode:
+If you experience crashes or rendering glitches (common on Linux with hybrid NVIDIA/Intel GPUs):
 
 ```bash
-# Development
 npm run dev:nogpu
-
-# Production
-npm run start:nogpu
 ```
 
-This adds Chromium flags that disable hardware acceleration and use software rendering.
+This disables hardware acceleration and uses software rendering via SwiftShader.
+
+## Sandbox Note
+
+All scripts include `--no-sandbox` because Clawdia has full system access by design (shell commands, file I/O, app control). Chromium sandboxing provides no meaningful security for an app that intentionally runs arbitrary commands.
 
 ## Architecture
 
@@ -84,66 +69,65 @@ src/
 │   │   ├── tool-builder.ts     # Tool schemas + dispatch map
 │   │   ├── executors/          # Tool implementations
 │   │   └── prompt/             # CORE.md, modules/, INJECTIONS.md
-│   ├── browser/            # BrowserView manager (navigation, extraction, interaction)
-│   └── db/                 # SQLite persistence (conversations, messages, memory)
+│   ├── browser/            # BrowserView manager
+│   └── db/                 # SQLite persistence
 ├── renderer/               # React + Tailwind UI
-│   ├── App.tsx             # Layout: sidebar + chat + browser panels
+│   ├── App.tsx             # Layout + first-run detection
 │   └── components/         # ChatPanel, BrowserPanel, Settings, etc.
 └── shared/                 # IPC channels, types
 ```
 
 ### How the agent loop works
 
-1. **Classify** — Pure regex matches the user's message to a tool group (core/browser/full) and prompt modules
-2. **Build prompt** — Assembles static system prompt from .md files (cached) + dynamic context (date, memory, model)
-3. **Call LLM** — Anthropic API with streaming, 3 cache breakpoints, model-aware max_tokens
-4. **Dispatch tools** — If the LLM returns tool_use blocks, execute them and loop back to step 3
-5. **Respond** — Final text streams to the UI with markdown rendering
+1. **Classify** — Regex matches user message → tool group + prompt modules (zero LLM cost)
+2. **Build prompt** — Static .md files (cached) + dynamic context (date, OS, memory)
+3. **Call LLM** — Streaming with 3 cache breakpoints, model-aware max_tokens
+4. **Dispatch tools** — Execute tool calls, loop back to step 3
+5. **Respond** — Final text streams with live markdown rendering
 
 ### Tool groups
 
 | Group | Tools | Used when |
 |-------|-------|-----------|
 | Core | shell_exec, file_read, file_write, file_edit, directory_tree | Filesystem/code tasks |
-| Browser | browser_search, browser_navigate, browser_click, browser_type, browser_extract, browser_read_page, browser_screenshot | Web browsing/research |
-| Full | All of the above + create_document, memory_search, memory_store | Complex or ambiguous tasks |
+| Browser | browser_search, browser_navigate, browser_click, browser_type, browser_extract, browser_read_page, browser_screenshot | Web research |
+| Full | All above + create_document, memory_search, memory_store | Complex tasks |
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+N` | New chat |
+| `Ctrl+L` | Clear / new chat |
+| `Ctrl+B` | Toggle browser panel |
+| `Ctrl+H` | Conversation history |
+| `Ctrl+,` | Settings |
+| `Escape` | Back to chat |
 
 ## Configuration
 
-Settings are stored locally at `~/.config/clawdia/` (Linux/macOS) or `%APPDATA%/clawdia/` (Windows):
+Data is stored locally per-user at the OS-standard config path:
 
-- **API key** — Encrypted with a machine-specific key via electron-store
-- **Model selection** — Persists across restarts
-- **Database** — SQLite at `data.sqlite` in the same directory
+| OS | Path |
+|----|------|
+| Linux | `~/.config/clawdia/` |
+| macOS | `~/Library/Application Support/clawdia/` |
+| Windows | `%APPDATA%/clawdia/` |
+
+Contents: `data.sqlite` (conversations, messages, memory) + `clawdia-settings.json` (API key, model).
 
 ## Development
 
 ```bash
-# Watch mode (auto-reloads on changes)
-npm run dev
-
-# Build for production
-npm run build
-
-# Run production build
-npm start
+npm run dev          # Watch mode with hot reload
+npm run build        # Production build (main + renderer)
+npm start            # Run production build
 ```
 
-The `dev` script runs three processes concurrently:
-1. TypeScript watch compiler for main process
-2. Vite dev server for renderer (hot reload)
-3. Electron with nodemon (restarts on main process changes)
+## Security
 
-## Security Notes
-
-Clawdia has **full system access** by design — that's its core capability. It can:
-- Execute arbitrary shell commands
-- Read and write any file your user account can access
-- Browse the web and interact with pages
-- Control desktop applications
-
-**Do not run Clawdia on machines with sensitive data you don't want an LLM to access.** The API key is stored locally with machine-specific encryption and never leaves your machine.
+Clawdia has **full system access by design**. It can execute shell commands, read/write any file, browse the web, and control desktop applications. Your API key is encrypted locally and only sent to the Anthropic API.
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+MIT

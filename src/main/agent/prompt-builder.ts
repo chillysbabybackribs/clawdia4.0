@@ -64,13 +64,14 @@ export function buildStaticPrompt(
 
 /**
  * Build the DYNAMIC system prompt (NOT cached, changes per-request).
- * Now accepts memory context from SQLite.
+ * Includes memory context, desktop capabilities, and browser state.
  */
 export function buildDynamicPrompt(opts: {
   model: string;
   toolGroup: ToolGroup;
   browserUrl?: string;
   memoryContext?: string;
+  desktopContext?: string;
   isGreeting?: boolean;
 }): string {
   const now = new Date();
@@ -85,6 +86,10 @@ export function buildDynamicPrompt(opts: {
     `MODEL: ${opts.model}`,
     `TOOLS: ${opts.toolGroup} group active`,
   ];
+
+  if (opts.desktopContext) {
+    lines.push('', opts.desktopContext);
+  }
 
   if (opts.memoryContext) {
     lines.push('', opts.memoryContext);

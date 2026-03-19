@@ -1,25 +1,105 @@
 /**
- * Browser Manager — BrowserView-based browser for the right panel.
+ * Browser Manager — Multi-tab BrowserView management.
  * 
- * Uses Electron's BrowserView (stable in 39.5.1) with direct webContents API.
- * No Playwright dependency — all interaction via webContents.executeJavaScript().
+ * Each tab is a separate BrowserView with its own webContents.
+ * Only the active tab is visible (has real bounds). Inactive tabs
+ * are hidden at (0,0,0,0). Max 6 tabs to limit memory pressure.
+ * 
+ * All exported functions (navigate, getVisibleText, etc.) operate
+ * on the ACTIVE tab. The agent doesn't need to know about tabs.
  */
 
 import { BrowserView, BrowserWindow } from 'electron';
+import { randomUUID } from 'crypto';
 import { IPC_EVENTS } from '../../shared/ipc-channels';
 
+const MAX_TABS = 6;
+const MAX_HISTORY = 200;
+
+interface Tab {
+  id: string;
+  view: BrowserView;
+  url: string;
+  title: string;
+  isLoading: boolean;
+  loadingTimer: ReturnType<typeof setTimeout> | null;
+}
+
 let mainWindow: BrowserWindow | null = null;
-let browserView: BrowserView | null = null;
+let tabs: Map<string, Tab> = new Map();
+let activeTabId: string | null = null;
 let currentBounds = { x: 0, y: 0, width: 0, height: 0 };
-let loadingTimer: ReturnType<typeof setTimeout> | null = null;
+
+// URL history for autocomplete — stores visited URLs, most recent first
+let urlHistory: string[] = [];
+
+function addToHistory(url: string): void {
+  if (!url || url === 'about:blank') return;
+  // Remove if already present (move to front)
+  urlHistory = urlHistory.filter(u => u !== url);
+  urlHistory.unshift(url);
+  // Cap size
+  if (urlHistory.length > MAX_HISTORY) urlHistory.length = MAX_HISTORY;
+}
 
 /**
- * Initialize the browser. Creates a BrowserView and attaches it to the window.
+ * Find the best URL match for a prefix. Used by the URL bar autocomplete.
+ * Matches against the full URL and also against the domain without protocol.
+ * Returns the full URL or empty string.
  */
+export function matchUrlHistory(prefix: string): string {
+  if (!prefix || prefix.length < 2) return '';
+  const lower = prefix.toLowerCase();
+
+  for (const url of urlHistory) {
+    // Match against full URL
+    if (url.toLowerCase().startsWith(lower)) return url;
+    // Match against URL without protocol (user types "yah" matches "https://yahoo.com")
+    const noProto = url.replace(/^https?:\/\//, '').replace(/^www\./, '');
+    if (noProto.toLowerCase().startsWith(lower)) return url;
+  }
+  return '';
+}
+
+// ═══════════════════════════════════
+// Initialization + Tab Lifecycle
+// ═══════════════════════════════════
+
 export function initBrowser(win: BrowserWindow): void {
   mainWindow = win;
+  createTab('https://www.google.com');
+  console.log('[Browser] Initialized with tabs');
+}
 
-  browserView = new BrowserView({
+function getActiveView(): BrowserView | null {
+  if (!activeTabId) return null;
+  return tabs.get(activeTabId)?.view || null;
+}
+
+function emitTabsChanged(): void {
+  if (!mainWindow) return;
+  mainWindow.webContents.send(IPC_EVENTS.BROWSER_TABS_CHANGED, getTabList());
+}
+
+export function getTabList(): { id: string; url: string; title: string; isLoading: boolean; isActive: boolean }[] {
+  return Array.from(tabs.values()).map(t => ({
+    id: t.id,
+    url: t.url,
+    title: t.title || 'New Tab',
+    isLoading: t.isLoading,
+    isActive: t.id === activeTabId,
+  }));
+}
+
+export function createTab(url?: string): string {
+  if (!mainWindow) throw new Error('Browser not initialized');
+  if (tabs.size >= MAX_TABS) {
+    console.warn(`[Browser] Tab limit reached (${MAX_TABS}).`);
+    return activeTabId || '';
+  }
+
+  const id = randomUUID().slice(0, 8);
+  const view = new BrowserView({
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -28,100 +108,146 @@ export function initBrowser(win: BrowserWindow): void {
     },
   });
 
-  mainWindow.addBrowserView(browserView);
-  browserView.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+  mainWindow.addBrowserView(view);
+  view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
 
-  const wc = browserView.webContents;
+  const tab: Tab = { id, view, url: '', title: 'New Tab', isLoading: false, loadingTimer: null };
+  tabs.set(id, tab);
+  wireTabEvents(tab);
+  switchTab(id);
 
-  // ── Navigation events → renderer ──
+  if (url) view.webContents.loadURL(ensureUrl(url));
 
-  // Main frame navigation completed — definitively stop loading
+  console.log(`[Browser] Created tab ${id} (${tabs.size} total)`);
+  emitTabsChanged();
+  return id;
+}
+
+export function switchTab(id: string): void {
+  const tab = tabs.get(id);
+  if (!tab || !mainWindow) return;
+
+  if (activeTabId && activeTabId !== id) {
+    const prevTab = tabs.get(activeTabId);
+    if (prevTab) prevTab.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+  }
+
+  activeTabId = id;
+
+  if (currentBounds.width > 0 && currentBounds.height > 0) {
+    tab.view.setBounds({
+      x: Math.round(currentBounds.x), y: Math.round(currentBounds.y),
+      width: Math.round(currentBounds.width), height: Math.round(currentBounds.height),
+    });
+  }
+
+  mainWindow.webContents.send(IPC_EVENTS.BROWSER_URL_CHANGED, tab.url);
+  mainWindow.webContents.send(IPC_EVENTS.BROWSER_TITLE_CHANGED, tab.title);
+  mainWindow.webContents.send(IPC_EVENTS.BROWSER_LOADING, tab.isLoading);
+  emitTabsChanged();
+}
+
+export function closeTab(id: string): void {
+  const tab = tabs.get(id);
+  if (!tab || !mainWindow) return;
+
+  if (tabs.size <= 1) {
+    tab.view.webContents.loadURL('https://www.google.com');
+    return;
+  }
+
+  if (tab.loadingTimer) clearTimeout(tab.loadingTimer);
+  mainWindow.removeBrowserView(tab.view);
+  (tab.view.webContents as any)?.destroy?.();
+  tabs.delete(id);
+
+  if (activeTabId === id) {
+    const remaining = Array.from(tabs.keys());
+    activeTabId = remaining[remaining.length - 1] || null;
+    if (activeTabId) switchTab(activeTabId);
+  }
+
+  console.log(`[Browser] Closed tab ${id} (${tabs.size} remaining)`);
+  emitTabsChanged();
+}
+
+function wireTabEvents(tab: Tab): void {
+  const wc = tab.view.webContents;
+
   wc.on('did-navigate', (_event, url) => {
-    console.log(`[Browser] Navigated: ${url}`);
-    mainWindow?.webContents.send(IPC_EVENTS.BROWSER_URL_CHANGED, url);
-    mainWindow?.webContents.send(IPC_EVENTS.BROWSER_TITLE_CHANGED, wc.getTitle());
+    tab.url = url;
+    tab.title = wc.getTitle();
+    addToHistory(url); // Track for autocomplete
+    if (tab.id === activeTabId) {
+      mainWindow?.webContents.send(IPC_EVENTS.BROWSER_URL_CHANGED, url);
+      mainWindow?.webContents.send(IPC_EVENTS.BROWSER_TITLE_CHANGED, tab.title);
+    }
+    emitTabsChanged();
   });
 
   wc.on('did-navigate-in-page', (_event, url) => {
-    mainWindow?.webContents.send(IPC_EVENTS.BROWSER_URL_CHANGED, url);
+    tab.url = url;
+    addToHistory(url);
+    if (tab.id === activeTabId) {
+      mainWindow?.webContents.send(IPC_EVENTS.BROWSER_URL_CHANGED, url);
+    }
+    emitTabsChanged();
   });
 
   wc.on('page-title-updated', (_event, title) => {
-    mainWindow?.webContents.send(IPC_EVENTS.BROWSER_TITLE_CHANGED, title);
+    tab.title = title;
+    if (tab.id === activeTabId) {
+      mainWindow?.webContents.send(IPC_EVENTS.BROWSER_TITLE_CHANGED, title);
+    }
+    emitTabsChanged();
   });
 
-  // Loading state: debounced to avoid flicker from sub-resource loads.
-  // did-start-loading fires for EVERY resource (scripts, images, iframes, tracking pixels).
-  // We set loading=true immediately on main navigation, but only set loading=false
-  // after a 300ms debounce — if another load starts within that window, the spinner stays.
-  wc.on('did-start-navigation', (_event, url, isInPlace, isMainFrame) => {
+  wc.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
     if (isMainFrame && !isInPlace) {
-      // Main frame navigation starting — show loading immediately
-      if (loadingTimer) { clearTimeout(loadingTimer); loadingTimer = null; }
-      mainWindow?.webContents.send(IPC_EVENTS.BROWSER_LOADING, true);
+      tab.isLoading = true;
+      if (tab.loadingTimer) { clearTimeout(tab.loadingTimer); tab.loadingTimer = null; }
+      if (tab.id === activeTabId) {
+        mainWindow?.webContents.send(IPC_EVENTS.BROWSER_LOADING, true);
+      }
+      emitTabsChanged();
     }
   });
 
-  wc.on('did-finish-load', () => {
-    // Main frame finished loading — debounce the stop to avoid flicker
-    scheduleLoadingStop();
+  const scheduleStop = () => {
+    if (tab.loadingTimer) clearTimeout(tab.loadingTimer);
+    tab.loadingTimer = setTimeout(() => {
+      tab.loadingTimer = null;
+      tab.isLoading = false;
+      if (tab.id === activeTabId) {
+        mainWindow?.webContents.send(IPC_EVENTS.BROWSER_LOADING, false);
+      }
+      emitTabsChanged();
+    }, 300);
+  };
+
+  wc.on('did-finish-load', scheduleStop);
+  wc.on('did-stop-loading', scheduleStop);
+  wc.on('did-fail-load', (_event, errorCode, errorDescription, _url, isMainFrame) => {
+    if (isMainFrame) { console.warn(`[Browser] Tab ${tab.id} load failed: ${errorCode}`); scheduleStop(); }
   });
 
-  wc.on('did-stop-loading', () => {
-    // All resources done — schedule loading stop
-    scheduleLoadingStop();
-  });
-
-  wc.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-    if (isMainFrame) {
-      console.warn(`[Browser] Load failed: ${errorCode} ${errorDescription} — ${validatedURL}`);
-      scheduleLoadingStop();
-    }
-  });
-
-  // Open links in the same view
-  wc.setWindowOpenHandler(({ url }) => {
-    wc.loadURL(url);
-    return { action: 'deny' };
-  });
-
-  // Load Google as the default landing page
-  wc.loadURL('https://www.google.com');
-
-  console.log('[Browser] Initialized — loading Google');
-}
-
-function scheduleLoadingStop(): void {
-  if (loadingTimer) clearTimeout(loadingTimer);
-  loadingTimer = setTimeout(() => {
-    loadingTimer = null;
-    mainWindow?.webContents.send(IPC_EVENTS.BROWSER_LOADING, false);
-  }, 300);
+  wc.setWindowOpenHandler(({ url }) => { createTab(url); return { action: 'deny' }; });
 }
 
 // ═══════════════════════════════════
-// Bounds management
+// Bounds
 // ═══════════════════════════════════
 
 export function setBounds(bounds: { x: number; y: number; width: number; height: number }): void {
   currentBounds = bounds;
-  if (browserView && bounds.width > 0 && bounds.height > 0) {
-    browserView.setBounds({
-      x: Math.round(bounds.x),
-      y: Math.round(bounds.y),
-      width: Math.round(bounds.width),
-      height: Math.round(bounds.height),
-    });
+  const view = getActiveView();
+  if (view && bounds.width > 0 && bounds.height > 0) {
+    view.setBounds({ x: Math.round(bounds.x), y: Math.round(bounds.y), width: Math.round(bounds.width), height: Math.round(bounds.height) });
   }
 }
 
-export function hideBrowser(): void {
-  browserView?.setBounds({ x: 0, y: 0, width: 0, height: 0 });
-}
-
-export function showBrowser(): void {
-  if (currentBounds.width > 0) setBounds(currentBounds);
-}
+export function hideBrowser(): void { getActiveView()?.setBounds({ x: 0, y: 0, width: 0, height: 0 }); }
+export function showBrowser(): void { if (currentBounds.width > 0) setBounds(currentBounds); }
 
 // ═══════════════════════════════════
 // Navigation
@@ -129,250 +255,101 @@ export function showBrowser(): void {
 
 function ensureUrl(url: string): string {
   let u = url.trim();
-  if (!u.startsWith('http://') && !u.startsWith('https://') && !u.startsWith('file://')) {
-    u = 'https://' + u;
-  }
+  if (!u.startsWith('http://') && !u.startsWith('https://') && !u.startsWith('file://')) u = 'https://' + u;
   return u;
 }
 
 export async function navigate(url: string): Promise<{ title: string; url: string; content: string }> {
-  if (!browserView) throw new Error('Browser not initialized');
-
-  const wc = browserView.webContents;
-  const fullUrl = ensureUrl(url);
-
-  try {
-    await wc.loadURL(fullUrl);
-  } catch (err: any) {
-    if (!err.message?.includes('ERR_ABORTED')) {
-      console.warn(`[Browser] Navigation error: ${err.message}`);
-    }
+  const view = getActiveView();
+  if (!view) throw new Error('No active tab');
+  const wc = view.webContents;
+  try { await wc.loadURL(ensureUrl(url)); } catch (err: any) {
+    if (!err.message?.includes('ERR_ABORTED')) console.warn(`[Browser] Nav error: ${err.message}`);
   }
-
   await wait(500);
-
-  return {
-    title: wc.getTitle(),
-    url: wc.getURL(),
-    content: await getVisibleText(),
-  };
+  return { title: wc.getTitle(), url: wc.getURL(), content: await getVisibleText() };
 }
 
-export async function goBack(): Promise<void> {
-  if (browserView?.webContents.canGoBack()) browserView.webContents.goBack();
-}
-
-export async function goForward(): Promise<void> {
-  if (browserView?.webContents.canGoForward()) browserView.webContents.goForward();
-}
-
-export async function reload(): Promise<void> {
-  browserView?.webContents.reload();
-}
-
-export function getCurrentUrl(): string {
-  return browserView?.webContents.getURL() || '';
-}
+export async function goBack(): Promise<void> { const v = getActiveView(); if (v?.webContents.canGoBack()) v.webContents.goBack(); }
+export async function goForward(): Promise<void> { const v = getActiveView(); if (v?.webContents.canGoForward()) v.webContents.goForward(); }
+export async function reload(): Promise<void> { getActiveView()?.webContents.reload(); }
+export function getCurrentUrl(): string { return getActiveView()?.webContents.getURL() || ''; }
 
 // ═══════════════════════════════════
 // Content extraction
 // ═══════════════════════════════════
 
 export async function getVisibleText(): Promise<string> {
-  if (!browserView) return '';
+  const view = getActiveView();
+  if (!view) return '';
   try {
-    const text = await browserView.webContents.executeJavaScript(`
-      (function() {
-        const clone = document.body.cloneNode(true);
-        clone.querySelectorAll('script, style, noscript, svg, iframe').forEach(el => el.remove());
-        return clone.innerText.trim();
-      })()
-    `);
-    return text.length > 15000
-      ? text.slice(0, 15000) + '\n\n[Content truncated — page has more text]'
-      : text;
-  } catch (err: any) {
-    console.warn(`[Browser] Text extraction failed: ${err.message}`);
-    return '[Failed to extract page text]';
-  }
+    const text = await view.webContents.executeJavaScript(`(function(){const c=document.body.cloneNode(true);c.querySelectorAll('script,style,noscript,svg,iframe').forEach(e=>e.remove());return c.innerText.trim()})()`);
+    return text.length > 15000 ? text.slice(0, 15000) + '\n\n[Truncated]' : text;
+  } catch (err: any) { return '[Failed to extract text]'; }
 }
 
 export async function getInteractiveElements(): Promise<string> {
-  if (!browserView) return '';
+  const view = getActiveView();
+  if (!view) return '';
   try {
-    return await browserView.webContents.executeJavaScript(`
-      (function() {
-        const elements = [];
-        const nodes = document.querySelectorAll('a[href], button, input, textarea, select, [role="button"], [onclick]');
-        nodes.forEach((el, i) => {
-          if (i >= 50) return;
-          const rect = el.getBoundingClientRect();
-          if (rect.width === 0 || rect.height === 0) return;
-          const tag = el.tagName.toLowerCase();
-          const text = (el.textContent || '').trim().slice(0, 80);
-          const href = el.getAttribute('href') || '';
-          const type = el.getAttribute('type') || '';
-          const placeholder = el.getAttribute('placeholder') || '';
-          let desc = '[' + elements.length + '] ' + tag;
-          if (type) desc += '[type=' + type + ']';
-          if (text) desc += ' "' + text + '"';
-          if (href) desc += ' → ' + href.slice(0, 60);
-          if (placeholder) desc += ' (' + placeholder + ')';
-          elements.push(desc);
-        });
-        return elements.join('\\n');
-      })()
-    `);
+    return await view.webContents.executeJavaScript(`(function(){const e=[];document.querySelectorAll('a[href],button,input,textarea,select,[role=button],[onclick]').forEach((el,i)=>{if(i>=50)return;const r=el.getBoundingClientRect();if(r.width===0||r.height===0)return;const t=el.tagName.toLowerCase(),tx=(el.textContent||'').trim().slice(0,80),h=el.getAttribute('href')||'',ty=el.getAttribute('type')||'',p=el.getAttribute('placeholder')||'';let d='['+e.length+'] '+t;if(ty)d+='[type='+ty+']';if(tx)d+=' "'+tx+'"';if(h)d+=' → '+h.slice(0,60);if(p)d+=' ('+p+')';e.push(d)});return e.join('\\n')})()`);
   } catch { return ''; }
 }
 
 export async function clickElement(target: string): Promise<string> {
-  if (!browserView) throw new Error('Browser not initialized');
+  const view = getActiveView();
+  if (!view) throw new Error('No active tab');
   try {
-    const result = await browserView.webContents.executeJavaScript(`
-      (function() {
-        const target = ${JSON.stringify(target)};
-        if (/^\\d+$/.test(target)) {
-          const idx = parseInt(target);
-          const nodes = Array.from(document.querySelectorAll('a[href], button, input, textarea, select, [role="button"], [onclick]')).filter(el => {
-            const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0;
-          });
-          if (idx >= nodes.length) return 'Error: Index ' + idx + ' out of range (' + nodes.length + ' elements)';
-          nodes[idx].click();
-          return 'Clicked [' + idx + ']: ' + (nodes[idx].textContent || '').trim().slice(0, 60);
-        }
-        if (target.startsWith('.') || target.startsWith('#') || target.startsWith('[')) {
-          const el = document.querySelector(target);
-          if (!el) return 'Error: No element matches "' + target + '"';
-          el.click();
-          return 'Clicked: ' + (el.textContent || '').trim().slice(0, 60);
-        }
-        for (const el of document.querySelectorAll('a, button, [role="button"], [onclick]')) {
-          if ((el.textContent || '').trim().toLowerCase().includes(target.toLowerCase())) {
-            el.click();
-            return 'Clicked: "' + (el.textContent || '').trim().slice(0, 60) + '"';
-          }
-        }
-        return 'Error: No clickable element matching "' + target + '"';
-      })()
-    `);
+    const result = await view.webContents.executeJavaScript(`(function(){const t=${JSON.stringify(target)};if(/^\\d+$/.test(t)){const i=parseInt(t),n=Array.from(document.querySelectorAll('a[href],button,input,textarea,select,[role=button],[onclick]')).filter(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0});if(i>=n.length)return'Error: Index '+i+' out of range ('+n.length+')';n[i].click();return'Clicked ['+i+']: '+(n[i].textContent||'').trim().slice(0,60)}if(t.startsWith('.')||t.startsWith('#')||t.startsWith('[')){const e=document.querySelector(t);if(!e)return'Error: No match "'+t+'"';e.click();return'Clicked: '+(e.textContent||'').trim().slice(0,60)}for(const e of document.querySelectorAll('a,button,[role=button],[onclick]'))if((e.textContent||'').trim().toLowerCase().includes(t.toLowerCase())){e.click();return'Clicked: "'+(e.textContent||'').trim().slice(0,60)+'"'}return'Error: No match "'+t+'"'})()`);
     await wait(800);
     return result;
-  } catch (err: any) {
-    return '[Error clicking]: ' + err.message;
-  }
+  } catch (err: any) { return '[Error clicking]: ' + err.message; }
 }
 
 export async function typeText(text: string, selector?: string): Promise<string> {
-  if (!browserView) throw new Error('Browser not initialized');
+  const view = getActiveView();
+  if (!view) throw new Error('No active tab');
   try {
-    return await browserView.webContents.executeJavaScript(`
-      (function() {
-        const text = ${JSON.stringify(text)};
-        const selector = ${JSON.stringify(selector || '')};
-        let el;
-        if (selector) {
-          el = document.querySelector(selector);
-          if (!el) return 'Error: No element matches "' + selector + '"';
-        } else {
-          el = document.activeElement;
-          if (!el || (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA' && !el.isContentEditable)) {
-            el = document.querySelector('input:not([type=hidden]):not([type=submit]):not([type=button]), textarea');
-          }
-          if (!el) return 'Error: No input field found';
-        }
-        el.focus();
-        if (el.isContentEditable) {
-          el.textContent = text;
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-        } else {
-          const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set
-            || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-          if (setter) setter.call(el, text); else el.value = text;
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        return 'Typed into ' + el.tagName.toLowerCase() + (el.name ? '[name=' + el.name + ']' : '');
-      })()
-    `);
-  } catch (err: any) {
-    return '[Error typing]: ' + err.message;
-  }
+    return await view.webContents.executeJavaScript(`(function(){const t=${JSON.stringify(text)},s=${JSON.stringify(selector||'')};let e;if(s){e=document.querySelector(s);if(!e)return'Error: No match "'+s+'"'}else{e=document.activeElement;if(!e||(e.tagName!=='INPUT'&&e.tagName!=='TEXTAREA'&&!e.isContentEditable))e=document.querySelector('input:not([type=hidden]):not([type=submit]):not([type=button]),textarea');if(!e)return'Error: No input found'}e.focus();if(e.isContentEditable){e.textContent=t;e.dispatchEvent(new Event('input',{bubbles:true}))}else{const s=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(e),'value')?.set||Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;if(s)s.call(e,t);else e.value=t;e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}))}return'Typed into '+e.tagName.toLowerCase()+(e.name?'[name='+e.name+']':'')})()`);
+  } catch (err: any) { return '[Error typing]: ' + err.message; }
 }
 
 export async function extractData(instruction: string): Promise<string> {
-  if (!browserView) throw new Error('Browser not initialized');
-  const text = await getVisibleText();
-  return `[Extraction — "${instruction}"]\n\n${text}`;
+  const view = getActiveView();
+  if (!view) throw new Error('No active tab');
+  return `[Extraction — "${instruction}"]\n\n${await getVisibleText()}`;
 }
 
 export async function takeScreenshot(): Promise<string> {
-  if (!browserView) throw new Error('Browser not initialized');
+  const view = getActiveView();
+  if (!view) throw new Error('No active tab');
   try {
-    const image = await browserView.webContents.capturePage();
-    const size = image.getSize();
-    const base64 = image.toPNG().toString('base64');
-    return `[Screenshot: ${size.width}x${size.height}px, ${Math.round(base64.length / 1024)}KB]`;
-  } catch (err: any) {
-    return '[Error capturing screenshot]: ' + err.message;
-  }
+    const img = await view.webContents.capturePage();
+    const s = img.getSize();
+    return `[Screenshot: ${s.width}x${s.height}px, ${Math.round(img.toPNG().toString('base64').length / 1024)}KB]`;
+  } catch (err: any) { return '[Error screenshot]: ' + err.message; }
 }
 
 export async function search(query: string): Promise<string> {
-  if (!browserView) throw new Error('Browser not initialized');
-
-  const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+  const view = getActiveView();
+  if (!view) throw new Error('No active tab');
   try {
-    await browserView.webContents.loadURL(searchUrl);
+    await view.webContents.loadURL(`https://www.google.com/search?q=${encodeURIComponent(query)}`);
     await wait(1500);
-
-    const results = await browserView.webContents.executeJavaScript(`
-      (function() {
-        const results = [];
-        document.querySelectorAll('div.g, div[data-sokoban-container]').forEach((c, i) => {
-          if (i >= 5) return;
-          const a = c.querySelector('a[href]');
-          const h = c.querySelector('h3');
-          const s = c.querySelector('[data-sncf], .VwiC3b, [style*="-webkit-line-clamp"]');
-          if (!a || !h) return;
-          const url = a.getAttribute('href') || '';
-          if (url.startsWith('/search') || url.startsWith('/url')) return;
-          results.push({ title: h.textContent.trim(), url: url.trim(), snippet: s ? s.textContent.trim().slice(0, 200) : '' });
-        });
-        if (results.length === 0) {
-          document.querySelectorAll('a[href^="http"]').forEach((a, i) => {
-            if (i >= 5) return;
-            const t = (a.textContent || '').trim();
-            if (t.length > 5 && t.length < 200) results.push({ title: t.slice(0, 100), url: a.href, snippet: '' });
-          });
-        }
-        return JSON.stringify(results);
-      })()
-    `);
-
+    const results = await view.webContents.executeJavaScript(`(function(){const r=[];document.querySelectorAll('div.g,div[data-sokoban-container]').forEach((c,i)=>{if(i>=5)return;const a=c.querySelector('a[href]'),h=c.querySelector('h3'),s=c.querySelector('[data-sncf],.VwiC3b,[style*="-webkit-line-clamp"]');if(!a||!h)return;const u=a.getAttribute('href')||'';if(u.startsWith('/search')||u.startsWith('/url'))return;r.push({title:h.textContent.trim(),url:u.trim(),snippet:s?s.textContent.trim().slice(0,200):''})});if(r.length===0)document.querySelectorAll('a[href^="http"]').forEach((a,i)=>{if(i>=5)return;const t=(a.textContent||'').trim();if(t.length>5&&t.length<200)r.push({title:t.slice(0,100),url:a.href,snippet:''})});return JSON.stringify(r)})()`);
     const parsed = JSON.parse(results || '[]');
-    if (parsed.length === 0) {
-      const text = await getVisibleText();
-      return 'Search results for "' + query + '" (raw text):\\n\\n' + text.slice(0, 3000);
-    }
-    return 'Search results for "' + query + '":\\n\\n' + parsed.map((r: any, i: number) =>
-      '[' + (i + 1) + '] ' + r.title + '\\n    ' + r.url + '\\n    ' + r.snippet
-    ).join('\\n\\n');
-  } catch (err: any) {
-    return '[Error searching]: ' + err.message;
-  }
+    if (parsed.length === 0) return 'Search for "' + query + '":\\n\\n' + (await getVisibleText()).slice(0, 3000);
+    return 'Search results for "' + query + '":\\n\\n' + parsed.map((r: any, i: number) => '[' + (i+1) + '] ' + r.title + '\\n    ' + r.url + '\\n    ' + r.snippet).join('\\n\\n');
+  } catch (err: any) { return '[Error searching]: ' + err.message; }
 }
 
 export function closeBrowser(): void {
-  if (loadingTimer) { clearTimeout(loadingTimer); loadingTimer = null; }
-  if (browserView && mainWindow) {
-    mainWindow.removeBrowserView(browserView);
-    (browserView.webContents as any)?.destroy?.();
-    browserView = null;
+  for (const [, tab] of tabs) {
+    if (tab.loadingTimer) clearTimeout(tab.loadingTimer);
+    if (mainWindow) mainWindow.removeBrowserView(tab.view);
+    (tab.view.webContents as any)?.destroy?.();
   }
-  console.log('[Browser] Closed');
+  tabs.clear(); activeTabId = null;
 }
 
-function wait(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+function wait(ms: number): Promise<void> { return new Promise(r => setTimeout(r, ms)); }

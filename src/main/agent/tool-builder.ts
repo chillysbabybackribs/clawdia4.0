@@ -8,10 +8,7 @@ import type { ToolGroup } from './classifier';
 import { executeShellExec, executeFileRead, executeFileWrite, executeFileEdit, executeDirectoryTree } from './executors/core-executors';
 import { executeBrowserSearch, executeBrowserNavigate, executeBrowserReadPage, executeBrowserClick, executeBrowserType, executeBrowserExtract, executeBrowserScreenshot } from './executors/browser-executors';
 import { executeCreateDocument, executeMemorySearch, executeMemoryStore } from './executors/extra-executors';
-
-// ═══════════════════════════════════
-// Tool Schema Definitions
-// ═══════════════════════════════════
+import { executeAppControl, executeGuiInteract, executeDbusControl } from './executors/desktop-executors';
 
 const CORE_TOOLS: Anthropic.Tool[] = [
   {
@@ -81,29 +78,25 @@ const CORE_TOOLS: Anthropic.Tool[] = [
 const BROWSER_TOOLS: Anthropic.Tool[] = [
   {
     name: 'browser_search',
-    description: 'Web search via Google. Returns top 5 results with titles, URLs, and snippets. Check snippets before clicking into pages. Include current year for time-sensitive queries.',
+    description: 'Web search via Google. Returns top 5 results with titles, URLs, and snippets.',
     input_schema: {
       type: 'object' as const,
-      properties: {
-        query: { type: 'string', description: 'The search query' },
-      },
+      properties: { query: { type: 'string', description: 'The search query' } },
       required: ['query'],
     },
   },
   {
     name: 'browser_navigate',
-    description: 'Navigate to a URL in the visible browser panel. Returns page title, URL, and visible text. Do NOT call browser_read_page after — content is already returned.',
+    description: 'Navigate to a URL in the visible browser panel. Returns page title, URL, and visible text.',
     input_schema: {
       type: 'object' as const,
-      properties: {
-        url: { type: 'string', description: 'The URL to navigate to' },
-      },
+      properties: { url: { type: 'string', description: 'The URL to navigate to' } },
       required: ['url'],
     },
   },
   {
     name: 'browser_read_page',
-    description: 'Re-read current page text. Only needed if page changed since last navigation (SPA updates, after button clicks).',
+    description: 'Re-read current page text. Only needed if page changed since last navigation.',
     input_schema: { type: 'object' as const, properties: {} },
   },
   {
@@ -111,15 +104,13 @@ const BROWSER_TOOLS: Anthropic.Tool[] = [
     description: 'Click an element on the current page. Use element index (preferred), CSS selector, or visible text.',
     input_schema: {
       type: 'object' as const,
-      properties: {
-        target: { type: 'string', description: 'Element index, CSS selector, or visible text' },
-      },
+      properties: { target: { type: 'string', description: 'Element index, CSS selector, or visible text' } },
       required: ['target'],
     },
   },
   {
     name: 'browser_type',
-    description: 'Type text into an input field. Use selector to target a specific field. Does NOT submit — click submit separately.',
+    description: 'Type text into an input field. Does NOT submit — click submit separately.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -131,7 +122,7 @@ const BROWSER_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: 'browser_extract',
-    description: 'Extract structured data from current page. Use for prices, tables, product details.',
+    description: 'Extract structured data from current page.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -143,7 +134,7 @@ const BROWSER_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: 'browser_screenshot',
-    description: 'Capture screenshot of browser viewport. Use to see visual layout or verify actions.',
+    description: 'Capture screenshot of browser viewport.',
     input_schema: { type: 'object' as const, properties: {} },
   },
 ];
@@ -165,7 +156,7 @@ const EXTRA_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: 'memory_search',
-    description: 'Search persistent memory for stored facts and context. Uses full-text search.',
+    description: 'Search persistent memory for stored facts and context.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -188,11 +179,86 @@ const EXTRA_TOOLS: Anthropic.Tool[] = [
       required: ['category', 'key', 'value'],
     },
   },
-];
+  // ── Desktop Control ──
+  {
+    name: 'app_control',
+    description: 'Control a desktop application via CLI-Anything harness. For GIMP, Blender, LibreOffice, OBS, Inkscape, Audacity, Kdenlive, Shotcut. Returns structured JSON. Falls back to native CLI if no harness installed. Try this FIRST before gui_interact.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        app: { type: 'string', description: 'Application name (e.g., "gimp", "blender")' },
+        command: { type: 'string', description: 'Command (e.g., "open-file /path", "--help")' },
+        json: { type: 'boolean', description: 'Use --json flag (default true)' },
+      },
+      required: ['app', 'command'],
+    },
+  },
+  {
+    name: 'gui_interact',
+    description: `Interact with any visible GUI window. Works on ANY desktop app.
 
-// ═══════════════════════════════════
-// Group Builders
-// ═══════════════════════════════════
+ACTIONS:
+- batch_actions: Execute multiple steps in ONE call. Pass "actions" array. STRONGLY PREFERRED for 2+ step sequences — each step can be click/type/key/focus/screenshot with optional delay. Eliminates round-trips.
+- screenshot_and_focus: Focus a window AND take screenshot in one call. Use instead of separate focus+screenshot.
+- list_windows: See all open windows (wmctrl).
+- find_window: Search windows by title.
+- focus: Bring window to front.
+- click: Click at (x, y) coordinates.
+- type: Type text into focused input.
+- key: Send keyboard shortcut (e.g., "ctrl+s", "Return").
+- screenshot: Capture window or full screen.
+
+ALWAYS prefer batch_actions for multi-step GUI sequences and screenshot_and_focus for initial orientation.`,
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['batch_actions', 'screenshot_and_focus', 'click', 'type', 'key', 'screenshot', 'find_window', 'focus', 'list_windows'],
+          description: 'Action to perform. Use batch_actions for multi-step sequences.',
+        },
+        window: { type: 'string', description: 'Window title to target' },
+        x: { type: 'number', description: 'X coordinate for click' },
+        y: { type: 'number', description: 'Y coordinate for click' },
+        text: { type: 'string', description: 'Text to type or key combo (e.g., "ctrl+s")' },
+        delay: { type: 'number', description: 'Delay in ms before action' },
+        actions: {
+          type: 'array',
+          description: 'For batch_actions: array of step objects. Each step: {action, window?, x?, y?, text?, delay?}. Max 20 steps.',
+          items: {
+            type: 'object',
+            properties: {
+              action: { type: 'string', enum: ['click', 'type', 'key', 'focus', 'screenshot'] },
+              window: { type: 'string' },
+              x: { type: 'number' },
+              y: { type: 'number' },
+              text: { type: 'string' },
+              delay: { type: 'number' },
+            },
+            required: ['action'],
+          },
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'dbus_control',
+    description: 'Control desktop apps via DBus. For Spotify (MPRIS), media players, GNOME apps. Actions: list_running, discover, call, get_property.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        action: { type: 'string', enum: ['discover', 'call', 'get_property', 'list_running'] },
+        service: { type: 'string', description: 'DBus service name' },
+        path: { type: 'string', description: 'Object path' },
+        interface: { type: 'string', description: 'Interface name' },
+        method: { type: 'string', description: 'Method or property name' },
+        args: { type: 'array', items: { type: 'string' }, description: 'Method arguments' },
+      },
+      required: ['action'],
+    },
+  },
+];
 
 export function getToolsForGroup(group: ToolGroup): Anthropic.Tool[] {
   switch (group) {
@@ -201,10 +267,6 @@ export function getToolsForGroup(group: ToolGroup): Anthropic.Tool[] {
     case 'full': return [...CORE_TOOLS, ...BROWSER_TOOLS, ...EXTRA_TOOLS];
   }
 }
-
-// ═══════════════════════════════════
-// Dispatch Map
-// ═══════════════════════════════════
 
 export type ToolExecutor = (input: Record<string, any>) => Promise<string>;
 
@@ -224,12 +286,13 @@ const DISPATCH: Record<string, ToolExecutor> = {
   create_document: executeCreateDocument,
   memory_search: executeMemorySearch,
   memory_store: executeMemoryStore,
+  app_control: executeAppControl,
+  gui_interact: executeGuiInteract,
+  dbus_control: executeDbusControl,
 };
 
 export function executeTool(name: string, input: Record<string, any>): Promise<string> {
   const executor = DISPATCH[name];
-  if (!executor) {
-    return Promise.resolve(`[Error] Unknown tool: ${name}`);
-  }
+  if (!executor) return Promise.resolve(`[Error] Unknown tool: ${name}`);
   return executor(input);
 }

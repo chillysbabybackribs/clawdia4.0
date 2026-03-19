@@ -16,7 +16,9 @@ import {
 } from './db/conversations';
 import {
   initBrowser, navigate, goBack, goForward, reload,
-  setBounds, hideBrowser, closeBrowser,
+  setBounds, closeBrowser,
+  createTab, switchTab, closeTab, getTabList,
+  matchUrlHistory,
 } from './browser/manager';
 
 const gotLock = app.requestSingleInstanceLock();
@@ -76,9 +78,7 @@ function setupIpcHandlers(): void {
 
   ipcMain.handle(IPC.CHAT_SEND, async (_event, message: string) => {
     const apiKey = getApiKey();
-    if (!apiKey) {
-      return { error: 'No API key set. Go to Settings to add your Anthropic API key.' };
-    }
+    if (!apiKey) return { error: 'No API key set. Go to Settings to add your Anthropic API key.' };
 
     if (!activeConversationId) {
       const conv = createConversation();
@@ -101,8 +101,6 @@ function setupIpcHandlers(): void {
 
       if (result.response) {
         addMessage(activeConversationId!, 'assistant', result.response, result.toolCalls);
-
-        // Fire-and-forget background memory extraction via Haiku
         extractMemoryInBackground(apiKey, message, result.response);
       }
 
@@ -114,26 +112,22 @@ function setupIpcHandlers(): void {
   });
 
   ipcMain.handle(IPC.CHAT_STOP, async () => ({ ok: true }));
-
   ipcMain.handle(IPC.CHAT_NEW, async () => {
     const conv = createConversation();
     activeConversationId = conv.id;
     return { id: conv.id, title: conv.title };
   });
-
   ipcMain.handle(IPC.CHAT_LIST, async () => {
     return listConversations().map(c => ({
       id: c.id, title: c.title, updatedAt: c.updated_at, messageCount: getMessageCount(c.id),
     }));
   });
-
   ipcMain.handle(IPC.CHAT_LOAD, async (_e, id: string) => {
     const conv = getConversation(id);
     if (!conv) return { error: 'Conversation not found' };
     activeConversationId = id;
     return { id: conv.id, title: conv.title, messages: getRendererMessages(id) };
   });
-
   ipcMain.handle(IPC.CHAT_DELETE, async (_e, id: string) => {
     deleteConversation(id);
     if (activeConversationId === id) activeConversationId = null;
@@ -158,10 +152,17 @@ function setupIpcHandlers(): void {
   ipcMain.handle(IPC.BROWSER_FORWARD, async () => { await goForward(); return { ok: true }; });
   ipcMain.handle(IPC.BROWSER_REFRESH, async () => { await reload(); return { ok: true }; });
   ipcMain.handle(IPC.BROWSER_SET_BOUNDS, async (_e, bounds: any) => { setBounds(bounds); return { ok: true }; });
-  ipcMain.handle(IPC.BROWSER_TAB_NEW, async () => ({ ok: true }));
-  ipcMain.handle(IPC.BROWSER_TAB_LIST, async () => []);
-  ipcMain.handle(IPC.BROWSER_TAB_SWITCH, async () => ({ ok: true }));
-  ipcMain.handle(IPC.BROWSER_TAB_CLOSE, async () => ({ ok: true }));
+
+  ipcMain.handle(IPC.BROWSER_TAB_NEW, async (_e, url?: string) => {
+    const id = createTab(url);
+    return { ok: true, id, tabs: getTabList() };
+  });
+  ipcMain.handle(IPC.BROWSER_TAB_LIST, async () => getTabList());
+  ipcMain.handle(IPC.BROWSER_TAB_SWITCH, async (_e, id: string) => { switchTab(id); return { ok: true }; });
+  ipcMain.handle(IPC.BROWSER_TAB_CLOSE, async (_e, id: string) => { closeTab(id); return { ok: true, tabs: getTabList() }; });
+
+  // ── Browser URL autocomplete ──
+  ipcMain.handle(IPC.BROWSER_HISTORY_MATCH, async (_e, prefix: string) => matchUrlHistory(prefix));
 }
 
 app.whenReady().then(createWindow);

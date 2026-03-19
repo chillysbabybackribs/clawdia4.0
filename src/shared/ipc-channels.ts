@@ -14,6 +14,7 @@ export const IPC = {
   BROWSER_TAB_LIST: 'browser:tab:list',
   BROWSER_TAB_SWITCH: 'browser:tab:switch',
   BROWSER_TAB_CLOSE: 'browser:tab:close',
+  BROWSER_HISTORY_MATCH: 'browser:history-match',
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
   API_KEY_GET: 'api-key:get',
@@ -33,4 +34,5 @@ export const IPC_EVENTS = {
   BROWSER_URL_CHANGED: 'browser:url-changed',
   BROWSER_TITLE_CHANGED: 'browser:title-changed',
   BROWSER_LOADING: 'browser:loading',
+  BROWSER_TABS_CHANGED: 'browser:tabs-changed',
 } as const;

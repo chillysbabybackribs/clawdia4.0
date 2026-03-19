@@ -26,16 +26,69 @@ function Clock() {
   return <span className="text-xs text-text-muted tabular-nums px-2">{time}</span>;
 }
 
+/** Copy button with checkmark feedback */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Fallback for older Electron versions
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  }, [text]);
+
+  return (
+    <button
+      onClick={handleCopy}
+      title="Copy response"
+      className={`
+        flex items-center justify-center w-7 h-7 rounded-md transition-all duration-200 cursor-pointer
+        ${copied
+          ? 'text-status-success'
+          : 'text-text-muted/0 group-hover:text-text-muted hover:!text-text-secondary hover:bg-white/[0.06]'
+        }
+      `}
+    >
+      {copied ? (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      ) : (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
 function AssistantMessage({ message }: { message: Message }) {
   return (
-    <div className="flex justify-start animate-slide-up">
+    <div className="flex justify-start animate-slide-up group">
       <div className="max-w-[92%] px-1 py-2 text-text-primary">
         {message.toolCalls && message.toolCalls.length > 0 && (
           <div className="mb-2"><ToolActivity tools={message.toolCalls} /></div>
         )}
         <MarkdownRenderer content={message.content} isStreaming={message.isStreaming} />
         {!message.isStreaming && message.content && (
-          <div className="mt-2 text-2xs text-text-muted">{message.timestamp}</div>
+          <div className="flex items-center gap-2 mt-2">
+            <span className="text-2xs text-text-muted">{message.timestamp}</span>
+            <CopyButton text={message.content} />
+          </div>
         )}
       </div>
     </div>
@@ -130,16 +183,12 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, loadConvers
         return;
       }
       streamBufferRef.current += chunk;
-      // Clear status when streaming starts (the response is coming in)
       setStatusText('');
       scheduleStreamUpdate();
     }));
 
     cleanups.push(api.chat.onThinking((thought: string) => {
-      if (thought) {
-        setStatusText(thought);
-        autoScroll();
-      }
+      if (thought) { setStatusText(thought); autoScroll(); }
     }));
 
     cleanups.push(api.chat.onToolActivity((activity: { name: string; status: string; detail?: string }) => {
@@ -153,7 +202,6 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, loadConvers
       toolCallsRef.current.push(tc);
       scheduleStreamUpdate();
 
-      // Update status line with tool activity
       if (activity.status === 'running') {
         const detail = activity.detail ? ` — ${activity.detail.slice(0, 50)}` : '';
         setStatusText(`Running ${activity.name}${detail}`);
@@ -272,7 +320,6 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, loadConvers
               ? <AssistantMessage key={msg.id} message={msg} />
               : <UserMessage key={msg.id} message={msg} />
           )}
-          {/* Status line — fixed height, no layout jumps */}
           {isStreaming && <StatusLine text={statusText} />}
           <div className="h-2" />
         </div>
