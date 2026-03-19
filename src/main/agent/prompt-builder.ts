@@ -17,12 +17,7 @@ function readPromptFile(...segments: string[]): string {
   const filePath = resolvePromptPath(...segments);
   try {
     const raw = fs.readFileSync(filePath, 'utf-8');
-    return raw
-      .split('\n')
-      .filter(line => !line.startsWith('#') || line.startsWith('##'))
-      .join('\n')
-      .replace(/^##\s*/gm, '')
-      .trim();
+    return raw.split('\n').filter(line => !line.startsWith('#') || line.startsWith('##')).join('\n').replace(/^##\s*/gm, '').trim();
   } catch (err) {
     console.warn(`[prompt] Failed to read ${filePath}:`, (err as Error).message);
     return '';
@@ -31,25 +26,17 @@ function readPromptFile(...segments: string[]): string {
 
 let cachedStaticPrompt: Map<string, string> = new Map();
 
-export function buildStaticPrompt(
-  toolGroup: ToolGroup,
-  modules: Set<PromptModule>,
-): string {
+export function buildStaticPrompt(toolGroup: ToolGroup, modules: Set<PromptModule>): string {
   const cacheKey = `${toolGroup}:${[...modules].sort().join(',')}`;
-  if (cachedStaticPrompt.has(cacheKey)) {
-    return cachedStaticPrompt.get(cacheKey)!;
-  }
+  if (cachedStaticPrompt.has(cacheKey)) return cachedStaticPrompt.get(cacheKey)!;
 
   const parts: string[] = [];
   parts.push(readPromptFile('prompt', 'CORE.md'));
   parts.push(readPromptFile('tools', 'groups', toolGroup, 'CONTEXT.md'));
 
   const MODULE_FILES: Record<PromptModule, string> = {
-    coding: 'CODING.md',
-    research: 'RESEARCH.md',
-    document: 'DOCUMENT.md',
-    desktop_apps: 'DESKTOP_APPS.md',
-    self_knowledge: 'SELF_KNOWLEDGE.md',
+    coding: 'CODING.md', research: 'RESEARCH.md', document: 'DOCUMENT.md',
+    desktop_apps: 'DESKTOP_APPS.md', self_knowledge: 'SELF_KNOWLEDGE.md',
   };
 
   for (const mod of modules) {
@@ -64,7 +51,7 @@ export function buildStaticPrompt(
 
 /**
  * Build the DYNAMIC system prompt (NOT cached, changes per-request).
- * Includes memory context, desktop capabilities, and browser state.
+ * Now includes executionConstraint from the Control Surface Registry.
  */
 export function buildDynamicPrompt(opts: {
   model: string;
@@ -72,6 +59,9 @@ export function buildDynamicPrompt(opts: {
   browserUrl?: string;
   memoryContext?: string;
   desktopContext?: string;
+  executionConstraint?: string;
+  shortcutContext?: string;
+  guiStateContext?: string;
   isGreeting?: boolean;
 }): string {
   const now = new Date();
@@ -87,25 +77,26 @@ export function buildDynamicPrompt(opts: {
     `TOOLS: ${opts.toolGroup} group active`,
   ];
 
-  if (opts.desktopContext) {
-    lines.push('', opts.desktopContext);
+  // Execution constraint from registry routing — HIGHEST PRIORITY
+  if (opts.executionConstraint) {
+    lines.push('', opts.executionConstraint);
   }
 
-  if (opts.memoryContext) {
-    lines.push('', opts.memoryContext);
-  }
+  // Shortcut reference for detected app
+  if (opts.shortcutContext) lines.push('', opts.shortcutContext);
 
-  if (opts.browserUrl) {
-    lines.push(`BROWSER: ${opts.browserUrl}`);
-  }
+  // GUI state from previous interactions (focus, confidence, targets)
+  if (opts.guiStateContext) lines.push('', opts.guiStateContext);
+
+  if (opts.desktopContext) lines.push('', opts.desktopContext);
+  if (opts.memoryContext) lines.push('', opts.memoryContext);
+  if (opts.browserUrl) lines.push(`BROWSER: ${opts.browserUrl}`);
 
   if (opts.isGreeting) {
-    lines.push('', 'The user sent a greeting. Reply in one sentence — acknowledge and ask what they need. No lists, no summaries.');
+    lines.push('', 'The user sent a greeting. Reply in one sentence — acknowledge and ask what they need.');
   }
 
   return lines.join('\n');
 }
 
-export function clearPromptCache(): void {
-  cachedStaticPrompt.clear();
-}
+export function clearPromptCache(): void { cachedStaticPrompt.clear(); }

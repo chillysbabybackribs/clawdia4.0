@@ -55,11 +55,16 @@ PATTERN: /(document|report|spreadsheet|pdf|docx|xlsx|csv|slides|presentation|wri
   → model: 'sonnet'
 
 ### Rule 4: Desktop application control
-PATTERN: /(gimp|blender|inkscape|libreoffice|audacity|obs|kdenlive|shotcut|vlc|firefox|chrome)/i
-   OR: /(launch|open|start|run).*app/i
+PATTERN: /(gimp|blender|inkscape|libreoffice|audacity|obs|kdenlive|shotcut|vlc|firefox|chrome|spotify|...)/i
+   OR: /(launch|open|start|run|control|close|quit|interact).*app/i
+   OR: /play.*music|pause.*music|next.*track|volume|screenshot|click.*button|dbus|xdotool|wmctrl/i
   → toolGroup: 'full'
   → promptModules: ['desktop_apps']
   → model: 'sonnet'
+
+Note: The routing layer (app-registry.ts) handles surface selection AFTER
+classification. The classifier just gates tool access; the registry decides
+whether to use programmatic, DBus, CLI, or GUI for the detected app.
 
 ### Rule 5: Self-reference
 PATTERN: /(clawdia|your (code|source|memory|data|settings|config)|this app|clear (my|your|all) (data|history|memory)|reset)/i

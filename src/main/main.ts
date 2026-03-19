@@ -6,6 +6,7 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
 import { IPC, IPC_EVENTS } from '../shared/ipc-channels';
 import { runAgentLoop } from './agent/loop';
+import { resetGuiStateForNewConversation } from './agent/executors/desktop-executors';
 import { extractMemoryInBackground } from './agent/memory-extractor';
 import { getApiKey, setApiKey, getSelectedModel, setSelectedModel } from './store';
 import { getDb, closeDb } from './db/database';
@@ -96,6 +97,7 @@ function setupIpcHandlers(): void {
         onStreamText: (chunk) => mainWindow?.webContents.send(IPC_EVENTS.CHAT_STREAM_TEXT, chunk),
         onThinking: (thought) => mainWindow?.webContents.send(IPC_EVENTS.CHAT_THINKING, thought),
         onToolActivity: (activity) => mainWindow?.webContents.send(IPC_EVENTS.CHAT_TOOL_ACTIVITY, activity),
+        onToolStream: (payload) => mainWindow?.webContents.send(IPC_EVENTS.CHAT_TOOL_STREAM, payload),
         onStreamEnd: () => mainWindow?.webContents.send(IPC_EVENTS.CHAT_STREAM_END, {}),
       });
 
@@ -115,6 +117,7 @@ function setupIpcHandlers(): void {
   ipcMain.handle(IPC.CHAT_NEW, async () => {
     const conv = createConversation();
     activeConversationId = conv.id;
+    resetGuiStateForNewConversation();
     return { id: conv.id, title: conv.title };
   });
   ipcMain.handle(IPC.CHAT_LIST, async () => {
@@ -126,6 +129,7 @@ function setupIpcHandlers(): void {
     const conv = getConversation(id);
     if (!conv) return { error: 'Conversation not found' };
     activeConversationId = id;
+    resetGuiStateForNewConversation();
     return { id: conv.id, title: conv.title, messages: getRendererMessages(id) };
   });
   ipcMain.handle(IPC.CHAT_DELETE, async (_e, id: string) => {

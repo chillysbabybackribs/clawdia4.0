@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import type { Message, ToolCall } from '../../shared/types';
 import InputBar from './InputBar';
 import StatusLine from './StatusLine';
-import ToolActivity from './ToolActivity';
+import ToolActivity, { type ToolStreamMap } from './ToolActivity';
 import MarkdownRenderer from './MarkdownRenderer';
 
 interface ChatPanelProps {
@@ -76,12 +76,14 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function AssistantMessage({ message }: { message: Message }) {
+function AssistantMessage({ message, streamMap }: { message: Message; streamMap?: ToolStreamMap }) {
   return (
     <div className="flex justify-start animate-slide-up group">
       <div className="max-w-[92%] px-1 py-2 text-text-primary">
         {message.toolCalls && message.toolCalls.length > 0 && (
-          <div className="mb-2"><ToolActivity tools={message.toolCalls} /></div>
+          <div className="mb-2">
+            <ToolActivity tools={message.toolCalls} streamMap={streamMap} />
+          </div>
         )}
         <MarkdownRenderer content={message.content} isStreaming={message.isStreaming} />
         {!message.isStreaming && message.content && (
@@ -110,6 +112,8 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, loadConvers
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [statusText, setStatusText] = useState('');
+  // toolId → accumulated stdout/stderr lines for the live stream panel
+  const [streamMap, setStreamMap] = useState<ToolStreamMap>({});
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamBufferRef = useRef('');
   const toolCallsRef = useRef<ToolCall[]>([]);
@@ -213,6 +217,19 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, loadConvers
       autoScroll();
     }));
 
+    if (api.chat.onToolStream) {
+      cleanups.push(api.chat.onToolStream((payload: { toolId: string; toolName: string; chunk: string }) => {
+        setStreamMap(prev => {
+          const existing = prev[payload.toolId] ?? [];
+          // Cap at 200 lines to avoid unbounded memory growth
+          const next = existing.length >= 200
+            ? [...existing.slice(-199), payload.chunk]
+            : [...existing, payload.chunk];
+          return { ...prev, [payload.toolId]: next };
+        });
+      }));
+    }
+
     cleanups.push(api.chat.onStreamEnd(() => {
       if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
     }));
@@ -240,6 +257,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, loadConvers
     assistantMsgIdRef.current = assistantId;
     streamBufferRef.current = '';
     toolCallsRef.current = [];
+    setStreamMap({});
 
     setTimeout(() => {
       setMessages(prev => [...prev, {
@@ -317,7 +335,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, loadConvers
           )}
           {messages.map(msg =>
             msg.role === 'assistant'
-              ? <AssistantMessage key={msg.id} message={msg} />
+              ? <AssistantMessage key={msg.id} message={msg} streamMap={msg.isStreaming ? streamMap : undefined} />
               : <UserMessage key={msg.id} message={msg} />
           )}
           {isStreaming && <StatusLine text={statusText} />}

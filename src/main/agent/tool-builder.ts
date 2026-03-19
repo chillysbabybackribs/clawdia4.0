@@ -1,6 +1,9 @@
 /**
  * Tool Builder — Defines Anthropic tool schemas for each group
  * and provides the dispatch map (tool name → execute function).
+ * 
+ * Also provides filterTools() for the routing layer to remove
+ * disallowed tools based on the ExecutionPlan.
  */
 
 import type Anthropic from '@anthropic-ai/sdk';
@@ -25,24 +28,24 @@ const CORE_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: 'file_read',
-    description: 'Read file contents. Use startLine/endLine for large files. Prefer grep via shell_exec when searching for patterns across many files.',
+    description: 'Read file contents. Use startLine/endLine for large files.',
     input_schema: {
       type: 'object' as const,
       properties: {
         path: { type: 'string', description: 'Absolute path to the file' },
-        startLine: { type: 'number', description: 'First line to read (1-indexed)' },
-        endLine: { type: 'number', description: 'Last line to read (1-indexed)' },
+        startLine: { type: 'number', description: 'First line (1-indexed)' },
+        endLine: { type: 'number', description: 'Last line (1-indexed)' },
       },
       required: ['path'],
     },
   },
   {
     name: 'file_write',
-    description: 'Create a new file or overwrite an existing file. For modifying existing files, prefer file_edit. Parent directories are created automatically.',
+    description: 'Create or overwrite a file. Parent directories created automatically.',
     input_schema: {
       type: 'object' as const,
       properties: {
-        path: { type: 'string', description: 'Absolute path for the file' },
+        path: { type: 'string', description: 'Absolute path' },
         content: { type: 'string', description: 'Complete file content' },
       },
       required: ['path', 'content'],
@@ -50,25 +53,25 @@ const CORE_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: 'file_edit',
-    description: 'Edit an existing file by replacing one exact string with another. old_str must appear exactly once. Read the file first to get exact text.',
+    description: 'Edit a file by replacing one exact string. old_str must appear exactly once.',
     input_schema: {
       type: 'object' as const,
       properties: {
-        path: { type: 'string', description: 'Absolute path to the file' },
-        old_str: { type: 'string', description: 'Exact string to find (must appear once)' },
-        new_str: { type: 'string', description: 'Replacement string' },
+        path: { type: 'string', description: 'Absolute path' },
+        old_str: { type: 'string', description: 'Exact string to find (once)' },
+        new_str: { type: 'string', description: 'Replacement' },
       },
       required: ['path', 'old_str', 'new_str'],
     },
   },
   {
     name: 'directory_tree',
-    description: 'List files and directories in a tree structure. Use depth to limit recursion. Ignores node_modules, .git, and hidden files by default.',
+    description: 'List files/dirs in tree structure. Ignores node_modules, .git, hidden files.',
     input_schema: {
       type: 'object' as const,
       properties: {
-        path: { type: 'string', description: 'Absolute path to the directory' },
-        depth: { type: 'number', description: 'Max recursion depth (default 3, max 10)' },
+        path: { type: 'string', description: 'Absolute path' },
+        depth: { type: 'number', description: 'Max depth (default 3, max 10)' },
       },
       required: ['path'],
     },
@@ -76,189 +79,64 @@ const CORE_TOOLS: Anthropic.Tool[] = [
 ];
 
 const BROWSER_TOOLS: Anthropic.Tool[] = [
-  {
-    name: 'browser_search',
-    description: 'Web search via Google. Returns top 5 results with titles, URLs, and snippets.',
-    input_schema: {
-      type: 'object' as const,
-      properties: { query: { type: 'string', description: 'The search query' } },
-      required: ['query'],
-    },
-  },
-  {
-    name: 'browser_navigate',
-    description: 'Navigate to a URL in the visible browser panel. Returns page title, URL, and visible text.',
-    input_schema: {
-      type: 'object' as const,
-      properties: { url: { type: 'string', description: 'The URL to navigate to' } },
-      required: ['url'],
-    },
-  },
-  {
-    name: 'browser_read_page',
-    description: 'Re-read current page text. Only needed if page changed since last navigation.',
-    input_schema: { type: 'object' as const, properties: {} },
-  },
-  {
-    name: 'browser_click',
-    description: 'Click an element on the current page. Use element index (preferred), CSS selector, or visible text.',
-    input_schema: {
-      type: 'object' as const,
-      properties: { target: { type: 'string', description: 'Element index, CSS selector, or visible text' } },
-      required: ['target'],
-    },
-  },
-  {
-    name: 'browser_type',
-    description: 'Type text into an input field. Does NOT submit — click submit separately.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        text: { type: 'string', description: 'Text to type' },
-        selector: { type: 'string', description: 'Optional CSS selector for target input' },
-      },
-      required: ['text'],
-    },
-  },
-  {
-    name: 'browser_extract',
-    description: 'Extract structured data from current page.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        instruction: { type: 'string', description: 'What to extract' },
-        schema: { type: 'object', description: 'JSON schema for extraction shape' },
-      },
-      required: ['instruction'],
-    },
-  },
-  {
-    name: 'browser_screenshot',
-    description: 'Capture screenshot of browser viewport.',
-    input_schema: { type: 'object' as const, properties: {} },
-  },
+  { name: 'browser_search', description: 'Web search via Google. Returns top 5 results.', input_schema: { type: 'object' as const, properties: { query: { type: 'string', description: 'Search query' } }, required: ['query'] } },
+  { name: 'browser_navigate', description: 'Navigate to URL. Returns title, URL, visible text.', input_schema: { type: 'object' as const, properties: { url: { type: 'string', description: 'URL' } }, required: ['url'] } },
+  { name: 'browser_read_page', description: 'Re-read current page text.', input_schema: { type: 'object' as const, properties: {} } },
+  { name: 'browser_click', description: 'Click element by index, selector, or text.', input_schema: { type: 'object' as const, properties: { target: { type: 'string', description: 'Element index/selector/text' } }, required: ['target'] } },
+  { name: 'browser_type', description: 'Type text into input field.', input_schema: { type: 'object' as const, properties: { text: { type: 'string', description: 'Text to type' }, selector: { type: 'string', description: 'Optional CSS selector' } }, required: ['text'] } },
+  { name: 'browser_extract', description: 'Extract structured data from page.', input_schema: { type: 'object' as const, properties: { instruction: { type: 'string', description: 'What to extract' }, schema: { type: 'object', description: 'JSON schema' } }, required: ['instruction'] } },
+  { name: 'browser_screenshot', description: 'Screenshot browser viewport.', input_schema: { type: 'object' as const, properties: {} } },
 ];
 
 const EXTRA_TOOLS: Anthropic.Tool[] = [
   {
     name: 'create_document',
-    description: 'Create a document file (docx, pdf, xlsx, csv, md, html, json, txt). Saves to ~/Documents/Clawdia/ by default.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        filename: { type: 'string', description: 'Filename with extension' },
-        format: { type: 'string', enum: ['docx', 'pdf', 'xlsx', 'csv', 'md', 'html', 'json', 'txt'], description: 'Output format' },
-        content: { type: 'string', description: 'Markdown content (for text formats)' },
-        structured_data: { type: 'array', description: 'Array of objects (for xlsx, csv, json)' },
-      },
-      required: ['filename', 'format'],
-    },
+    description: 'Create document (docx, pdf, xlsx, csv, md, html, json, txt).',
+    input_schema: { type: 'object' as const, properties: { filename: { type: 'string' }, format: { type: 'string', enum: ['docx', 'pdf', 'xlsx', 'csv', 'md', 'html', 'json', 'txt'] }, content: { type: 'string' }, structured_data: { type: 'array' } }, required: ['filename', 'format'] },
   },
   {
     name: 'memory_search',
-    description: 'Search persistent memory for stored facts and context.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        query: { type: 'string', description: 'Search terms' },
-        limit: { type: 'number', description: 'Max results (default 5)' },
-      },
-      required: ['query'],
-    },
+    description: 'Search persistent memory.',
+    input_schema: { type: 'object' as const, properties: { query: { type: 'string' }, limit: { type: 'number' } }, required: ['query'] },
   },
   {
     name: 'memory_store',
-    description: 'Store a fact in persistent memory. Use ONLY when user explicitly asks to remember something.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        category: { type: 'string', enum: ['preference', 'account', 'workflow', 'fact', 'context'] },
-        key: { type: 'string', description: 'Short label' },
-        value: { type: 'string', description: 'The fact to remember' },
-      },
-      required: ['category', 'key', 'value'],
-    },
+    description: 'Store fact in memory. Only when user explicitly asks.',
+    input_schema: { type: 'object' as const, properties: { category: { type: 'string', enum: ['preference', 'account', 'workflow', 'fact', 'context'] }, key: { type: 'string' }, value: { type: 'string' } }, required: ['category', 'key', 'value'] },
   },
-  // ── Desktop Control ──
   {
     name: 'app_control',
-    description: 'Control a desktop application via CLI-Anything harness. For GIMP, Blender, LibreOffice, OBS, Inkscape, Audacity, Kdenlive, Shotcut. Returns structured JSON. Falls back to native CLI if no harness installed. Try this FIRST before gui_interact.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        app: { type: 'string', description: 'Application name (e.g., "gimp", "blender")' },
-        command: { type: 'string', description: 'Command (e.g., "open-file /path", "--help")' },
-        json: { type: 'boolean', description: 'Use --json flag (default true)' },
-      },
-      required: ['app', 'command'],
-    },
+    description: 'Control a desktop app via the best available surface. Automatically tries each control surface (DBus → CLI-Anything → native CLI) in priority order with fallback. Use for any structured app interaction. Returns guidance if the task should use shell_exec or gui_interact instead.',
+    input_schema: { type: 'object' as const, properties: { app: { type: 'string', description: 'App name' }, command: { type: 'string', description: 'Command' }, json: { type: 'boolean' } }, required: ['app', 'command'] },
   },
   {
     name: 'gui_interact',
-    description: `Interact with any visible GUI window. Works on ANY desktop app.
-
-ACTIONS:
-- batch_actions: Execute multiple steps in ONE call. Pass "actions" array. STRONGLY PREFERRED for 2+ step sequences — each step can be click/type/key/focus/screenshot with optional delay. Eliminates round-trips.
-- screenshot_and_focus: Focus a window AND take screenshot in one call. Use instead of separate focus+screenshot.
-- list_windows: See all open windows (wmctrl).
-- find_window: Search windows by title.
-- focus: Bring window to front.
-- click: Click at (x, y) coordinates.
-- type: Type text into focused input.
-- key: Send keyboard shortcut (e.g., "ctrl+s", "Return").
-- screenshot: Capture window or full screen.
-
-ALWAYS prefer batch_actions for multi-step GUI sequences and screenshot_and_focus for initial orientation.`,
+    description: 'GUI automation — LAST RESORT. Only use when no programmatic, DBus, or CLI surface can accomplish the task, or when the [EXECUTION PLAN] specifies gui surface. Use batch_actions for multi-step sequences. Use analyze_screenshot for OCR-based screen reading (~400 tokens vs 50K for vision). Actions: batch_actions, click, type, key, wait, focus, screenshot, analyze_screenshot, verify_window_title, verify_file_exists, list_windows, find_window.',
     input_schema: {
       type: 'object' as const,
       properties: {
-        action: {
-          type: 'string',
-          enum: ['batch_actions', 'screenshot_and_focus', 'click', 'type', 'key', 'screenshot', 'find_window', 'focus', 'list_windows'],
-          description: 'Action to perform. Use batch_actions for multi-step sequences.',
-        },
-        window: { type: 'string', description: 'Window title to target' },
-        x: { type: 'number', description: 'X coordinate for click' },
-        y: { type: 'number', description: 'Y coordinate for click' },
-        text: { type: 'string', description: 'Text to type or key combo (e.g., "ctrl+s")' },
-        delay: { type: 'number', description: 'Delay in ms before action' },
-        actions: {
-          type: 'array',
-          description: 'For batch_actions: array of step objects. Each step: {action, window?, x?, y?, text?, delay?}. Max 20 steps.',
-          items: {
-            type: 'object',
-            properties: {
-              action: { type: 'string', enum: ['click', 'type', 'key', 'focus', 'screenshot'] },
-              window: { type: 'string' },
-              x: { type: 'number' },
-              y: { type: 'number' },
-              text: { type: 'string' },
-              delay: { type: 'number' },
-            },
-            required: ['action'],
-          },
-        },
+        action: { type: 'string', enum: ['batch_actions', 'screenshot_and_focus', 'analyze_screenshot', 'click', 'type', 'key', 'screenshot', 'find_window', 'focus', 'list_windows', 'wait', 'verify_window_title', 'verify_file_exists', 'screenshot_region'] },
+        window: { type: 'string', description: 'Window title. For batch_actions, set here to apply to all steps.' },
+        x: { type: 'number' }, y: { type: 'number' },
+        text: { type: 'string', description: 'Text to type, key combo, or filepath' },
+        path: { type: 'string', description: 'Filepath for verify_file_exists' },
+        delay: { type: 'number' }, ms: { type: 'number' },
+        rx: { type: 'number' }, ry: { type: 'number' }, rw: { type: 'number' }, rh: { type: 'number' },
+        actions: { type: 'array', description: 'For batch_actions. Max 20 steps.', items: { type: 'object', properties: { action: { type: 'string', enum: ['click', 'type', 'key', 'focus', 'screenshot', 'wait', 'verify_window_title', 'verify_file_exists'] }, window: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' }, text: { type: 'string' }, path: { type: 'string' }, delay: { type: 'number' }, ms: { type: 'number' } }, required: ['action'] } },
       },
       required: ['action'],
     },
   },
   {
     name: 'dbus_control',
-    description: 'Control desktop apps via DBus. For Spotify (MPRIS), media players, GNOME apps. Actions: list_running, discover, call, get_property.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        action: { type: 'string', enum: ['discover', 'call', 'get_property', 'list_running'] },
-        service: { type: 'string', description: 'DBus service name' },
-        path: { type: 'string', description: 'Object path' },
-        interface: { type: 'string', description: 'Interface name' },
-        method: { type: 'string', description: 'Method or property name' },
-        args: { type: 'array', items: { type: 'string' }, description: 'Method arguments' },
-      },
-      required: ['action'],
-    },
+    description: 'Control apps via DBus — PREFERRED over gui_interact for any app with a DBus interface. Use for all media control (play/pause/next/volume). Actions: list_running, discover, call, get_property. For any MPRIS player: service="org.mpris.MediaPlayer2.{app}" path="/org/mpris/MediaPlayer2" interface="org.mpris.MediaPlayer2.Player". A void method return = SUCCESS.',
+    input_schema: { type: 'object' as const, properties: { action: { type: 'string', enum: ['discover', 'call', 'get_property', 'list_running'] }, service: { type: 'string', description: 'DBus service (e.g. org.mpris.MediaPlayer2.spotify)' }, path: { type: 'string', description: 'Object path (e.g. /org/mpris/MediaPlayer2)' }, interface: { type: 'string', description: 'Interface (e.g. org.mpris.MediaPlayer2.Player)' }, method: { type: 'string', description: 'Method or property name' }, args: { type: 'array', items: { type: 'string' } } }, required: ['action'] },
   },
 ];
+
+// ═══════════════════════════════════
+// Group Builders
+// ═══════════════════════════════════
 
 export function getToolsForGroup(group: ToolGroup): Anthropic.Tool[] {
   switch (group) {
@@ -268,10 +146,34 @@ export function getToolsForGroup(group: ToolGroup): Anthropic.Tool[] {
   }
 }
 
-export type ToolExecutor = (input: Record<string, any>) => Promise<string>;
+/**
+ * Filter tools by removing disallowed tool names.
+ * Used by the routing layer to constrain what the LLM can call.
+ */
+export function filterTools(tools: Anthropic.Tool[], disallowed: string[]): Anthropic.Tool[] {
+  if (disallowed.length === 0) return tools;
+  const blocked = new Set(disallowed);
+  const filtered = tools.filter(t => !blocked.has(t.name));
+  if (filtered.length < tools.length) {
+    console.log(`[Tools] Filtered out: ${disallowed.join(', ')} (${tools.length} → ${filtered.length} tools)`);
+  }
+  return filtered;
+}
 
-const DISPATCH: Record<string, ToolExecutor> = {
+// ═══════════════════════════════════
+// Dispatch Map
+// ═══════════════════════════════════
+
+export type ToolExecutor = (input: Record<string, any>) => Promise<string>;
+export type StreamingToolExecutor = (input: Record<string, any>, onChunk?: (chunk: string) => void) => Promise<string>;
+
+// Streaming-capable executors (accept optional onChunk callback)
+const STREAMING_DISPATCH: Record<string, StreamingToolExecutor> = {
   shell_exec: executeShellExec,
+};
+
+// Standard executors (no streaming)
+const DISPATCH: Record<string, ToolExecutor> = {
   file_read: executeFileRead,
   file_write: executeFileWrite,
   file_edit: executeFileEdit,
@@ -291,7 +193,17 @@ const DISPATCH: Record<string, ToolExecutor> = {
   dbus_control: executeDbusControl,
 };
 
-export function executeTool(name: string, input: Record<string, any>): Promise<string> {
+export function executeTool(
+  name: string,
+  input: Record<string, any>,
+  onChunk?: (toolName: string, chunk: string) => void,
+): Promise<string> {
+  // Check streaming-capable tools first
+  const streamingExecutor = STREAMING_DISPATCH[name];
+  if (streamingExecutor) {
+    const chunkCb = onChunk ? (chunk: string) => onChunk(name, chunk) : undefined;
+    return streamingExecutor(input, chunkCb);
+  }
   const executor = DISPATCH[name];
   if (!executor) return Promise.resolve(`[Error] Unknown tool: ${name}`);
   return executor(input);

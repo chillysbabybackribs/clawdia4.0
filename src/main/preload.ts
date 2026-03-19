@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('clawdia', {
     onStreamEnd: (cb: (data: any) => void) => on('chat:stream:end', cb),
     onThinking: (cb: (thought: string) => void) => on('chat:thinking', cb),
     onToolActivity: (cb: (activity: any) => void) => on('chat:tool-activity', cb),
+    onToolStream: (cb: (payload: { toolId: string; toolName: string; chunk: string }) => void) => on('chat:tool-stream', cb),
   },
   browser: {
     navigate: (url: string) => invoke('browser:navigate', url),

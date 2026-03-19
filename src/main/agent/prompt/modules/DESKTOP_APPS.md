@@ -1,49 +1,29 @@
 # Desktop Applications Module
-# Token budget: ~600 tokens
+# Token budget: ~500 tokens
 # Trigger: classifier detects app names, GUI interaction phrases, media control
 
-## Task Routing — Choose the Right Approach
+## Execution Plan
 
-**BEFORE using any GUI tool, decide if the task is programmatic or interactive:**
+The dynamic prompt contains an [EXECUTION PLAN] for the current task. **Follow it.** The system has already analyzed the target app, checked which control surfaces are available, and selected the best one. Do not override this decision.
 
-### Programmatic tasks (use shell_exec with Python/ImageMagick — NO GUI needed):
-- Creating images/banners/graphics from scratch → `python3` with Pillow (PIL)
-- Resizing/converting/cropping images → `convert` (ImageMagick) or Pillow
-- Generating PDFs, merging documents → Python libraries
-- Batch image processing → Pillow or ImageMagick CLI
-- Creating charts/plots → Python matplotlib
+If no [EXECUTION PLAN] is present, choose the approach yourself using this priority:
 
-**Example — 2 tool calls instead of 20+ GUI clicks:**
-```
-shell_exec("python3 -c \"from PIL import Image, ImageDraw, ImageFont; img = Image.new('RGB', (800,400), (10,20,80)); d = ImageDraw.Draw(img); d.text((300,170), 'Clawdia 4.0', fill=(255,255,255)); img.save('/home/user/banner.png')\"")
-shell_exec("python3 -c \"from PIL import Image; img = Image.open('/home/user/banner.png'); print(f'Size: {img.size}, Mode: {img.mode}')\"")
-```
+1. **Programmatic** (shell_exec with Python/ImageMagick/ffmpeg) — for creating, converting, or batch-processing images, documents, audio, video. No GUI needed.
+2. **DBus** (dbus_control) — for running apps with MPRIS/DBus interfaces. Media control (play, pause, next, volume) should always try DBus first.
+3. **CLI** (app_control or shell_exec) — for apps with native CLI or CLI-Anything harnesses. Use headless/batch modes.
+4. **GUI** (gui_interact) — LAST RESORT. Only when the task requires visual interaction that no other surface can provide (e.g., using specific GUI tools, brushes, layers).
 
-### Interactive tasks (use gui_interact — actual GUI needed):
-- Editing an existing image with specific GUI tools (layers, filters, brushes)
-- Operating a running app that has no CLI equivalent (Spotify, Discord)
-- Tasks that require visual feedback during execution
+## Tool Guide
 
-## Desktop App Control — 3-Tier Fallback (for interactive tasks)
+**app_control** — Unified app control dispatcher. Automatically tries each available surface (DBus → CLI-Anything → native CLI) with fallback. Returns actionable guidance if the task needs shell_exec (programmatic) or gui_interact (visual) instead. Use as the default entry point for app interaction.
 
-### 1. app_control — CLI-Anything harness (PREFERRED for supported apps)
-### 2. gui_interact — xdotool/wmctrl/scrot (ANY visible window)
-### 3. dbus_control — DBus (Spotify MPRIS, media players, GNOME services)
+**dbus_control** — Programmatic control via DBus. Actions: list_running, discover, call, get_property. For any MPRIS media player (Spotify, VLC, etc.): service="org.mpris.MediaPlayer2.{app}" path="/org/mpris/MediaPlayer2" interface="org.mpris.MediaPlayer2.Player". A void "method return" means SUCCESS — do not retry.
 
-## GUI Strategy — MINIMIZE TOOL CALLS
-
-**Use batch_actions for 2+ GUI steps. Use screenshot_and_focus for initial orientation.**
-
-**Read the display layout from the dynamic prompt** — it shows monitor positions, resolutions, and offsets from xrandr. On multi-monitor setups, xdotool coordinates are ABSOLUTE across the virtual screen. A window on the second monitor at offset +1920+0 means its (0,0) is at absolute (1920,0). Always add the monitor offset to window-relative coordinates.
-
-**Prefer keyboard shortcuts over click coordinates** — they are resolution-independent:
-- GIMP: Ctrl+Shift+E (export), Ctrl+N (new), Ctrl+Z (undo)
-- LibreOffice: Ctrl+S, Ctrl+P, Ctrl+Shift+S
-- Most apps: Ctrl+Q (quit), Ctrl+W (close window), F11 (fullscreen)
+**gui_interact** — GUI automation. Use batch_actions with a top-level window parameter for multi-step sequences. Use keyboard shortcuts from the shortcut reference when available. Use analyze_screenshot to read screen state via OCR (~400 tokens) instead of raw screenshots (~50K tokens). Use verify_file_exists after exports instead of screenshots.
 
 ## Rules
-- Route to Python/ImageMagick for programmatic image creation — GIMP GUI is for interactive editing only
-- Background GUI launches: shell_exec("gimp &"), wait 2-3s
-- batch_actions for multi-step sequences
-- Check display layout before clicking (offsets matter on multi-monitor)
-- Never fabricate app output
+
+- Background GUI launches: shell_exec("setsid {app} >/dev/null 2>&1 &")
+- If DBus call fails with ServiceUnknown → launch the app, wait 5s, retry
+- Use {"action":"wait","ms":...} between steps that trigger dialogs
+- Never fabricate app output or tool results

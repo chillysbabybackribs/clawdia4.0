@@ -3,10 +3,11 @@
  * Single database file at ~/.config/clawdia/data.sqlite
  * 
  * Tables:
- *   conversations  — id, title, created_at, updated_at
- *   messages       — id, conversation_id, role, content, tool_calls, created_at
- *   user_memory    — id, category, key, value, source, confidence, created_at
+ *   conversations   — id, title, created_at, updated_at
+ *   messages        — id, conversation_id, role, content, tool_calls, created_at
+ *   user_memory     — id, category, key, value, source, confidence, created_at
  *   user_memory_fts — FTS5 virtual table for relevance search
+ *   app_registry    — id, profile_json, last_scanned (v3)
  */
 
 import Database from 'better-sqlite3';
@@ -29,7 +30,6 @@ export function getDb(): Database.Database {
   console.log(`[DB] Opening database at ${dbPath}`);
   db = new Database(dbPath);
 
-  // Performance: WAL mode + synchronous NORMAL
   db.pragma('journal_mode = WAL');
   db.pragma('synchronous = NORMAL');
   db.pragma('foreign_keys = ON');
@@ -39,20 +39,11 @@ export function getDb(): Database.Database {
 }
 
 export function closeDb(): void {
-  if (db) {
-    db.close();
-    db = null;
-    console.log('[DB] Database closed');
-  }
+  if (db) { db.close(); db = null; console.log('[DB] Database closed'); }
 }
 
 function runMigrations(db: Database.Database): void {
-  db.exec(`
-    -- Schema version tracking
-    CREATE TABLE IF NOT EXISTS schema_version (
-      version INTEGER PRIMARY KEY
-    );
-  `);
+  db.exec(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);`);
 
   const currentVersion = (db.prepare('SELECT MAX(version) as v FROM schema_version').get() as any)?.v || 0;
 
@@ -65,7 +56,6 @@ function runMigrations(db: Database.Database): void {
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
-
       CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
         conversation_id TEXT NOT NULL,
@@ -75,9 +65,7 @@ function runMigrations(db: Database.Database): void {
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
       );
-
       CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at);
-
       INSERT INTO schema_version (version) VALUES (1);
     `);
   }
@@ -87,35 +75,63 @@ function runMigrations(db: Database.Database): void {
     db.exec(`
       CREATE TABLE IF NOT EXISTS user_memory (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        category TEXT NOT NULL,
-        key TEXT NOT NULL,
-        value TEXT NOT NULL,
-        source TEXT NOT NULL DEFAULT 'extracted',
-        confidence INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE(category, key)
+        category TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'extracted', confidence INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE(category, key)
       );
-
       CREATE INDEX IF NOT EXISTS idx_memory_category ON user_memory(category);
-
-      CREATE VIRTUAL TABLE IF NOT EXISTS user_memory_fts
-        USING fts5(key, value, content=user_memory, content_rowid=id);
-
-      -- Keep FTS5 in sync
+      CREATE VIRTUAL TABLE IF NOT EXISTS user_memory_fts USING fts5(key, value, content=user_memory, content_rowid=id);
       CREATE TRIGGER IF NOT EXISTS memory_ai AFTER INSERT ON user_memory BEGIN
-        INSERT INTO user_memory_fts(rowid, key, value) VALUES (new.id, new.key, new.value);
-      END;
+        INSERT INTO user_memory_fts(rowid, key, value) VALUES (new.id, new.key, new.value); END;
       CREATE TRIGGER IF NOT EXISTS memory_ad AFTER DELETE ON user_memory BEGIN
-        INSERT INTO user_memory_fts(user_memory_fts, rowid, key, value) VALUES('delete', old.id, old.key, old.value);
-      END;
+        INSERT INTO user_memory_fts(user_memory_fts, rowid, key, value) VALUES('delete', old.id, old.key, old.value); END;
       CREATE TRIGGER IF NOT EXISTS memory_au AFTER UPDATE ON user_memory BEGIN
         INSERT INTO user_memory_fts(user_memory_fts, rowid, key, value) VALUES('delete', old.id, old.key, old.value);
-        INSERT INTO user_memory_fts(rowid, key, value) VALUES (new.id, new.key, new.value);
-      END;
-
+        INSERT INTO user_memory_fts(rowid, key, value) VALUES (new.id, new.key, new.value); END;
       INSERT INTO schema_version (version) VALUES (2);
     `);
   }
 
-  console.log(`[DB] Schema at version ${Math.max(currentVersion, 2)}`);
+  if (currentVersion < 3) {
+    console.log('[DB] Running migration v3: app_registry');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS app_registry (
+        id TEXT PRIMARY KEY,
+        profile_json TEXT NOT NULL,
+        last_scanned TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO schema_version (version) VALUES (3);
+    `);
+  }
+
+  if (currentVersion < 4) {
+    console.log('[DB] Running migration v4: coordinate_cache');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS coordinate_cache (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        app        TEXT    NOT NULL,
+        window_key TEXT    NOT NULL,
+        element    TEXT    NOT NULL,
+        x          INTEGER NOT NULL,
+        y          INTEGER NOT NULL,
+        confidence REAL    NOT NULL DEFAULT 1.0,
+        hit_count  INTEGER NOT NULL DEFAULT 1,
+        last_used  TEXT    NOT NULL DEFAULT (datetime('now')),
+        created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(app, window_key, element)
+      );
+      CREATE INDEX IF NOT EXISTS idx_coord_app ON coordinate_cache(app, window_key);
+      INSERT INTO schema_version (version) VALUES (4);
+    `);
+  }
+
+  if (currentVersion < 5) {
+    console.log('[DB] Running migration v5: coordinate_cache.resolution column');
+    db.exec(`
+      ALTER TABLE coordinate_cache ADD COLUMN resolution TEXT;
+      INSERT INTO schema_version (version) VALUES (5);
+    `);
+  }
+
+  console.log(`[DB] Schema at version ${Math.max(currentVersion, 5)}`);
 }

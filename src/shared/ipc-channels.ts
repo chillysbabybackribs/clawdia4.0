@@ -31,6 +31,7 @@ export const IPC_EVENTS = {
   CHAT_STREAM_END: 'chat:stream:end',
   CHAT_THINKING: 'chat:thinking',
   CHAT_TOOL_ACTIVITY: 'chat:tool-activity',
+  CHAT_TOOL_STREAM: 'chat:tool-stream',
   BROWSER_URL_CHANGED: 'browser:url-changed',
   BROWSER_TITLE_CHANGED: 'browser:title-changed',
   BROWSER_LOADING: 'browser:loading',
