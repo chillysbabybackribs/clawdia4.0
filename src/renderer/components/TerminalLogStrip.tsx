@@ -19,52 +19,20 @@ const LINE_COLORS: Record<'dim' | 'cmd' | 'out', string> = {
   out: 'rgba(255,255,255,0.72)',
 };
 
-export default function TerminalLogStrip({ lines, isStreaming }: TerminalLogStripProps) {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export default function TerminalLogStrip({ lines, isStreaming: _ }: TerminalLogStripProps) {
   const [expanded, setExpanded] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom when new lines arrive during streaming
+  // Auto-scroll expanded content when new lines arrive
   useEffect(() => {
-    if (isStreaming && scrollRef.current) {
+    if (expanded && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [lines, isStreaming]);
+  }, [lines, expanded]);
 
-  // Reset collapsed state when a new stream starts
-  useEffect(() => {
-    if (isStreaming) setExpanded(false);
-  }, [isStreaming]);
+  if (lines.length === 0) return null;
 
-  if (!isStreaming && lines.length === 0) return null;
-
-  if (isStreaming) {
-    return (
-      <div
-        className="terminal-log-strip"
-        style={{
-          borderTop: '1px solid rgba(255,255,255,0.07)',
-          background: '#080a0f',
-          fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace",
-          fontSize: '10.5px',
-          lineHeight: '1.55',
-          padding: '5px 14px',
-          height: '72px',
-          overflowY: 'auto',
-          flexShrink: 0,
-        }}
-        ref={scrollRef}
-      >
-        {lines.map((line, i) => {
-          const kind = classifyLine(line);
-          return (
-            <div key={i} style={{ color: LINE_COLORS[kind] }}>{line}</div>
-          );
-        })}
-      </div>
-    );
-  }
-
-  // Post-stream: collapsed toggle
   return (
     <div
       className="terminal-log-strip"
