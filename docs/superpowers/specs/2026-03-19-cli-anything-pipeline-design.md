@@ -133,20 +133,30 @@ The nested harness loop has its own wall-time limit of **12 minutes** (kept unde
 
 ## App Installation (`loop-app-install.ts`)
 
+Install strategy: **user-space first, then GUI-authenticated system install**. Never use bare `sudo` — it blocks on stdin with no TTY in the Electron main process.
+
 ```
-1. Check if binary already on PATH: which <appId> (cached)
-2. Check HARNESS.md exists at ~/CLI-Anything/cli-anything-plugin/HARNESS.md
-   → if missing: onProgress warning, return false early
-3. Try apt:    sudo -n apt install -y <appId>   (timeout: 120s)
-4. Try snap:   sudo -n snap install <appId>     (timeout: 120s)
-5. Try flatpak: flatpak install -y flathub <appId> (timeout: 120s)
-6. Verify binary on PATH after install
-7. Return true/false + narrate result
+1. Check if binary already on PATH — return true immediately if so
+2. Try flatpak (user-space, no auth needed):
+     flatpak install --user -y flathub <appId>   (timeout: 120s)
+   → verify binary on PATH (also check `flatpak run <appId>` variant)
+   → return true if successful
+3. Try apt via pkexec (pops native GUI PolicyKit auth dialog):
+     pkexec apt install -y <appId>               (timeout: 120s)
+   → narrate: "A password dialog has appeared — please authenticate to install <appId>"
+   → verify binary on PATH after install
+   → return true if successful
+4. Try snap via pkexec:
+     pkexec snap install <appId>                 (timeout: 120s)
+   → same narration pattern
+5. If all fail: narrate with manual install command, return false
 ```
 
-**`sudo -n` (non-interactive)** is used throughout — if credentials aren't cached, the command fails immediately with a clear error rather than hanging. The narration informs the user they may need to run the install manually if `sudo -n` fails.
+**`flatpak --user`** installs into `~/.local/share/flatpak` with no authentication. Try this first.
 
-Package manager availability is checked once (`which apt`, etc.) and cached. All PM calls have explicit timeouts. A hung or failed install is non-fatal — the main loop will run with a degraded surface and the LLM will explain the situation.
+**`pkexec`** spawns a native GUI PolicyKit dialog — appropriate for a desktop Electron app. One auth prompt per install. Skip if `pkexec` not available (`which pkexec` fails).
+
+Package manager availability (`which flatpak`, `which pkexec`, `which apt`, `which snap`) checked once and cached. All PM calls have explicit 120s timeouts. A failed install is non-fatal.
 
 ---
 
@@ -282,7 +292,7 @@ The renderer already handles `onStreamText` for streaming — `onProgress` maps 
 | Failure | Behavior |
 |---------|----------|
 | HARNESS.md missing | Narrate, skip generation, fall back to native surface |
-| App install fails (sudo -n rejected) | Narrate, advise manual install, continue with degraded surface |
+| App install fails (flatpak + pkexec both fail) | Narrate, advise manual install, continue with degraded surface |
 | App install times out | Narrate timeout, continue |
 | Harness generation fails or times out | Narrate failure, fall back |
 | Harness installs but tests fail | Log warning, continue — harness is still usable |
@@ -297,7 +307,7 @@ All failures are non-fatal. The main loop always runs.
 | File | Change |
 |------|--------|
 | `src/main/agent/loop-harness.ts` | **New** — nested agent loop for 7-phase generation, private abort controller, `registerNestedCancel`/`clearNestedCancel` calls |
-| `src/main/agent/loop-app-install.ts` | **New** — system package manager install with `sudo -n` and explicit timeouts |
+| `src/main/agent/loop-app-install.ts` | **New** — package manager install: flatpak --user first, then pkexec apt/snap; explicit 120s timeouts; never bare sudo |
 | `src/main/agent/loop-setup.ts` | Add `apiKey` + `onProgress` params to `runPreLLMSetup`; add install + harness checks after app detection |
 | `src/main/agent/loop.ts` | Add `onProgress` to `LoopOptions`; add `registerNestedCancel`/`clearNestedCancel`/`nestedCancelFn` alongside existing `cancelLoop()`; extend `cancelLoop()` to fire nested cancel; move `startTime` to after `runPreLLMSetup` returns; update `runPreLLMSetup` call site to pass `apiKey` and `options.onProgress` |
 | `src/main/db/app-registry.ts` | No change |
