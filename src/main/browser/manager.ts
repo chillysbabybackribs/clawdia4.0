@@ -578,14 +578,13 @@ export async function extractData(instruction: string): Promise<string> {
   }
 }
 
-export async function takeScreenshot(): Promise<string> {
+export async function takeScreenshot(): Promise<{ base64: string; width: number; height: number; sizeKb: number }> {
   const view = getActiveView();
   if (!view) throw new Error('No active tab');
-  try {
-    const img = await view.webContents.capturePage();
-    const s = img.getSize();
-    return `[Screenshot: ${s.width}x${s.height}px, ${Math.round(img.toPNG().toString('base64').length / 1024)}KB]`;
-  } catch (err: any) { return '[Error screenshot]: ' + err.message; }
+  const img = await view.webContents.capturePage();
+  const s = img.getSize();
+  const base64 = img.toPNG().toString('base64');
+  return { base64, width: s.width, height: s.height, sizeKb: Math.round(base64.length / 1024) };
 }
 
 export async function search(query: string): Promise<string> {

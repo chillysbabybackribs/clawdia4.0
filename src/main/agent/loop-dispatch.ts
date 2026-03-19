@@ -14,7 +14,9 @@ import { resolveVerificationRule, verify, logVerification, type VerificationResu
 import { recordSurfaceDeviation, type ExecutionPlan } from '../db/app-registry';
 import { appendRunEvent } from '../db/run-events';
 import { buildTextDiff, createRunChange } from '../db/run-changes';
-import { maybeRequireApproval, requestApproval, waitForApproval } from './approval-manager';
+import { maybeRequireApproval, recordPolicyBlocked, requestApproval, waitForApproval } from './approval-manager';
+import { requestHumanIntervention, waitForHumanIntervention } from './human-intervention-manager';
+import { SCREENSHOT_PREFIX } from './executors/browser-executors';
 import * as fs from 'fs';
 
 // ═══════════════════════════════════
@@ -116,7 +118,7 @@ export async function dispatchTools(
       const detail = summarizeInput(toolUse.name, toolUse.input as any);
       const surface = inferSurface(toolUse.name);
       const fileBefore = captureFileBefore(toolUse.name, toolUse.input as Record<string, any>);
-      const approvalRequirement = maybeRequireApproval(toolUse.name, toolUse.input as Record<string, any>);
+      const approvalDecision = maybeRequireApproval(toolUse.name, toolUse.input as Record<string, any>);
 
       ctx.onToolActivity?.({ name: toolUse.name, status: 'running', detail });
       if (ctx.runId) {
@@ -137,11 +139,21 @@ export async function dispatchTools(
 
       let result: string;
       try {
-        if (approvalRequirement && ctx.runId) {
+        if (approvalDecision?.effect === 'deny' && ctx.runId) {
+          recordPolicyBlocked(ctx.runId, approvalDecision);
+          ctx.onToolActivity?.({
+            name: toolUse.name,
+            status: 'error',
+            detail: approvalDecision.summary,
+          });
+          result = `[Blocked by policy] ${approvalDecision.summary}`;
+        } else if (approvalDecision?.effect === 'require_approval' && ctx.runId) {
           const approval = requestApproval(ctx.runId, {
-            ...approvalRequirement,
+            actionType: approvalDecision.actionType,
+            target: approvalDecision.target,
+            summary: approvalDecision.summary,
             request: {
-              ...(approvalRequirement.request || {}),
+              ...(approvalDecision.request || {}),
               toolName: toolUse.name,
               toolUseId: toolUse.id,
               input: toolUse.input as Record<string, any>,
@@ -165,6 +177,38 @@ export async function dispatchTools(
         }
       } catch (err: any) {
         result = `[Error] ${err.message}`;
+      }
+
+      const humanIntervention = inferHumanInterventionRequirement(
+        toolUse.name,
+        toolUse.input as Record<string, any>,
+        result,
+      );
+
+      if (humanIntervention && ctx.runId) {
+        const intervention = requestHumanIntervention(ctx.runId, {
+          interventionType: humanIntervention.type,
+          target: humanIntervention.target,
+          summary: humanIntervention.summary,
+          instructions: humanIntervention.instructions,
+          request: {
+            toolName: toolUse.name,
+            toolUseId: toolUse.id,
+            input: toolUse.input as Record<string, any>,
+            detectedFrom: humanIntervention.detectedFrom,
+          },
+        });
+
+        ctx.onToolActivity?.({
+          name: toolUse.name,
+          status: 'needs_human',
+          detail: intervention.summary,
+        });
+
+        const decision = await waitForHumanIntervention(intervention.id);
+        result = decision === 'dismissed'
+          ? `[Human intervention dismissed] ${intervention.summary}`
+          : `[Human intervention completed] ${intervention.summary}`;
       }
 
       // Mid-loop escalation: upgrade tool group if a known tool was missing
@@ -210,12 +254,12 @@ export async function dispatchTools(
             toolUseId: toolUse.id,
             detail,
             durationMs,
-            resultPreview: result.slice(0, 500),
+            resultPreview: result.startsWith(SCREENSHOT_PREFIX) ? '[screenshot image]' : result.slice(0, 500),
             status,
           },
         });
       }
-      console.log(`[Agent] Result (${durationMs}ms): ${result.slice(0, 200)}`);
+      console.log(`[Agent] Result (${durationMs}ms): ${result.startsWith(SCREENSHOT_PREFIX) ? '[screenshot image]' : result.slice(0, 200)}`);
 
       if (ctx.runId && status === 'success') {
         persistStructuredChange(ctx.runId, completionEventId, toolUse.name, toolUse.input as Record<string, any>, fileBefore);
@@ -241,16 +285,35 @@ export async function dispatchTools(
 
       if (status === 'error') result += '\n[Hint: Change your approach — do not retry the same command.]';
 
-      // Cap result length
-      const cap = TOOL_RESULT_CAPS[toolUse.name] || DEFAULT_RESULT_CAP;
-      if (result.length > cap) {
-        result = result.slice(0, cap) + `\n\n[Truncated — ${result.length} chars, showing first ${cap}]`;
+      // Cap result length (skip for screenshots — handled as image blocks downstream)
+      if (!result.startsWith(SCREENSHOT_PREFIX)) {
+        const cap = TOOL_RESULT_CAPS[toolUse.name] || DEFAULT_RESULT_CAP;
+        if (result.length > cap) {
+          result = result.slice(0, cap) + `\n\n[Truncated — ${result.length} chars, showing first ${cap}]`;
+        }
       }
 
       return { id: toolUse.id, content: result } as const;
     }));
 
     for (const r of batchResults) {
+      // Detect screenshot results — unpack into an image content block so the LLM can see the page.
+      if (r.content.startsWith(SCREENSHOT_PREFIX)) {
+        try {
+          const { base64, width, height, sizeKb } = JSON.parse(r.content.slice(SCREENSHOT_PREFIX.length));
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: r.id,
+            content: [
+              { type: 'text', text: `Screenshot: ${width}x${height}px (${sizeKb}KB)` },
+              { type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } },
+            ],
+          });
+          continue;
+        } catch {
+          // Fall through to plain text if JSON parse fails
+        }
+      }
       toolResults.push({ type: 'tool_result', tool_use_id: r.id, content: r.content });
     }
   }
@@ -282,6 +345,76 @@ async function executeApprovedTool(
     : undefined;
 
   return executeTool(toolUse.name, toolUse.input as any, chunkCb);
+}
+
+interface HumanInterventionRequirement {
+  type: 'password' | 'otp' | 'captcha' | 'native_dialog' | 'site_confirmation' | 'conflict_resolution' | 'manual_takeover' | 'unknown';
+  summary: string;
+  instructions: string;
+  target?: string;
+  detectedFrom: 'tool_result' | 'tool_input';
+}
+
+function inferHumanInterventionRequirement(
+  toolName: string,
+  input: Record<string, any>,
+  result: string,
+): HumanInterventionRequirement | null {
+  const command = String(input.command || input.cmd || '').trim();
+  const resultText = String(result || '');
+
+  const explicitMarker = resultText.match(/^\[(?:Needs human|Human intervention required)\]\s*(.+)$/i);
+  if (explicitMarker) {
+    return {
+      type: inferInterventionType(explicitMarker[1]),
+      summary: explicitMarker[1].trim(),
+      instructions: 'Complete the required step, then return to Clawdia and click Resume.',
+      target: inferTarget(toolName, input),
+      detectedFrom: 'tool_result',
+    };
+  }
+
+  if (toolName === 'shell_exec' && /\b(?:sudo|passwd|su)\b/i.test(command)) {
+    return {
+      type: 'password',
+      summary: `Human intervention required for interactive command: ${truncate(command, 120)}`,
+      instructions: 'Complete the password or confirmation step in the target environment, then return and click Resume.',
+      target: command,
+      detectedFrom: 'tool_input',
+    };
+  }
+
+  if (/(captcha|two-factor|2fa|one-time code|verification code|enter the code)/i.test(resultText)) {
+    return {
+      type: /(captcha)/i.test(resultText) ? 'captcha' : 'otp',
+      summary: truncate(resultText.replace(/^\[Error\]\s*/i, '').trim() || 'Human intervention required', 180),
+      instructions: 'Complete the verification step, then return to Clawdia and click Resume.',
+      target: inferTarget(toolName, input),
+      detectedFrom: 'tool_result',
+    };
+  }
+
+  return null;
+}
+
+function inferInterventionType(value: string): HumanInterventionRequirement['type'] {
+  if (/captcha/i.test(value)) return 'captcha';
+  if (/(two-factor|2fa|otp|verification code|one-time code)/i.test(value)) return 'otp';
+  if (/password/i.test(value)) return 'password';
+  if (/(dialog|confirm)/i.test(value)) return 'native_dialog';
+  return 'unknown';
+}
+
+function inferTarget(toolName: string, input: Record<string, any>): string | undefined {
+  if (toolName === 'shell_exec') return String(input.command || input.cmd || '').trim() || undefined;
+  if ('path' in input && typeof input.path === 'string') return input.path;
+  if ('url' in input && typeof input.url === 'string') return input.url;
+  if ('target' in input && typeof input.target === 'string') return input.target;
+  return toolName;
+}
+
+function truncate(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, max - 3)}...` : value;
 }
 
 // ═══════════════════════════════════

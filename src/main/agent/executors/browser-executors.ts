@@ -153,9 +153,13 @@ export async function executeBrowserExtract(input: Record<string, any>): Promise
   }
 }
 
+// Special prefix the dispatcher detects to build an image tool_result block.
+export const SCREENSHOT_PREFIX = '__SCREENSHOT__:';
+
 export async function executeBrowserScreenshot(_input: Record<string, any>): Promise<string> {
   try {
-    return await takeScreenshot();
+    const { base64, width, height, sizeKb } = await takeScreenshot();
+    return `${SCREENSHOT_PREFIX}${JSON.stringify({ base64, width, height, sizeKb })}`;
   } catch (err: any) {
     return `[Error: browser_screenshot] ${err.message}`;
   }
