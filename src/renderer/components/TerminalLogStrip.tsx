@@ -77,6 +77,7 @@ export default function TerminalLogStrip({ lines, isStreaming }: TerminalLogStri
       <div
         role="button"
         tabIndex={0}
+        aria-expanded={expanded}
         onClick={() => setExpanded(e => !e)}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setExpanded(v => !v); }}
         style={{
