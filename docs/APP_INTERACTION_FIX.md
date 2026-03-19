@@ -98,6 +98,24 @@ Enhanced `routeTask()` cli_anything surface:
 - No-profile-no-binary path also includes harness guidance
 - Guidance is suppressed after first suggestion per session
 
-## Remaining phases
+### Phase 5 — Surface Deviation Metrics (P2)
 
-- **Phase 5**: Post-execution surface deviation metrics in loop.ts
+**`src/main/db/app-registry.ts`** — Deviation tracking infrastructure.
+
+New exports:
+- `expectedToolForSurface(surface)` — Maps control surfaces to Anthropic tool names
+- `recordSurfaceDeviation(appId, expectedSurface, actualTool)` — Records when the LLM deviates
+  - Smart filtering: `app_control` is always acceptable (unified dispatcher), `shell_exec` is fine for programmatic/native_cli surfaces
+  - Capped at 100 entries, FIFO eviction
+  - Logs `[Deviation]` warnings to console
+- `getDeviationSummary()` — Returns total, byApp, byActualTool, and last 10 deviations
+- `getMetrics()` now includes deviations array
+
+**`src/main/agent/loop.ts`** — Wired into tool dispatch.
+- After every tool execution, if an execution plan is active, calls `recordSurfaceDeviation()`
+- Zero-overhead when no plan is active (non-desktop tasks)
+
+**`src/main/agent/prompt/modules/SELF_KNOWLEDGE.md`** — Diagnostics section.
+- Documents how to access metrics and deviation data
+
+## All Phases Complete

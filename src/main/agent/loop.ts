@@ -27,7 +27,7 @@ import { getStateSummary } from './gui/ui-state';
 import { getShortcutPromptBlock } from './gui/shortcuts';
 import {
   extractAppName, discoverApps, routeTask, seedRegistry, scanHarnesses,
-  recordSurfaceUsage, type ExecutionPlan,
+  recordSurfaceUsage, recordSurfaceDeviation, type ExecutionPlan,
 } from '../db/app-registry';
 import { IPC_EVENTS } from '../../shared/ipc-channels';
 
@@ -322,6 +322,11 @@ export async function runAgentLoop(
         onToolActivity?.({ name: toolUse.name, status, detail });
         allToolCalls.push({ name: toolUse.name, status, detail });
         console.log(`[Agent] Result (${durationMs}ms): ${result.slice(0, 200)}`);
+
+        // Phase 5: Track surface deviations
+        if (executionPlan?.appId && executionPlan.selectedSurface) {
+          recordSurfaceDeviation(executionPlan.appId, executionPlan.selectedSurface, toolUse.name);
+        }
 
         if (status === 'error') result += '\n[Hint: Change your approach — do not retry the same command.]';
 

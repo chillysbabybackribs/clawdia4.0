@@ -97,6 +97,12 @@ const TASK_RULES: TaskRoutingRule[] = [
     taskPattern: /(?:edit.*(?:layer|filter|brush|tool|selection|mask|effect))|(?:use.*(?:gimp|blender|inkscape).*(?:tool|filter|effect))/i,
     preferredOrder: ['cli_anything', 'gui', 'native_cli'],
   },
+  // App-session interaction (list layers, show state, apply within running app)
+  // These need the app itself, not just Pillow/ImageMagick on a file.
+  {
+    taskPattern: /(?:list|show|get|read).*(?:layer|channel|path|history|undo|selection)|(?:in|inside|within|from)\s+(?:gimp|blender|inkscape|libreoffice|audacity|obs)/i,
+    preferredOrder: ['cli_anything', 'native_cli', 'gui'],
+  },
   // Launch/open app → native CLI
   {
     taskPattern: /(?:launch|open|start|run)\s+\w+/i,
@@ -114,7 +120,11 @@ const SEED_PROFILES: AppProfile[] = [
     displayName: 'GIMP',
     binaryPath: 'gimp',
     availableSurfaces: ['programmatic', 'cli_anything', 'native_cli', 'gui'],
-    nativeCli: { command: 'gimp', supportsBatch: true, helpSummary: 'gimp -i -b for batch/headless' },
+    nativeCli: {
+      command: 'gimp',
+      supportsBatch: true,
+      helpSummary: 'gimp -i -b for batch/headless Script-Fu. WARNING: Script-Fu batch can hang — use 10s timeout. For interactive session tasks (list layers, apply filters on open image), prefer gui_interact or cli-anything-gimp over native batch.',
+    },
     programmaticAlternatives: ['python3+pillow', 'imagemagick'],
     windowMatcher: 'GIMP|GNU Image',
     confidence: 0.9,
@@ -665,7 +675,91 @@ export function recordFallback(): void {
 }
 
 export function getMetrics() {
-  return { ...metrics };
+  return { ...metrics, deviations: [...surfaceDeviations] };
+}
+
+// ═══════════════════════════════════
+// Surface Deviation Tracking
+//
+// Records when the LLM uses a different tool than the
+// execution plan recommended. Feeds back into routing
+// quality assessment without blocking execution.
+// ═══════════════════════════════════
+
+export interface SurfaceDeviation {
+  appId: string;
+  expectedSurface: ControlSurface;
+  expectedTool: string;
+  actualTool: string;
+  timestamp: number;
+}
+
+const surfaceDeviations: SurfaceDeviation[] = [];
+
+/** Map a control surface to the Anthropic tool name the LLM should use. */
+export function expectedToolForSurface(surface: ControlSurface): string {
+  switch (surface) {
+    case 'programmatic': return 'shell_exec';
+    case 'dbus':         return 'dbus_control';
+    case 'cli_anything': return 'app_control';
+    case 'native_cli':   return 'shell_exec';
+    case 'gui':          return 'gui_interact';
+  }
+}
+
+/**
+ * Record a surface deviation.
+ * Called by the agent loop when the LLM uses a tool that
+ * doesn't match the execution plan's recommended surface.
+ */
+export function recordSurfaceDeviation(
+  appId: string,
+  expectedSurface: ControlSurface,
+  actualTool: string,
+): void {
+  const expected = expectedToolForSurface(expectedSurface);
+  // Not a deviation if the tool matches
+  if (actualTool === expected) return;
+  // app_control is always acceptable — it's the unified dispatcher
+  if (actualTool === 'app_control') return;
+  // shell_exec used for programmatic or native_cli is expected
+  if (actualTool === 'shell_exec' && (expectedSurface === 'programmatic' || expectedSurface === 'native_cli')) return;
+
+  const deviation: SurfaceDeviation = {
+    appId,
+    expectedSurface,
+    expectedTool: expected,
+    actualTool,
+    timestamp: Date.now(),
+  };
+  surfaceDeviations.push(deviation);
+  // Cap at 100 entries
+  if (surfaceDeviations.length > 100) surfaceDeviations.shift();
+
+  console.warn(
+    `[Deviation] App: ${appId} | Expected: ${expected} (${expectedSurface}) | Actual: ${actualTool}`,
+  );
+}
+
+/** Get deviation summary for diagnostics. */
+export function getDeviationSummary(): {
+  total: number;
+  byApp: Record<string, number>;
+  byActualTool: Record<string, number>;
+  recent: SurfaceDeviation[];
+} {
+  const byApp: Record<string, number> = {};
+  const byActualTool: Record<string, number> = {};
+  for (const d of surfaceDeviations) {
+    byApp[d.appId] = (byApp[d.appId] || 0) + 1;
+    byActualTool[d.actualTool] = (byActualTool[d.actualTool] || 0) + 1;
+  }
+  return {
+    total: surfaceDeviations.length,
+    byApp,
+    byActualTool,
+    recent: surfaceDeviations.slice(-10),
+  };
 }
 
 // ═══════════════════════════════════

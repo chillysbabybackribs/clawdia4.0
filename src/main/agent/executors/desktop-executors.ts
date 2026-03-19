@@ -327,19 +327,24 @@ async function tryControlSurface(
     case 'native_cli': {
       const bin = profile.nativeCli?.command || profile.binaryPath || appName;
       if (!await cmdExists(bin)) return { ok: false, result: `[Skip] Binary "${bin}" not found` };
-      console.log(`[app_control] Native CLI: ${bin} ${command}`);
-      const result = await run(`${bin} ${command}`, 60_000);
+      // Use a tighter timeout for apps with known batch-mode hang risks
+      const helpHint = profile.nativeCli?.helpSummary || '';
+      const timeout = /hang|block|timeout/i.test(helpHint) ? 15_000 : 60_000;
+      console.log(`[app_control] Native CLI: ${bin} ${command} (timeout: ${timeout / 1000}s)`);
+      const result = await run(`${bin} ${command}`, timeout);
       if (result.startsWith('[Error]')) return { ok: false, result };
       return { ok: true, result };
     }
 
     case 'programmatic': {
-      // Programmatic tasks are handled by shell_exec, not app_control.
-      // Return a hint so the LLM knows to use shell_exec instead.
+      // Programmatic tasks are better handled by shell_exec, not app_control.
+      // Return ok: false so the fallback chain continues to try cli_anything
+      // and native_cli — those can interact with the running app.
+      // The suggestion is included so the LLM knows it has this option.
       const alts = profile.programmaticAlternatives?.join(', ') || 'python3';
       return {
-        ok: true,
-        result: `[Programmatic available] Use shell_exec with ${alts} for this task. Do not use app_control for programmatic operations.`,
+        ok: false,
+        result: `[Hint] For file-level operations (resize, convert, create), use shell_exec with ${alts} instead of app_control. Continuing fallback chain for app-level operations...`,
       };
     }
 

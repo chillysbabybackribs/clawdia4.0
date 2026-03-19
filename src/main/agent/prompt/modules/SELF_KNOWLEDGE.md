@@ -26,3 +26,12 @@ When modifying Clawdia's own code:
 - Always read the relevant source file first. Do not guess based on general Electron knowledge.
 - Verify the build after changes: `npx tsc -p tsconfig.main.json --noEmit` and `npx vite build`
 - The renderer runs on port 5174 in dev mode.
+
+## Diagnostics
+
+The app-registry tracks execution metrics and surface deviations.
+- To inspect: import { getMetrics, getDeviationSummary } from '../db/app-registry'
+- getMetrics() returns: surfaceUsed counts, fallbackCount, totalDesktopTasks, deviations
+- getDeviationSummary() returns: total, byApp, byActualTool, recent (last 10)
+- Deviations log to console as [Deviation] warnings
+- A deviation means the LLM used a different tool than the execution plan recommended
