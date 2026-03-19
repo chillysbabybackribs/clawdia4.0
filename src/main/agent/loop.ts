@@ -168,7 +168,7 @@ export async function runAgentLoop(
   const staticPrompt = buildStaticPrompt(profile.toolGroup, profile.promptModules);
 
   // ── Pre-LLM Setup (extracted to loop-setup.ts) ──
-  const setup = await runPreLLMSetup(userMessage, profile);
+  const setup = await runPreLLMSetup(userMessage, profile, apiKey);
   const { executionPlan } = setup;
 
   // ── Build dynamic prompt ──
