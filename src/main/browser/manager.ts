@@ -231,7 +231,29 @@ function wireTabEvents(tab: Tab): void {
     if (isMainFrame) { console.warn(`[Browser] Tab ${tab.id} load failed: ${errorCode}`); scheduleStop(); }
   });
 
-  wc.setWindowOpenHandler(({ url }) => { createTab(url); return { action: 'deny' }; });
+  wc.setWindowOpenHandler(({ url }) => {
+    // Auth/OAuth popups must be allowed as real windows so the OAuth handshake can complete
+    // (window.open → postMessage back to opener). Denying these kills the login flow.
+    const isAuthPopup = /accounts\.google\.com|login\.microsoftonline\.com|appleid\.apple\.com|github\.com\/login|auth\.|\/oauth|\/authorize|\/sso|\/saml|\/login\?|\/signin\?/i.test(url);
+    if (isAuthPopup) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          width: 600,
+          height: 700,
+          webPreferences: {
+            partition: 'persist:browser', // same session = cookies carry over
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
+          },
+        },
+      };
+    }
+    // Regular links: open in a new tab instead of a popup
+    createTab(url);
+    return { action: 'deny' };
+  });
 }
 
 // ═══════════════════════════════════
