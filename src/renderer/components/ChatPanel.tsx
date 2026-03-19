@@ -324,6 +324,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
 
     cleanups.push(api.chat.onStreamEnd(() => {
       if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+      flushStreamUpdate();
     }));
 
     return () => {
@@ -423,20 +424,24 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
   const handleRateTool = useCallback((messageId: string, toolId: string, rating: 'up' | 'down' | null, note?: string) => {
     const api = (window as any).clawdia;
     if (!api) return;
+    const applyRating = (tc: ToolCall) => {
+      if (tc.id !== toolId) return tc;
+      const updated = { ...tc, rating };
+      if (note !== undefined) updated.ratingNote = note;
+      if (rating === null) { updated.rating = null; updated.ratingNote = undefined; }
+      if (rating === 'up') { updated.ratingNote = undefined; }
+      return updated;
+    };
     // Update local state immediately for responsive UI
     setMessages(prev => prev.map(m => {
-      if (m.id !== messageId || !m.toolCalls) return m;
-      return {
-        ...m,
-        toolCalls: m.toolCalls.map(tc => {
-          if (tc.id !== toolId) return tc;
-          const updated = { ...tc, rating };
-          if (note !== undefined) updated.ratingNote = note;
-          if (rating === null) { updated.rating = null; updated.ratingNote = undefined; }
-          if (rating === 'up') { updated.ratingNote = undefined; }
-          return updated;
-        }),
-      };
+      if (m.id !== messageId) return m;
+      const updates: Partial<Message> = {};
+      if (m.toolCalls) updates.toolCalls = m.toolCalls.map(applyRating);
+      if (m.iterations) updates.iterations = m.iterations.map(iter => ({
+        ...iter,
+        toolCalls: iter.toolCalls.map(applyRating),
+      }));
+      return { ...m, ...updates };
     }));
     // Persist to database
     api.chat.rateTool(messageId, toolId, rating, note);
