@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -7,15 +7,40 @@ interface MarkdownRendererProps {
   isStreaming?: boolean;
 }
 
-/**
- * Enterprise-grade markdown renderer.
- * During streaming: renders markdown live with a blinking cursor.
- * After streaming: full GFM rendering with tables, code blocks, lists.
- */
+/** Copy button for code blocks */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }, [text]);
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="absolute top-2 right-2 flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-mono bg-white/[0.06] hover:bg-white/[0.12] text-text-muted hover:text-text-secondary transition-all opacity-0 group-hover:opacity-100 cursor-pointer"
+    >
+      {copied ? (
+        <>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+          Copied
+        </>
+      ) : (
+        <>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+          Copy
+        </>
+      )}
+    </button>
+  );
+}
+
 export default function MarkdownRenderer({ content, isStreaming }: MarkdownRendererProps) {
   if (!content) return null;
 
-  // Memoize the remarkPlugins array so it's stable across renders
   const plugins = useMemo(() => [remarkGfm], []);
 
   return (
@@ -23,27 +48,31 @@ export default function MarkdownRenderer({ content, isStreaming }: MarkdownRende
       <ReactMarkdown
         remarkPlugins={plugins}
         components={{
-          // Custom code block with copy-ready styling
           code({ node, className, children, ...props }) {
-            const isInline = !className && typeof children === 'string' && !children.includes('\n');
+            const childText = String(children).replace(/\n$/, '');
+            const isInline = !className && !childText.includes('\n');
+
             if (isInline) {
               return <code {...props}>{children}</code>;
             }
+
             const lang = className?.replace('language-', '') || '';
+
             return (
               <div className="relative group">
                 {lang && (
-                  <div className="absolute top-0 right-0 px-2.5 py-1 text-[10px] font-mono text-text-muted/50 uppercase tracking-wider">
-                    {lang}
+                  <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/[0.04] bg-white/[0.02]">
+                    <span className="text-[10px] font-mono text-text-muted/60 uppercase tracking-wider">{lang}</span>
                   </div>
                 )}
+                {!isStreaming && <CopyButton text={childText} />}
                 <code className={className} {...props}>
                   {children}
                 </code>
               </div>
             );
           },
-          // Clean table wrapper for horizontal scrolling
+
           table({ children }) {
             return (
               <div className="overflow-x-auto rounded-lg">
@@ -51,13 +80,19 @@ export default function MarkdownRenderer({ content, isStreaming }: MarkdownRende
               </div>
             );
           },
-          // Links open externally
+
           a({ href, children }) {
             return (
-              <a href={href} title={href} onClick={(e) => {
-                e.preventDefault();
-                // Could wire to browser panel navigation here
-              }}>
+              <a
+                href={href}
+                title={href}
+                onClick={(e) => {
+                  e.preventDefault();
+                  if (href) {
+                    (window as any).clawdia?.browser.navigate(href);
+                  }
+                }}
+              >
                 {children}
               </a>
             );

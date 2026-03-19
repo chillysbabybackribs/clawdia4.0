@@ -3,9 +3,6 @@
  * 
  * Uses Electron's BrowserView (stable in 39.5.1) with direct webContents API.
  * No Playwright dependency — all interaction via webContents.executeJavaScript().
- * 
- * The BrowserView is a native Chromium surface positioned over the browser panel
- * area at exact pixel coordinates sent from the renderer via IPC.
  */
 
 import { BrowserView, BrowserWindow } from 'electron';
@@ -14,6 +11,7 @@ import { IPC_EVENTS } from '../../shared/ipc-channels';
 let mainWindow: BrowserWindow | null = null;
 let browserView: BrowserView | null = null;
 let currentBounds = { x: 0, y: 0, width: 0, height: 0 };
+let loadingTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * Initialize the browser. Creates a BrowserView and attaches it to the window.
@@ -36,11 +34,12 @@ export function initBrowser(win: BrowserWindow): void {
   const wc = browserView.webContents;
 
   // ── Navigation events → renderer ──
+
+  // Main frame navigation completed — definitively stop loading
   wc.on('did-navigate', (_event, url) => {
     console.log(`[Browser] Navigated: ${url}`);
     mainWindow?.webContents.send(IPC_EVENTS.BROWSER_URL_CHANGED, url);
     mainWindow?.webContents.send(IPC_EVENTS.BROWSER_TITLE_CHANGED, wc.getTitle());
-    mainWindow?.webContents.send(IPC_EVENTS.BROWSER_LOADING, false);
   });
 
   wc.on('did-navigate-in-page', (_event, url) => {
@@ -51,30 +50,53 @@ export function initBrowser(win: BrowserWindow): void {
     mainWindow?.webContents.send(IPC_EVENTS.BROWSER_TITLE_CHANGED, title);
   });
 
-  wc.on('did-start-loading', () => {
-    mainWindow?.webContents.send(IPC_EVENTS.BROWSER_LOADING, true);
+  // Loading state: debounced to avoid flicker from sub-resource loads.
+  // did-start-loading fires for EVERY resource (scripts, images, iframes, tracking pixels).
+  // We set loading=true immediately on main navigation, but only set loading=false
+  // after a 300ms debounce — if another load starts within that window, the spinner stays.
+  wc.on('did-start-navigation', (_event, url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) {
+      // Main frame navigation starting — show loading immediately
+      if (loadingTimer) { clearTimeout(loadingTimer); loadingTimer = null; }
+      mainWindow?.webContents.send(IPC_EVENTS.BROWSER_LOADING, true);
+    }
+  });
+
+  wc.on('did-finish-load', () => {
+    // Main frame finished loading — debounce the stop to avoid flicker
+    scheduleLoadingStop();
   });
 
   wc.on('did-stop-loading', () => {
-    mainWindow?.webContents.send(IPC_EVENTS.BROWSER_LOADING, false);
+    // All resources done — schedule loading stop
+    scheduleLoadingStop();
   });
 
-  // Only log MAIN frame failures — ignore sub-frame tracking pixels, ad syncs, etc.
   wc.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (isMainFrame) {
-      console.warn(`[Browser] Main frame load failed: ${errorCode} ${errorDescription} — ${validatedURL}`);
-      mainWindow?.webContents.send(IPC_EVENTS.BROWSER_LOADING, false);
+      console.warn(`[Browser] Load failed: ${errorCode} ${errorDescription} — ${validatedURL}`);
+      scheduleLoadingStop();
     }
-    // Sub-frame failures (tracking pixels, ad syncs, cookie syncs) are silently ignored.
   });
 
-  // Open links in the same view — don't spawn new windows
+  // Open links in the same view
   wc.setWindowOpenHandler(({ url }) => {
     wc.loadURL(url);
     return { action: 'deny' };
   });
 
-  console.log('[Browser] Initialized');
+  // Load Google as the default landing page
+  wc.loadURL('https://www.google.com');
+
+  console.log('[Browser] Initialized — loading Google');
+}
+
+function scheduleLoadingStop(): void {
+  if (loadingTimer) clearTimeout(loadingTimer);
+  loadingTimer = setTimeout(() => {
+    loadingTimer = null;
+    mainWindow?.webContents.send(IPC_EVENTS.BROWSER_LOADING, false);
+  }, 300);
 }
 
 // ═══════════════════════════════════
@@ -342,6 +364,7 @@ export async function search(query: string): Promise<string> {
 }
 
 export function closeBrowser(): void {
+  if (loadingTimer) { clearTimeout(loadingTimer); loadingTimer = null; }
   if (browserView && mainWindow) {
     mainWindow.removeBrowserView(browserView);
     (browserView.webContents as any)?.destroy?.();

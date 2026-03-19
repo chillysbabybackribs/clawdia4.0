@@ -4,12 +4,11 @@
 
 import { exec } from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);
-
-// ── shell_exec ──
 
 export async function executeShellExec(input: Record<string, any>): Promise<string> {
   const { command, timeout = 30 } = input;
@@ -18,9 +17,9 @@ export async function executeShellExec(input: Record<string, any>): Promise<stri
   try {
     const { stdout, stderr } = await execAsync(command, {
       timeout: timeoutMs,
-      cwd: process.env.HOME || '/home',
+      cwd: os.homedir(),
       env: { ...process.env },
-      maxBuffer: 1024 * 1024 * 5, // 5MB
+      maxBuffer: 1024 * 1024 * 5,
     });
 
     let result = '';
@@ -39,39 +38,28 @@ export async function executeShellExec(input: Record<string, any>): Promise<stri
   }
 }
 
-// ── file_read ──
-
 export async function executeFileRead(input: Record<string, any>): Promise<string> {
   const { path: filePath, startLine, endLine } = input;
-
   try {
     const content = fs.readFileSync(filePath, 'utf-8');
-
     if (startLine || endLine) {
       const lines = content.split('\n');
       const start = Math.max(1, startLine || 1) - 1;
       const end = Math.min(lines.length, endLine || lines.length);
       return lines.slice(start, end).join('\n');
     }
-
-    // Cap at ~100KB to avoid blowing up the context
     if (content.length > 100_000) {
-      return content.slice(0, 100_000) + `\n\n[Truncated — file is ${content.length} bytes. Use startLine/endLine for specific sections.]`;
+      return content.slice(0, 100_000) + `\n\n[Truncated — file is ${content.length} bytes. Use startLine/endLine.]`;
     }
-
     return content;
   } catch (err: any) {
     return `[Error reading ${filePath}]: ${err.message}`;
   }
 }
 
-// ── file_write ──
-
 export async function executeFileWrite(input: Record<string, any>): Promise<string> {
   const { path: filePath, content } = input;
-
   try {
-    // Create parent directories
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, content, 'utf-8');
     return `[Written ${content.length} bytes to ${filePath}]`;
@@ -80,31 +68,19 @@ export async function executeFileWrite(input: Record<string, any>): Promise<stri
   }
 }
 
-// ── file_edit ──
-
 export async function executeFileEdit(input: Record<string, any>): Promise<string> {
   const { path: filePath, old_str, new_str } = input;
-
   try {
     const content = fs.readFileSync(filePath, 'utf-8');
     const occurrences = content.split(old_str).length - 1;
-
-    if (occurrences === 0) {
-      return `[Error] old_str not found in ${filePath}. Read the file to get the exact text.`;
-    }
-    if (occurrences > 1) {
-      return `[Error] old_str appears ${occurrences} times in ${filePath}. It must appear exactly once.`;
-    }
-
-    const updated = content.replace(old_str, new_str);
-    fs.writeFileSync(filePath, updated, 'utf-8');
-    return `[Edited ${filePath} — replaced ${old_str.length} chars with ${new_str.length} chars]`;
+    if (occurrences === 0) return `[Error] old_str not found in ${filePath}. Read the file first.`;
+    if (occurrences > 1) return `[Error] old_str appears ${occurrences} times. Must appear exactly once.`;
+    fs.writeFileSync(filePath, content.replace(old_str, new_str), 'utf-8');
+    return `[Edited ${filePath}]`;
   } catch (err: any) {
     return `[Error editing ${filePath}]: ${err.message}`;
   }
 }
-
-// ── directory_tree ──
 
 export async function executeDirectoryTree(input: Record<string, any>): Promise<string> {
   const { path: dirPath, depth = 3 } = input;
@@ -113,15 +89,10 @@ export async function executeDirectoryTree(input: Record<string, any>): Promise<
 
   function walk(dir: string, currentDepth: number, prefix: string): string[] {
     if (currentDepth > maxDepth) return [];
-
     let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return [`${prefix}[permission denied]`];
-    }
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+    catch { return [`${prefix}[permission denied]`]; }
 
-    // Filter and sort: dirs first, then files
     entries = entries
       .filter(e => !e.name.startsWith('.') && !IGNORE.has(e.name))
       .sort((a, b) => {
@@ -136,7 +107,6 @@ export async function executeDirectoryTree(input: Record<string, any>): Promise<
       const isLast = i === entries.length - 1;
       const connector = isLast ? '└── ' : '├── ';
       const childPrefix = isLast ? '    ' : '│   ';
-
       if (entry.isDirectory()) {
         lines.push(`${prefix}${connector}${entry.name}/`);
         lines.push(...walk(path.join(dir, entry.name), currentDepth + 1, prefix + childPrefix));
@@ -148,8 +118,7 @@ export async function executeDirectoryTree(input: Record<string, any>): Promise<
   }
 
   try {
-    const lines = walk(dirPath, 0, '');
-    return `${dirPath}/\n${lines.join('\n')}`;
+    return `${dirPath}/\n${walk(dirPath, 0, '').join('\n')}`;
   } catch (err: any) {
     return `[Error listing ${dirPath}]: ${err.message}`;
   }

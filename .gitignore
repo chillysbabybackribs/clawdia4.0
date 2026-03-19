@@ -3,3 +3,23 @@ dist/
 .env
 .env.local
 *.log
+
+# Build artifacts
+*.tsbuildinfo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Electron
+out/
+release/
+
+# Dev prompts (internal)
+BROWSER_BUILD_PROMPT.md

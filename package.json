@@ -6,16 +6,22 @@
   "license": "MIT",
   "main": "dist/main/main.js",
   "type": "commonjs",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "concurrently --kill-others-on-fail \"npm run dev:main\" \"npm run dev:renderer\" \"npm run dev:electron\"",
     "dev:main": "tsc -p tsconfig.main.json --watch",
     "dev:renderer": "vite",
-    "dev:electron": "wait-on http://127.0.0.1:5174 dist/main/main.js dist/main/preload.js && nodemon --watch dist/main --watch dist/shared --exec \"cross-env NODE_ENV=development electron --no-sandbox --disable-gpu --disable-software-rasterizer --disable-gpu-sandbox --disable-dev-shader-cache --disable-accelerated-2d-canvas --use-gl=swiftshader .\"",
+    "dev:electron": "wait-on http://127.0.0.1:5174 dist/main/main.js dist/main/preload.js && nodemon --watch dist/main --watch dist/shared --exec \"cross-env NODE_ENV=development electron .\"",
+    "dev:nogpu": "concurrently --kill-others-on-fail \"npm run dev:main\" \"npm run dev:renderer\" \"npm run dev:electron:nogpu\"",
+    "dev:electron:nogpu": "wait-on http://127.0.0.1:5174 dist/main/main.js dist/main/preload.js && nodemon --watch dist/main --watch dist/shared --exec \"cross-env NODE_ENV=development electron --no-sandbox --disable-gpu --disable-software-rasterizer --disable-gpu-sandbox --disable-dev-shader-cache --disable-accelerated-2d-canvas --use-gl=swiftshader .\"",
     "build": "npm run build:main && npm run build:renderer",
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "vite build",
     "postinstall": "electron-rebuild -f -w better-sqlite3",
-    "start": "cross-env NODE_ENV=production electron --no-sandbox --disable-gpu --disable-software-rasterizer --disable-gpu-sandbox --disable-dev-shader-cache --disable-accelerated-2d-canvas --use-gl=swiftshader ."
+    "start": "cross-env NODE_ENV=production electron .",
+    "start:nogpu": "cross-env NODE_ENV=production electron --no-sandbox --disable-gpu --disable-software-rasterizer --disable-gpu-sandbox --disable-dev-shader-cache --disable-accelerated-2d-canvas --use-gl=swiftshader ."
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

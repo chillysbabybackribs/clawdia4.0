@@ -6,6 +6,7 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
 import { IPC, IPC_EVENTS } from '../shared/ipc-channels';
 import { runAgentLoop } from './agent/loop';
+import { extractMemoryInBackground } from './agent/memory-extractor';
 import { getApiKey, setApiKey, getSelectedModel, setSelectedModel } from './store';
 import { getDb, closeDb } from './db/database';
 import {
@@ -45,10 +46,7 @@ function createWindow(): void {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
-    // Initialize browser after window is visible
-    if (mainWindow) {
-      initBrowser(mainWindow);
-    }
+    if (mainWindow) initBrowser(mainWindow);
   });
 
   if (isDev) {
@@ -69,7 +67,6 @@ app.on('second-instance', () => {
 });
 
 function setupIpcHandlers(): void {
-  // ── Window controls ──
   ipcMain.handle(IPC.WINDOW_MINIMIZE, () => mainWindow?.minimize());
   ipcMain.handle(IPC.WINDOW_MAXIMIZE, () => {
     if (mainWindow?.isMaximized()) mainWindow.unmaximize();
@@ -77,7 +74,6 @@ function setupIpcHandlers(): void {
   });
   ipcMain.handle(IPC.WINDOW_CLOSE, () => mainWindow?.close());
 
-  // ── Chat ──
   ipcMain.handle(IPC.CHAT_SEND, async (_event, message: string) => {
     const apiKey = getApiKey();
     if (!apiKey) {
@@ -105,6 +101,9 @@ function setupIpcHandlers(): void {
 
       if (result.response) {
         addMessage(activeConversationId!, 'assistant', result.response, result.toolCalls);
+
+        // Fire-and-forget background memory extraction via Haiku
+        extractMemoryInBackground(apiKey, message, result.response);
       }
 
       return { ok: true, response: result.response, toolCalls: result.toolCalls, conversationId: activeConversationId };
@@ -141,57 +140,24 @@ function setupIpcHandlers(): void {
     return { ok: true };
   });
 
-  // ── Settings ──
   ipcMain.handle(IPC.API_KEY_GET, async () => getApiKey());
-  ipcMain.handle(IPC.API_KEY_SET, async (_e, key: string) => {
-    setApiKey(key);
-    return { ok: true };
-  });
+  ipcMain.handle(IPC.API_KEY_SET, async (_e, key: string) => { setApiKey(key); return { ok: true }; });
   ipcMain.handle(IPC.MODEL_GET, async () => getSelectedModel());
-  ipcMain.handle(IPC.MODEL_SET, async (_e, model: string) => {
-    setSelectedModel(model);
-    return { ok: true };
-  });
-  ipcMain.handle(IPC.SETTINGS_GET, async (_e, key: string) => {
-    if (key === 'apiKey') return getApiKey() ? 'set' : '';
-    return null;
-  });
+  ipcMain.handle(IPC.MODEL_SET, async (_e, model: string) => { setSelectedModel(model); return { ok: true }; });
+  ipcMain.handle(IPC.SETTINGS_GET, async (_e, key: string) => key === 'apiKey' ? (getApiKey() ? 'set' : '') : null);
   ipcMain.handle(IPC.SETTINGS_SET, async (_e, key: string, value: any) => {
     if (key === 'apiKey') setApiKey(value);
     if (key === 'model') setSelectedModel(value);
     return { ok: true };
   });
 
-  // ── Browser — real BrowserView integration ──
   ipcMain.handle(IPC.BROWSER_NAVIGATE, async (_e, url: string) => {
-    try {
-      const result = await navigate(url);
-      return { ok: true, ...result };
-    } catch (err: any) {
-      return { error: err.message };
-    }
+    try { return { ok: true, ...(await navigate(url)) }; } catch (err: any) { return { error: err.message }; }
   });
-
-  ipcMain.handle(IPC.BROWSER_BACK, async () => {
-    await goBack();
-    return { ok: true };
-  });
-
-  ipcMain.handle(IPC.BROWSER_FORWARD, async () => {
-    await goForward();
-    return { ok: true };
-  });
-
-  ipcMain.handle(IPC.BROWSER_REFRESH, async () => {
-    await reload();
-    return { ok: true };
-  });
-
-  ipcMain.handle(IPC.BROWSER_SET_BOUNDS, async (_e, bounds: any) => {
-    setBounds(bounds);
-    return { ok: true };
-  });
-
+  ipcMain.handle(IPC.BROWSER_BACK, async () => { await goBack(); return { ok: true }; });
+  ipcMain.handle(IPC.BROWSER_FORWARD, async () => { await goForward(); return { ok: true }; });
+  ipcMain.handle(IPC.BROWSER_REFRESH, async () => { await reload(); return { ok: true }; });
+  ipcMain.handle(IPC.BROWSER_SET_BOUNDS, async (_e, bounds: any) => { setBounds(bounds); return { ok: true }; });
   ipcMain.handle(IPC.BROWSER_TAB_NEW, async () => ({ ok: true }));
   ipcMain.handle(IPC.BROWSER_TAB_LIST, async () => []);
   ipcMain.handle(IPC.BROWSER_TAB_SWITCH, async () => ({ ok: true }));
@@ -199,10 +165,5 @@ function setupIpcHandlers(): void {
 }
 
 app.whenReady().then(createWindow);
-app.on('before-quit', () => {
-  closeBrowser();
-});
-app.on('window-all-closed', () => {
-  closeDb();
-  app.quit();
-});
+app.on('before-quit', () => closeBrowser());
+app.on('window-all-closed', () => { closeDb(); app.quit(); });

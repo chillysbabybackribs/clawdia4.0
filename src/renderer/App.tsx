@@ -13,7 +13,7 @@ export default function App() {
   const [chatKey, setChatKey] = useState(0);
   const [loadConversationId, setLoadConversationId] = useState<string | null>(null);
 
-  // When browser panel is hidden, send zero bounds to hide the native BrowserView
+  // Hide native BrowserView when panel is toggled off
   useEffect(() => {
     if (!browserVisible) {
       (window as any).clawdia?.browser.setBounds({ x: 0, y: 0, width: 0, height: 0 });
@@ -37,6 +37,46 @@ export default function App() {
   const handleToggleBrowser = useCallback(() => {
     setBrowserVisible(v => !v);
   }, []);
+
+  // ── Keyboard shortcuts ──
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const ctrl = e.ctrlKey || e.metaKey;
+
+      // Ctrl+N — New chat
+      if (ctrl && e.key === 'n') {
+        e.preventDefault();
+        handleNewChat();
+      }
+      // Ctrl+L — Clear / new chat (same as Ctrl+N)
+      if (ctrl && e.key === 'l') {
+        e.preventDefault();
+        handleNewChat();
+      }
+      // Ctrl+, — Settings
+      if (ctrl && e.key === ',') {
+        e.preventDefault();
+        setActiveView(v => v === 'settings' ? 'chat' : 'settings');
+      }
+      // Ctrl+H — History / Conversations
+      if (ctrl && e.key === 'h') {
+        e.preventDefault();
+        setActiveView(v => v === 'conversations' ? 'chat' : 'conversations');
+      }
+      // Ctrl+B — Toggle browser panel
+      if (ctrl && e.key === 'b') {
+        e.preventDefault();
+        handleToggleBrowser();
+      }
+      // Escape — Back to chat from any view
+      if (e.key === 'Escape' && activeView !== 'chat') {
+        setActiveView('chat');
+      }
+    };
+
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [handleNewChat, handleToggleBrowser, activeView]);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden rounded-[10px] border-[2px] border-white/[0.04]">

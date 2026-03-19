@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import type { Message, ToolCall } from '../../shared/types';
 import InputBar from './InputBar';
-import ThinkingIndicator from './ThinkingIndicator';
+import StatusLine from './StatusLine';
 import ToolActivity from './ToolActivity';
 import MarkdownRenderer from './MarkdownRenderer';
 
@@ -56,7 +56,7 @@ function UserMessage({ message }: { message: Message }) {
 export default function ChatPanel({ browserVisible, onToggleBrowser, loadConversationId }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [thinking, setThinking] = useState('');
+  const [statusText, setStatusText] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamBufferRef = useRef('');
   const toolCallsRef = useRef<ToolCall[]>([]);
@@ -65,31 +65,22 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, loadConvers
   const pendingUpdateRef = useRef(false);
   const isUserScrolledUpRef = useRef(false);
 
-  // ── Load conversation on mount if ID provided ──
   useEffect(() => {
     if (!loadConversationId) return;
     const api = (window as any).clawdia;
     if (!api) return;
-
     api.chat.load(loadConversationId).then((result: any) => {
-      if (result.messages && result.messages.length > 0) {
+      if (result.messages?.length > 0) {
         setMessages(result.messages);
-        // Scroll to bottom after loading
         requestAnimationFrame(() => {
-          if (scrollRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-          }
+          if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         });
       }
-    }).catch((err: any) => {
-      console.error('Failed to load conversation:', err);
-    });
+    }).catch(() => {});
   }, [loadConversationId]);
 
   const scrollToBottom = useCallback((behavior: 'auto' | 'smooth' = 'auto') => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior });
-    }
+    if (scrollRef.current) scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior });
   }, []);
 
   const handleScroll = useCallback(() => {
@@ -139,12 +130,16 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, loadConvers
         return;
       }
       streamBufferRef.current += chunk;
+      // Clear status when streaming starts (the response is coming in)
+      setStatusText('');
       scheduleStreamUpdate();
     }));
 
     cleanups.push(api.chat.onThinking((thought: string) => {
-      setThinking(thought);
-      if (thought) autoScroll();
+      if (thought) {
+        setStatusText(thought);
+        autoScroll();
+      }
     }));
 
     cleanups.push(api.chat.onToolActivity((activity: { name: string; status: string; detail?: string }) => {
@@ -157,6 +152,17 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, loadConvers
       toolCallsRef.current = toolCallsRef.current.filter(t => !(t.name === tc.name && t.status === 'running'));
       toolCallsRef.current.push(tc);
       scheduleStreamUpdate();
+
+      // Update status line with tool activity
+      if (activity.status === 'running') {
+        const detail = activity.detail ? ` — ${activity.detail.slice(0, 50)}` : '';
+        setStatusText(`Running ${activity.name}${detail}`);
+      } else if (activity.status === 'success') {
+        setStatusText(`Completed ${activity.name}`);
+      } else if (activity.status === 'error') {
+        setStatusText(`Failed: ${activity.name}`);
+      }
+      autoScroll();
     }));
 
     cleanups.push(api.chat.onStreamEnd(() => {
@@ -176,9 +182,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, loadConvers
     isUserScrolledUpRef.current = false;
 
     const userMsg: Message = {
-      id: `user-${Date.now()}`,
-      role: 'user',
-      content: text,
+      id: `user-${Date.now()}`, role: 'user', content: text,
       timestamp: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
     };
     setMessages(prev => [...prev, userMsg]);
@@ -216,20 +220,25 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, loadConvers
         ));
       }
 
-      setIsStreaming(false); setThinking(''); assistantMsgIdRef.current = null;
+      setIsStreaming(false);
+      setStatusText('');
+      assistantMsgIdRef.current = null;
       isUserScrolledUpRef.current = false;
       requestAnimationFrame(() => scrollToBottom('smooth'));
     } catch (err: any) {
       setMessages(prev => prev.map(m =>
         m.id === assistantId ? { ...m, content: `⚠️ ${err.message || 'Unknown error'}`, isStreaming: false } : m
       ));
-      setIsStreaming(false); setThinking(''); assistantMsgIdRef.current = null;
+      setIsStreaming(false);
+      setStatusText('');
+      assistantMsgIdRef.current = null;
     }
   }, [scrollToBottom]);
 
   const handleStop = useCallback(() => {
     (window as any).clawdia?.chat.stop();
-    setIsStreaming(false); setThinking('');
+    setIsStreaming(false);
+    setStatusText('');
   }, []);
 
   return (
@@ -263,7 +272,8 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, loadConvers
               ? <AssistantMessage key={msg.id} message={msg} />
               : <UserMessage key={msg.id} message={msg} />
           )}
-          {thinking && <ThinkingIndicator />}
+          {/* Status line — fixed height, no layout jumps */}
+          {isStreaming && <StatusLine text={statusText} />}
           <div className="h-2" />
         </div>
       </div>

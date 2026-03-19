@@ -1,9 +1,15 @@
 /**
  * Settings Store — electron-store for API keys and preferences.
- * Conversations and memory will go in SQLite later.
  */
 
 import Store from 'electron-store';
+import * as os from 'os';
+import * as crypto from 'crypto';
+
+// Generate a machine-specific encryption key from hostname + username.
+// Not bulletproof security, but prevents trivial key extraction from source.
+const machineId = `${os.hostname()}-${os.userInfo().username}-clawdia4`;
+const encryptionKey = crypto.createHash('sha256').update(machineId).digest('hex').slice(0, 32);
 
 interface StoreSchema {
   anthropicApiKey: string;
@@ -18,7 +24,7 @@ export const store = new Store<StoreSchema>({
     selectedModel: 'claude-sonnet-4-6',
     hasCompletedSetup: false,
   },
-  encryptionKey: 'clawdia4-store-key',
+  encryptionKey,
 });
 
 export function getApiKey(): string {
