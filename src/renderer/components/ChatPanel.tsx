@@ -88,16 +88,14 @@ function AssistantMessage({ message, streamMap }: { message: Message; streamMap?
             if (!hasText && !hasTools) return null;
             return (
               <div key={i} className={!isLastIter ? 'mb-3' : ''}>
-                {hasTools && (
-                  <div className={hasText ? 'mb-2' : ''}>
-                    <ToolActivity tools={iter.toolCalls} streamMap={activeStreamMap} />
-                  </div>
-                )}
                 {hasText && (
                   <MarkdownRenderer
                     content={iter.text}
                     isStreaming={message.isStreaming === true && isLastIter && !hasTools}
                   />
+                )}
+                {hasTools && (
+                  <ToolActivity tools={iter.toolCalls} streamMap={activeStreamMap} />
                 )}
               </div>
             );
@@ -229,12 +227,16 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
 
     cleanups.push(api.chat.onStreamText((chunk: string) => {
       if (chunk.includes('__RESET__')) {
-        // Seal current text+tools as a completed iteration
-        const sealed = { text: currentTextRef.current, toolCalls: [...currentToolsRef.current] };
-        iterationsRef.current.push(sealed);
+        // Seal text as its own iteration, then open a new empty iteration for incoming tools.
+        // This keeps tools BELOW the text that preceded them so content never jumps up.
+        if (currentTextRef.current) {
+          iterationsRef.current.push({ text: currentTextRef.current, toolCalls: [] });
+        }
         currentTextRef.current = '';
         currentToolsRef.current = [];
-        routeToSealedRef.current = true; // next tool(s) belong to the just-sealed iteration
+        // Push an empty tool-target iteration; tools will append here
+        iterationsRef.current.push({ text: '', toolCalls: [] });
+        routeToSealedRef.current = true; // next tool(s) go into the empty tool-target iteration
         scheduleStreamUpdate();
         return;
       }
