@@ -247,7 +247,7 @@ Start with Phase 1: run \`${appId} --help\` and \`man ${appId}\` (if available) 
           appId,
           displayName: appId.charAt(0).toUpperCase() + appId.slice(1),
           binaryPath: appId,
-          availableSurfaces: ['cli_anything', 'native_cli', 'gui'],
+          availableSurfaces: ['cli_anything'],
           cliAnything: {
             command: `cli-anything-${appId}`,
             installed: true,

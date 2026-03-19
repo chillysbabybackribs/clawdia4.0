@@ -2,10 +2,10 @@
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
+import { checkPreflight } from '../src/main/agent/loop-harness';
 
 // Test 1: Pre-flight fails when HARNESS.md is missing
 async function testPreflight() {
-  const { checkPreflight } = await import('../src/main/agent/loop-harness');
   const result = await checkPreflight('/nonexistent/HARNESS.md', '/nonexistent/repl_skin.py');
   if (result.ok) throw new Error('Expected preflight to fail with missing files');
   if (!result.reason.includes('HARNESS.md')) throw new Error('Expected reason to mention HARNESS.md');
@@ -20,7 +20,6 @@ async function testPreflightPass() {
   fs.writeFileSync(harnessMd, '# HARNESS');
   fs.writeFileSync(replSkin, '# repl skin');
 
-  const { checkPreflight } = await import('../src/main/agent/loop-harness');
   const result = await checkPreflight(harnessMd, replSkin);
   fs.rmSync(tmpDir, { recursive: true });
 
