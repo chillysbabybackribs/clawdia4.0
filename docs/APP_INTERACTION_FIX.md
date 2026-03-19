@@ -72,7 +72,32 @@ All 5 test scenarios passed:
 4. ✅ "Open Nautilus" → Dynamic discovery → native_cli
 5. ✅ "Create gradient banner" → Programmatic, never touches GUI
 
+### Phase 4 — CLI-Anything Harness Guidance (P1)
+
+**`src/main/db/app-registry.ts`** — Harness guidance system.
+
+New exports:
+- `getHarnessGuidance(appId)` — Returns actionable install/build instructions
+  - If app has a pre-built harness in CLI-Anything repo: clone + pip install steps
+  - If no pre-built: Claude Code plugin install + `/cli-anything {app}` build steps
+  - Per-session dedup: won't repeat guidance for the same app twice
+- `checkCliAnythingInstalled()` — Checks if CLI-Anything plugin is in Claude Code
+- `PREBUILT_HARNESSES` set — Lightweight lookup of apps with pre-built harnesses
+
+Enhanced `scanHarnesses()`:
+- Now discovers available commands via `--help` parsing
+- Finds SKILL.md files shipped with harnesses for agent skill discovery
+- Stores both in the profile for richer routing context
+
+Enhanced `routeTask()` cli_anything surface:
+- Checks if harness is actually installed before emitting a plan
+- Falls through to next surface if harness is listed but not installed
+
+**`src/main/agent/executors/desktop-executors.ts`** — Integrated guidance.
+- `executeAppControl()` all-surfaces-failed path now includes harness guidance
+- No-profile-no-binary path also includes harness guidance
+- Guidance is suppressed after first suggestion per session
+
 ## Remaining phases
 
-- **Phase 4**: CLI-Anything build trigger for unknown apps
 - **Phase 5**: Post-execution surface deviation metrics in loop.ts

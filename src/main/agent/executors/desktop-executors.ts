@@ -55,6 +55,7 @@ import {
 } from '../../db/coordinate-cache';
 import {
   getAppProfile,
+  getHarnessGuidance,
   type AppProfile,
   type ControlSurface,
   recordFallback,
@@ -390,24 +391,30 @@ export async function executeAppControl(input: Record<string, any>): Promise<str
       console.log(`[app_control] ${profile.displayName} → ${surface} failed, trying next...`);
     }
 
-    // All surfaces failed
+    // All surfaces failed — provide harness guidance
     recordFallback();
+    const guidance = getHarnessGuidance(appName);
+    const harnessBlock = guidance.alreadySuggested
+      ? '' // Don't repeat install instructions
+      : `\n\n${guidance.installSteps}`;
     return `[Error] All control surfaces failed for "${profile.displayName}".
 Tried: ${tried.join(' → ')}
 
 Fallback options:
 - Use gui_interact if the app is visually open
-- Use shell_exec to launch it: setsid ${profile.binaryPath || appName} >/dev/null 2>&1 &`;
+- Use shell_exec to launch it: setsid ${profile.binaryPath || appName} >/dev/null 2>&1 &${harnessBlock}`;
   }
 
   // No profile — fall back to basic binary check (legacy behavior)
   const hasNative = await cmdExists(appName);
   if (!hasNative) {
+    const guidance = getHarnessGuidance(appName);
+    const harnessBlock = guidance.alreadySuggested ? '' : `\n\n${guidance.installSteps}`;
     return `[No profile or binary found for "${app}"]
 
 This app is not in the registry and is not installed. Try:
 - shell_exec to check: which ${appName}
-- gui_interact to interact with a running window`;
+- gui_interact to interact with a running window${harnessBlock}`;
   }
 
   console.log(`[app_control] No profile for ${app}, using raw native CLI`);

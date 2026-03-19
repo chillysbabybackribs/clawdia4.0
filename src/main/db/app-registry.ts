@@ -266,30 +266,66 @@ export async function scanHarnesses(): Promise<void> {
     const harnesses = stdout.trim().split('\n').map(s => s.replace(/.*cli-anything-/, '').trim()).filter(Boolean);
 
     for (const appName of harnesses) {
+      // Try to discover available commands via --help (once per harness)
+      let commands: string[] | undefined;
+      try {
+        const { stdout: helpOut } = await execAsync(
+          `cli-anything-${appName} --help 2>/dev/null | grep -E '^  [a-z]' | awk '{print $1}'`,
+          { timeout: 3000 },
+        );
+        const parsed = helpOut.trim().split('\n').filter(Boolean);
+        if (parsed.length > 0) commands = parsed;
+      } catch { /* --help parse failed, non-fatal */ }
+
+      // Try to find SKILL.md for this harness
+      let skillPath: string | undefined;
+      try {
+        const { stdout: pipShow } = await execAsync(
+          `python3 -c "import cli_anything.${appName}; import os; print(os.path.dirname(cli_anything.${appName}.__file__))" 2>/dev/null`,
+          { timeout: 3000 },
+        );
+        const pkgDir = pipShow.trim();
+        if (pkgDir) {
+          const candidatePath = `${pkgDir}/skills/SKILL.md`;
+          try {
+            await execAsync(`test -f "${candidatePath}"`, { timeout: 1000 });
+            skillPath = candidatePath;
+          } catch { /* no SKILL.md */ }
+        }
+      } catch { /* package not importable */ }
+
       const existing = getAppProfile(appName);
       if (existing) {
-        // Update existing profile with harness info
-        existing.cliAnything = { command: `cli-anything-${appName}`, installed: true };
+        existing.cliAnything = {
+          command: `cli-anything-${appName}`,
+          installed: true,
+          commands,
+        };
+        if (skillPath) (existing as any).skillPath = skillPath;
         if (!existing.availableSurfaces.includes('cli_anything')) {
           existing.availableSurfaces.unshift('cli_anything');
         }
         existing.lastScanned = new Date().toISOString();
         updateAppProfile(existing);
-        console.log(`[Registry] Updated ${appName} with CLI-Anything harness`);
+        console.log(`[Registry] Updated ${appName} with CLI-Anything harness (${commands?.length || '?'} commands${skillPath ? ', SKILL.md found' : ''})`);
       } else {
-        // Create new profile for discovered harness
         const newProfile: AppProfile = {
           appId: appName,
           displayName: appName.charAt(0).toUpperCase() + appName.slice(1),
           binaryPath: appName,
           availableSurfaces: ['cli_anything', 'gui'],
-          cliAnything: { command: `cli-anything-${appName}`, installed: true },
+          cliAnything: {
+            command: `cli-anything-${appName}`,
+            installed: true,
+            commands,
+          },
           windowMatcher: appName,
           confidence: 0.7,
           lastScanned: new Date().toISOString(),
         };
+        if (skillPath) (newProfile as any).skillPath = skillPath;
         updateAppProfile(newProfile);
-        console.log(`[Registry] Discovered new CLI-Anything app: ${appName}`);
+        console.log(`[Registry] Discovered new CLI-Anything app: ${appName} (${commands?.length || '?'} commands)`);
       }
     }
   } catch { /* no harnesses */ }
@@ -550,9 +586,25 @@ export function routeTask(userMessage: string, appId: string | null): ExecutionP
     }
     case 'cli_anything': {
       const cmd = profile.cliAnything?.command || `cli-anything-${appId}`;
+      const isInstalled = profile.cliAnything?.installed === true;
       const cmds = profile.cliAnything?.commands?.join(', ') || 'use --help to discover';
-      constraint = `[EXECUTION PLAN] Use app_control with app="${appId}" — CLI-Anything harness is installed (${cmd}). Available commands: ${cmds}. Do NOT use gui_interact unless app_control fails.`;
-      reasoning = `${profile.displayName} has CLI-Anything harness. Using structured CLI.`;
+      if (isInstalled) {
+        constraint = `[EXECUTION PLAN] Use app_control with app="${appId}" — CLI-Anything harness is installed (${cmd}). Available commands: ${cmds}. Do NOT use gui_interact unless app_control fails.`;
+        reasoning = `${profile.displayName} has CLI-Anything harness. Using structured CLI.`;
+      } else {
+        // Profile says cli_anything is an option but it's not actually installed
+        // Fall through to next surface instead of giving a plan that will fail
+        const nextSurfaces = orderedSurfaces.filter(s => s !== 'cli_anything');
+        if (nextSurfaces.length > 0) {
+          // Recursive-like: just pick the next surface
+          const fallbackSurface = nextSurfaces[0];
+          constraint = `[EXECUTION PLAN] CLI-Anything harness for ${profile.displayName} is not installed. Falling back to ${fallbackSurface} surface.`;
+          reasoning = `${profile.displayName} cli_anything not installed, falling back to ${fallbackSurface}.`;
+        } else {
+          constraint = `[EXECUTION PLAN] Use app_control with app="${appId}" — app_control will attempt fallback surfaces automatically.`;
+          reasoning = `${profile.displayName} cli_anything not installed, app_control will try fallback chain.`;
+        }
+      }
       disallowedTools.push('gui_interact');
       break;
     }
@@ -614,4 +666,89 @@ export function recordFallback(): void {
 
 export function getMetrics() {
   return { ...metrics };
+}
+
+// ═══════════════════════════════════
+// CLI-Anything Harness Guidance
+//
+// When all control surfaces fail, provide actionable guidance
+// on how to get a CLI-Anything harness for the app.
+// ═══════════════════════════════════
+
+// Apps with pre-built harnesses in the CLI-Anything repo.
+// This avoids a network call — just a lightweight lookup.
+// Kept in sync with https://github.com/HKUDS/CLI-Anything
+const PREBUILT_HARNESSES = new Set([
+  'gimp', 'blender', 'inkscape', 'libreoffice', 'audacity',
+  'obs', 'kdenlive', 'shotcut', 'vlc', 'zoom', 'drawio',
+  'adguardhome',
+]);
+
+// Track which apps we've already suggested harness install for
+// (per-session, so we don't spam the same guidance)
+const harnessGuidanceSent = new Set<string>();
+
+export interface HarnessGuidance {
+  available: boolean;      // true if a pre-built harness exists
+  prebuilt: boolean;       // true if it's in PREBUILT_HARNESSES
+  installSteps: string;    // actionable instructions
+  alreadySuggested: boolean; // true if we already told the user about this
+}
+
+/**
+ * Get harness installation guidance for an app.
+ * Called by app_control when all surfaces fail.
+ */
+export function getHarnessGuidance(appId: string): HarnessGuidance {
+  const normalizedId = appId.toLowerCase().replace(/[^a-z0-9-]/g, '');
+  const alreadySuggested = harnessGuidanceSent.has(normalizedId);
+  harnessGuidanceSent.add(normalizedId);
+
+  if (PREBUILT_HARNESSES.has(normalizedId)) {
+    return {
+      available: true,
+      prebuilt: true,
+      alreadySuggested,
+      installSteps: [
+        `[CLI-Anything] A pre-built harness exists for "${appId}".`,
+        `To install:`,
+        `  git clone https://github.com/HKUDS/CLI-Anything.git`,
+        `  cd CLI-Anything/${normalizedId}/agent-harness`,
+        `  pip install -e .`,
+        `After install, cli-anything-${normalizedId} will be on PATH.`,
+        `Then app_control will use it automatically on next call.`,
+      ].join('\n'),
+    };
+  }
+
+  return {
+    available: false,
+    prebuilt: false,
+    alreadySuggested,
+    installSteps: [
+      `[CLI-Anything] No pre-built harness for "${appId}".`,
+      `To build one (requires Claude Code + CLI-Anything plugin):`,
+      `  /plugin marketplace add HKUDS/CLI-Anything`,
+      `  /plugin install cli-anything`,
+      `  /cli-anything ${normalizedId}`,
+      `This analyzes the app's source and generates a structured CLI.`,
+      `After build: cd ${normalizedId}/agent-harness && pip install -e .`,
+    ].join('\n'),
+  };
+}
+
+/**
+ * Check if CLI-Anything plugin is installed in Claude Code.
+ * Returns the install path or null.
+ */
+export async function checkCliAnythingInstalled(): Promise<boolean> {
+  try {
+    const { stdout } = await execAsync(
+      'ls ~/.claude/plugins/cache/*/cli-anything 2>/dev/null || echo ""',
+      { timeout: 2000 },
+    );
+    return stdout.trim().length > 0;
+  } catch {
+    return false;
+  }
 }
