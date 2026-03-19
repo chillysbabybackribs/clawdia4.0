@@ -322,14 +322,32 @@ function wireTabEvents(tab: Tab): void {
   });
 
   wc.setWindowOpenHandler(({ url }) => {
-    const isAuthUrl = /accounts\.google\.com|login\.microsoftonline\.com|appleid\.apple\.com|github\.com\/login|auth\.|\/oauth|\/authorize|\/sso|\/saml|\/login\?|\/signin\?/i.test(url);
-    if (isAuthUrl) {
-      // Open auth URLs in a controlled tab (not a native BrowserWindow — we can't hook those).
-      // Watch for OAuth callback navigation and reload the opener tab when complete.
-      const openerTabId = activeTabId;
-      const authTabId = createTab(url);
-      if (openerTabId) watchAuthTab(authTabId, openerTabId);
-    } else {
+    try {
+      const currentHost = new URL(wc.getURL()).hostname;
+      const targetHost = new URL(url).hostname;
+      const isSameOrigin = currentHost === targetHost || targetHost.endsWith('.' + currentHost) || currentHost.endsWith('.' + targetHost);
+
+      if (isSameOrigin) {
+        // Same-site popup (e.g. Reddit login, in-app modal) — navigate the current tab.
+        // Opening a new tab breaks modal/overlay flows.
+        wc.loadURL(url);
+        return { action: 'deny' };
+      }
+
+      // Cross-origin: check if it's a known auth provider popup
+      const isAuthPopup = isAuthProviderHost(url) ||
+        /\/oauth|\/authorize|\/sso|\/saml/i.test(url);
+
+      if (isAuthPopup) {
+        // Auth provider popup — open in controlled tab and watch for callback
+        const openerTabId = activeTabId;
+        const authTabId = createTab(url);
+        if (openerTabId) watchAuthTab(authTabId, openerTabId);
+      } else {
+        // Generic external link — open in new tab
+        createTab(url);
+      }
+    } catch {
       createTab(url);
     }
     return { action: 'deny' };
