@@ -22,9 +22,9 @@ textarea { field-sizing: content; }
    ══════════════════════════════════════════════════ */
 
 .markdown-prose {
-  font-size: 0.9rem;
-  line-height: 1.7;
-  color: #d8d8dc;
+  font-size: 0.925rem;
+  line-height: 1.72;
+  color: #e0e0e4;
   word-wrap: break-word;
   overflow-wrap: break-word;
 }
@@ -32,16 +32,16 @@ textarea { field-sizing: content; }
 .markdown-prose p:last-child { margin-bottom: 0; }
 
 .markdown-prose h1, .markdown-prose h2, .markdown-prose h3, .markdown-prose h4 {
-  color: #e8e8ec; font-weight: 600; line-height: 1.3; margin-top: 1.4em; margin-bottom: 0.5em;
+  color: #ededf0; font-weight: 600; line-height: 1.3; margin-top: 1.4em; margin-bottom: 0.5em;
 }
 .markdown-prose h1:first-child, .markdown-prose h2:first-child, .markdown-prose h3:first-child { margin-top: 0; }
 .markdown-prose h1 { font-size: 1.25em; }
 .markdown-prose h2 { font-size: 1.1em; }
 .markdown-prose h3 { font-size: 1em; }
-.markdown-prose h4 { font-size: 0.95em; color: #b0b0b8; }
+.markdown-prose h4 { font-size: 0.95em; color: #bcbcc6; }
 
-.markdown-prose strong { color: #e8e8ec; font-weight: 600; }
-.markdown-prose em { font-style: italic; color: #c0c0c8; }
+.markdown-prose strong { color: #ededf0; font-weight: 600; }
+.markdown-prose em { font-style: italic; color: #ccccd4; }
 
 .markdown-prose a {
   color: #5b9cf5; text-decoration: none;
@@ -54,7 +54,7 @@ textarea { field-sizing: content; }
   font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
   font-size: 0.82em; background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.06); padding: 0.15em 0.4em;
-  border-radius: 5px; color: #d0c8e0;
+  border-radius: 5px; color: #dcd4ec;
 }
 
 .markdown-prose pre {
@@ -64,7 +64,7 @@ textarea { field-sizing: content; }
 .markdown-prose pre code {
   display: block; padding: 1em 1.2em;
   font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
-  font-size: 0.8em; line-height: 1.6; color: #c8c8d0;
+  font-size: 0.82em; line-height: 1.6; color: #d4d4dc;
   overflow-x: auto; background: transparent; border: none; border-radius: 0;
 }
 
@@ -83,18 +83,18 @@ textarea { field-sizing: content; }
 }
 .markdown-prose thead { background: rgba(255, 255, 255, 0.04); }
 .markdown-prose th {
-  text-align: left; padding: 0.7em 1em; font-weight: 600; color: #b0b0bc;
+  text-align: left; padding: 0.7em 1em; font-weight: 600; color: #bcbcc8;
   font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.04em;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
-.markdown-prose td { padding: 0.6em 1em; border-bottom: 1px solid rgba(255, 255, 255, 0.04); color: #c0c0c8; }
+.markdown-prose td { padding: 0.6em 1em; border-bottom: 1px solid rgba(255, 255, 255, 0.04); color: #ccccd4; }
 .markdown-prose tr:last-child td { border-bottom: none; }
 .markdown-prose tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 
 .markdown-prose blockquote {
   margin: 0.8em 0; padding: 0.6em 1em;
   border-left: 3px solid rgba(79, 143, 247, 0.4);
-  background: rgba(79, 143, 247, 0.04); border-radius: 0 6px 6px 0; color: #b0b0bc;
+  background: rgba(79, 143, 247, 0.04); border-radius: 0 6px 6px 0; color: #bcbcc8;
 }
 .markdown-prose blockquote p { margin-bottom: 0.3em; }
 .markdown-prose hr { border: none; height: 1px; background: rgba(255, 255, 255, 0.06); margin: 1.2em 0; }
@@ -141,3 +141,9 @@ textarea { field-sizing: content; }
   animation: status-shimmer 2.5s ease-in-out infinite;
   font-weight: 500; letter-spacing: 0.02em;
 }
+
+/* ── Terminal log strip — scoped 3px scrollbar ── */
+.terminal-log-strip ::-webkit-scrollbar { width: 3px; }
+.terminal-log-strip ::-webkit-scrollbar-track { background: transparent; }
+.terminal-log-strip ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
+.terminal-log-strip ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
