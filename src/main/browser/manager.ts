@@ -171,6 +171,54 @@ export function closeTab(id: string): void {
   emitTabsChanged();
 }
 
+/**
+ * Watch an auth/OAuth tab for completion. When the tab navigates to an
+ * OAuth callback URL (contains code=, token=, access_token, or returns
+ * to the opener's origin), close the auth tab and reload the opener tab
+ * so it picks up the new authenticated session.
+ */
+function watchAuthTab(authTabId: string, openerTabId: string): void {
+  const authTab = tabs.get(authTabId);
+  if (!authTab) return;
+
+  const onNavigate = (_event: any, url: string) => {
+    const isCallback =
+      /[?&](code|token|access_token|id_token|state)=/.test(url) ||
+      url.includes('/callback') ||
+      url.includes('/oauth/callback') ||
+      url.includes('/auth/callback');
+
+    if (isCallback) {
+      console.log(`[Browser] OAuth callback detected: ${url.slice(0, 120)}`);
+      cleanup();
+
+      // Brief delay so the auth tab can finish any final redirects before we close it
+      setTimeout(() => {
+        // Close auth tab and return to opener
+        closeTab(authTabId);
+        const openerTab = tabs.get(openerTabId);
+        if (openerTab) {
+          switchTab(openerTabId);
+          // Reload so the opener page sees the new session cookies
+          openerTab.view.webContents.reload();
+        }
+      }, 800);
+    }
+  };
+
+  const onClose = () => cleanup();
+
+  const cleanup = () => {
+    authTab.view.webContents.removeListener('did-navigate', onNavigate);
+    authTab.view.webContents.removeListener('did-navigate-in-page', onNavigate);
+    authTab.view.webContents.removeListener('destroyed', onClose);
+  };
+
+  authTab.view.webContents.on('did-navigate', onNavigate);
+  authTab.view.webContents.on('did-navigate-in-page', onNavigate);
+  authTab.view.webContents.on('destroyed', onClose);
+}
+
 function wireTabEvents(tab: Tab): void {
   const wc = tab.view.webContents;
 
@@ -232,26 +280,16 @@ function wireTabEvents(tab: Tab): void {
   });
 
   wc.setWindowOpenHandler(({ url }) => {
-    // Auth/OAuth popups must be allowed as real windows so the OAuth handshake can complete
-    // (window.open → postMessage back to opener). Denying these kills the login flow.
-    const isAuthPopup = /accounts\.google\.com|login\.microsoftonline\.com|appleid\.apple\.com|github\.com\/login|auth\.|\/oauth|\/authorize|\/sso|\/saml|\/login\?|\/signin\?/i.test(url);
-    if (isAuthPopup) {
-      return {
-        action: 'allow',
-        overrideBrowserWindowOptions: {
-          width: 600,
-          height: 700,
-          webPreferences: {
-            partition: 'persist:browser', // same session = cookies carry over
-            contextIsolation: true,
-            nodeIntegration: false,
-            sandbox: true,
-          },
-        },
-      };
+    const isAuthUrl = /accounts\.google\.com|login\.microsoftonline\.com|appleid\.apple\.com|github\.com\/login|auth\.|\/oauth|\/authorize|\/sso|\/saml|\/login\?|\/signin\?/i.test(url);
+    if (isAuthUrl) {
+      // Open auth URLs in a controlled tab (not a native BrowserWindow — we can't hook those).
+      // Watch for OAuth callback navigation and reload the opener tab when complete.
+      const openerTabId = activeTabId;
+      const authTabId = createTab(url);
+      if (openerTabId) watchAuthTab(authTabId, openerTabId);
+    } else {
+      createTab(url);
     }
-    // Regular links: open in a new tab instead of a popup
-    createTab(url);
     return { action: 'deny' };
   });
 }
