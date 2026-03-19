@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { homedir } from 'os';
 import { searchMemory, remember, type MemoryEntry } from '../../db/memory';
+import { searchPastConversations } from '../../db/conversation-recall';
 
 const DOCS_DIR = path.join(homedir(), 'Documents', 'Clawdia');
 
@@ -67,5 +68,27 @@ export async function executeMemoryStore(input: Record<string, any>): Promise<st
     return `Remembered: [${category}] ${key} = ${value}`;
   } catch (err: any) {
     return `[Error storing memory]: ${err.message}`;
+  }
+}
+
+export async function executeRecallContext(input: Record<string, any>): Promise<string> {
+  const { query, limit = 3 } = input;
+
+  try {
+    const exchanges = searchPastConversations(query, null, limit);
+    if (exchanges.length === 0) {
+      return `No past conversations found matching "${query}".`;
+    }
+
+    const lines: string[] = [`Found ${exchanges.length} relevant exchange(s):`];
+    for (const ex of exchanges) {
+      lines.push('');
+      lines.push(`── ${ex.conversationTitle} (${new Date(ex.timestamp).toLocaleDateString()}) ──`);
+      lines.push(`User asked: ${ex.userMessage}`);
+      lines.push(`Assistant answered: ${ex.assistantResponse}`);
+    }
+    return lines.join('\n');
+  } catch (err: any) {
+    return `[Error searching past conversations]: ${err.message}`;
   }
 }

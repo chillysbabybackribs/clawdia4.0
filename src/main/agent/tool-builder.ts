@@ -10,7 +10,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { ToolGroup } from './classifier';
 import { executeShellExec, executeFileRead, executeFileWrite, executeFileEdit, executeDirectoryTree } from './executors/core-executors';
 import { executeBrowserSearch, executeBrowserNavigate, executeBrowserReadPage, executeBrowserClick, executeBrowserType, executeBrowserExtract, executeBrowserScreenshot } from './executors/browser-executors';
-import { executeCreateDocument, executeMemorySearch, executeMemoryStore } from './executors/extra-executors';
+import { executeCreateDocument, executeMemorySearch, executeMemoryStore, executeRecallContext } from './executors/extra-executors';
 import { executeAppControl, executeGuiInteract, executeDbusControl } from './executors/desktop-executors';
 
 const CORE_TOOLS: Anthropic.Tool[] = [
@@ -96,13 +96,25 @@ const EXTRA_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: 'memory_search',
-    description: 'Search persistent memory.',
-    input_schema: { type: 'object' as const, properties: { query: { type: 'string' }, limit: { type: 'number' } }, required: ['query'] },
+    description: 'Search persistent memory for stored facts about the user. Use proactively when: the user references a previous preference, project, or personal detail; you need context about their setup, stack, or habits; the user says "remember" or "you know". Keywords and short phrases work best.',
+    input_schema: { type: 'object' as const, properties: { query: { type: 'string', description: 'Search keywords (e.g. "preferred editor", "home city", "current project")' }, limit: { type: 'number', description: 'Max results (default 5)' } }, required: ['query'] },
   },
   {
     name: 'memory_store',
-    description: 'Store fact in memory. Only when user explicitly asks.',
-    input_schema: { type: 'object' as const, properties: { category: { type: 'string', enum: ['preference', 'account', 'workflow', 'fact', 'context'] }, key: { type: 'string' }, value: { type: 'string' } }, required: ['category', 'key', 'value'] },
+    description: 'Store a fact about the user in persistent memory. Use when: the user shares a personal detail, preference, or workflow habit; the user explicitly asks to remember something; you learn something useful about their setup or projects. Do NOT store secrets, passwords, or API keys.',
+    input_schema: { type: 'object' as const, properties: { category: { type: 'string', enum: ['preference', 'account', 'workflow', 'fact', 'context'], description: 'preference=editor/style, account=name/email/company, workflow=tools/processes, fact=location/skills, context=current task/goals' }, key: { type: 'string', description: 'Unique snake_case label (e.g. preferred_editor, home_city)' }, value: { type: 'string', description: 'The fact (one sentence max)' } }, required: ['category', 'key', 'value'] },
+  },
+  {
+    name: 'recall_context',
+    description: 'Search past conversations for relevant context. Use when: the user references something discussed before; you want to check if this topic was covered previously; you need context about their past requests or your past answers. Returns conversation snippets, not full transcripts.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: 'Search keywords for past conversations' },
+        limit: { type: 'number', description: 'Max results (default 3)' },
+      },
+      required: ['query'],
+    },
   },
   {
     name: 'app_control',
@@ -188,6 +200,7 @@ const DISPATCH: Record<string, ToolExecutor> = {
   create_document: executeCreateDocument,
   memory_search: executeMemorySearch,
   memory_store: executeMemoryStore,
+  recall_context: executeRecallContext,
   app_control: executeAppControl,
   gui_interact: executeGuiInteract,
   dbus_control: executeDbusControl,

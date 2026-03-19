@@ -58,6 +58,7 @@ export function buildDynamicPrompt(opts: {
   toolGroup: ToolGroup;
   browserUrl?: string;
   memoryContext?: string;
+  recallContext?: string;
   desktopContext?: string;
   executionConstraint?: string;
   shortcutContext?: string;
@@ -90,6 +91,10 @@ export function buildDynamicPrompt(opts: {
 
   if (opts.desktopContext) lines.push('', opts.desktopContext);
   if (opts.memoryContext) lines.push('', opts.memoryContext);
+
+  // Cross-conversation recall — injected only when semantically relevant
+  if (opts.recallContext) lines.push('', opts.recallContext);
+
   if (opts.browserUrl) lines.push(`BROWSER: ${opts.browserUrl}`);
 
   if (opts.isGreeting) {

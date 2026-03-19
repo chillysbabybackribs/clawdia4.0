@@ -22,6 +22,7 @@ import { buildStaticPrompt, buildDynamicPrompt } from './prompt-builder';
 import { getToolsForGroup, filterTools, executeTool } from './tool-builder';
 import { AnthropicClient, resolveModelId, type LLMResponse } from './client';
 import { getPromptContext } from '../db/memory';
+import { checkRecall, searchPastConversations } from '../db/conversation-recall';
 import { getDesktopCapabilities, getGuiState, resetGuiStateForNewConversation, warmCoordinatesForApp } from './executors/desktop-executors';
 import { getStateSummary } from './gui/ui-state';
 import { getShortcutPromptBlock } from './gui/shortcuts';
@@ -45,7 +46,7 @@ const TOOL_RESULT_CAPS: Record<string, number> = {
   directory_tree: 5_000, browser_search: 5_000, browser_navigate: 10_000,
   browser_read_page: 10_000, browser_click: 5_000, browser_type: 500,
   browser_extract: 10_000, browser_screenshot: 1_000, create_document: 500,
-  memory_search: 3_000, memory_store: 500,
+  memory_search: 3_000, memory_store: 500, recall_context: 5_000,
   app_control: 10_000, gui_interact: 5_000, dbus_control: 8_000,
 };
 const DEFAULT_RESULT_CAP = 10_000;
@@ -104,9 +105,27 @@ export async function runAgentLoop(
   const client = new AnthropicClient(apiKey, modelId);
   const staticPrompt = buildStaticPrompt(profile.toolGroup, profile.promptModules);
 
+  // ═══════════════════════════════════════════
+  // MEMORY — Demand-driven, not auto-injected
+  //
+  // 1. User-set memories (source='user') always injected — these are explicit
+  // 2. FTS memories only injected if recall triggers (semantic or explicit)
+  // 3. Cross-conversation recall from past chats when relevant
+  // ═══════════════════════════════════════════
   let memoryContext = '';
+  let recallContext = '';
   if (!profile.isGreeting && userMessage.length > 10) {
-    try { memoryContext = getPromptContext(500, userMessage); } catch {}
+    // Always inject user-set memories (they explicitly asked to remember these)
+    try { memoryContext = getPromptContext(300, undefined); } catch {}
+
+    // Check for cross-conversation recall (semantic or explicit)
+    try {
+      const recall = checkRecall(userMessage, null);
+      if (recall.triggered) {
+        recallContext = recall.promptBlock;
+        console.log(`[Recall] ${recall.reason}: ${recall.exchanges.length} exchange(s) from past conversations`);
+      }
+    } catch {}
   }
 
   // ═══════════════════════════════════════════
@@ -149,6 +168,7 @@ export async function runAgentLoop(
     model: modelId,
     toolGroup: profile.toolGroup,
     memoryContext,
+    recallContext,
     desktopContext,
     executionConstraint: executionPlan?.constraint,
     shortcutContext,
@@ -352,6 +372,16 @@ export async function runAgentLoop(
   }
 
   onStreamEnd?.();
+
+  // ── Background memory extraction ──
+  // Fire-and-forget: extract facts from this exchange for future context.
+  if (!profile.isGreeting && finalText.length > 50 && userMessage.length > 20) {
+    try {
+      const { extractMemoryInBackground } = await import('./memory-extractor');
+      extractMemoryInBackground(apiKey, userMessage, finalText);
+    } catch { /* non-fatal */ }
+  }
+
   return { response: finalText, toolCalls: allToolCalls };
 }
 

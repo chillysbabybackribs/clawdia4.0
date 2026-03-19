@@ -133,5 +133,32 @@ function runMigrations(db: Database.Database): void {
     `);
   }
 
-  console.log(`[DB] Schema at version ${Math.max(currentVersion, 5)}`);
+  if (currentVersion < 6) {
+    console.log('[DB] Running migration v6: message FTS for cross-conversation recall');
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+        content,
+        content=messages,
+        content_rowid=rowid
+      );
+
+      -- Populate FTS from existing messages
+      INSERT OR IGNORE INTO messages_fts(rowid, content)
+        SELECT rowid, content FROM messages WHERE role = 'user';
+
+      -- Keep FTS in sync on new messages
+      CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages
+      WHEN new.role = 'user' BEGIN
+        INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+      END;
+
+      INSERT INTO schema_version (version) VALUES (6);
+    `);
+  }
+
+  console.log(`[DB] Schema at version ${Math.max(currentVersion, 6)}`);
 }

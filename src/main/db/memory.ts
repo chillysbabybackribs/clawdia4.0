@@ -123,13 +123,21 @@ export function getPromptContext(maxTokens: number = 500, currentMessage?: strin
 
   // 2. Only do FTS search if the message has enough substance to match
   if (currentMessage && currentMessage.length > 15) {
-    // Extract keywords — skip short words and common filler
+    // Extract keywords — skip common filler but keep short technical terms
+    const STOP_WORDS = new Set([
+      'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+      'of', 'with', 'by', 'from', 'is', 'it', 'my', 'me', 'you', 'we',
+      'can', 'do', 'not', 'this', 'that', 'what', 'how', 'why', 'when',
+      'will', 'just', 'please', 'help', 'want', 'need', 'use', 'get',
+      'about', 'your', 'its', 'has', 'have', 'had', 'was', 'were', 'been',
+      'some', 'any', 'all', 'more', 'very', 'also', 'than', 'then',
+    ]);
     const keywords = currentMessage
       .toLowerCase()
       .replace(/[^a-z0-9\s]/g, '')
       .split(/\s+/)
-      .filter(w => w.length > 3)
-      .slice(0, 5); // Max 5 keywords
+      .filter(w => w.length >= 2 && !STOP_WORDS.has(w))
+      .slice(0, 8); // Max 8 keywords (was 5)
 
     if (keywords.length > 0) {
       const ftsQuery = keywords.join(' OR ');
