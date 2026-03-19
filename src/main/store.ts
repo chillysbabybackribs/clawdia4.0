@@ -15,6 +15,7 @@ interface StoreSchema {
   anthropicApiKey: string;
   selectedModel: string;
   hasCompletedSetup: boolean;
+  unrestrictedMode: boolean;
 }
 
 export const store = new Store<StoreSchema>({
@@ -23,6 +24,7 @@ export const store = new Store<StoreSchema>({
     anthropicApiKey: '',
     selectedModel: 'claude-sonnet-4-6',
     hasCompletedSetup: false,
+    unrestrictedMode: false,
   },
   encryptionKey,
 });
@@ -42,4 +44,12 @@ export function getSelectedModel(): string {
 
 export function setSelectedModel(model: string): void {
   store.set('selectedModel', model);
+}
+
+export function getUnrestrictedMode(): boolean {
+  return store.get('unrestrictedMode', false);
+}
+
+export function setUnrestrictedMode(enabled: boolean): void {
+  store.set('unrestrictedMode', enabled);
 }

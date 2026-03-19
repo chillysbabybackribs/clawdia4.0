@@ -28,6 +28,19 @@ export const IPC = {
   WINDOW_MINIMIZE: 'window:minimize',
   WINDOW_MAXIMIZE: 'window:maximize',
   WINDOW_CLOSE: 'window:close',
+  // Process management
+  PROCESS_LIST: 'process:list',
+  PROCESS_DETACH: 'process:detach',
+  PROCESS_ATTACH: 'process:attach',
+  PROCESS_CANCEL: 'process:cancel',
+  PROCESS_DISMISS: 'process:dismiss',
+  RUN_LIST: 'run:list',
+  RUN_GET: 'run:get',
+  RUN_EVENTS: 'run:events',
+  RUN_CHANGES: 'run:changes',
+  RUN_APPROVALS: 'run:approvals',
+  RUN_APPROVE: 'run:approve',
+  RUN_DENY: 'run:deny',
 } as const;
 
 export const IPC_EVENTS = {
@@ -40,4 +53,6 @@ export const IPC_EVENTS = {
   BROWSER_TITLE_CHANGED: 'browser:title-changed',
   BROWSER_LOADING: 'browser:loading',
   BROWSER_TABS_CHANGED: 'browser:tabs-changed',
+  // Process events (pushed from main to renderer)
+  PROCESS_LIST_CHANGED: 'process:list',
 } as const;

@@ -7,13 +7,15 @@
  *   3. Matches task type to routing rules
  *   4. Returns an ExecutionPlan that constrains the LLM
  * 
- * Control surfaces (in priority order):
- *   programmatic → cli_anything → native_cli → dbus → gui
+ * Control surfaces (order is task-dependent, see TASK_RULES):
+ *   programmatic, cli_anything, native_cli, dbus, gui
+ * CLI-Anything is auto-promoted to first when installed.
  */
 
 import { getDb } from './database';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import * as os from 'os';
 
 const execAsync = promisify(exec);
 
@@ -32,6 +34,8 @@ export interface AppProfile {
     command: string;
     installed: boolean;
     commands?: string[];
+    skillPath?: string;
+    skillContent?: string;
   };
   nativeCli?: {
     command: string;
@@ -281,7 +285,7 @@ export async function scanHarnesses(): Promise<void> {
 
   try {
     const { stdout } = await execAsync('bash -c "compgen -c cli-anything-" 2>/dev/null || echo ""', { timeout: 3000 });
-    const harnesses = stdout.trim().split('\n').map(s => s.replace(/.*cli-anything-/, '').trim()).filter(Boolean);
+    const harnesses = [...new Set(stdout.trim().split('\n').map(s => s.replace(/.*cli-anything-/, '').trim()).filter(Boolean))];
 
     // Discover all harnesses in parallel (each runs --help + SKILL.md check)
     await Promise.all(harnesses.map(async (appName) => {
@@ -296,8 +300,9 @@ export async function scanHarnesses(): Promise<void> {
         if (parsed.length > 0) commands = parsed;
       } catch { /* --help parse failed, non-fatal */ }
 
-      // Try to find SKILL.md for this harness
+      // Try to find and read SKILL.md for this harness
       let skillPath: string | undefined;
+      let skillContent: string | undefined;
       try {
         const { stdout: pipShow } = await execAsync(
           `python3 -c "import cli_anything.${appName}; import os; print(os.path.dirname(cli_anything.${appName}.__file__))" 2>/dev/null`,
@@ -309,6 +314,9 @@ export async function scanHarnesses(): Promise<void> {
           try {
             await execAsync(`test -f "${candidatePath}"`, { timeout: 1000 });
             skillPath = candidatePath;
+            // Read the SKILL.md content for prompt injection
+            const { stdout: rawSkill } = await execAsync(`cat "${candidatePath}"`, { timeout: 3000 });
+            if (rawSkill.trim()) skillContent = rawSkill.trim();
           } catch { /* no SKILL.md */ }
         }
       } catch { /* package not importable */ }
@@ -319,8 +327,9 @@ export async function scanHarnesses(): Promise<void> {
           command: `cli-anything-${appName}`,
           installed: true,
           commands,
+          skillPath,
+          skillContent,
         };
-        if (skillPath) (existing as any).skillPath = skillPath;
         if (!existing.availableSurfaces.includes('cli_anything')) {
           existing.availableSurfaces.unshift('cli_anything');
         }
@@ -337,12 +346,13 @@ export async function scanHarnesses(): Promise<void> {
             command: `cli-anything-${appName}`,
             installed: true,
             commands,
+            skillPath,
+            skillContent,
           },
           windowMatcher: appName,
           confidence: 0.7,
           lastScanned: new Date().toISOString(),
         };
-        if (skillPath) (newProfile as any).skillPath = skillPath;
         updateAppProfile(newProfile);
         console.log(`[Registry] Discovered new CLI-Anything app: ${appName} (${commands?.length || '?'} commands)`);
       }
@@ -574,22 +584,32 @@ export function routeTask(userMessage: string, appId: string | null): ExecutionP
 
   // Compute available surfaces (intersection of profile + rule)
   const profileSurfaces = new Set(profile.availableSurfaces);
-  const orderedSurfaces = matchedRule
+  let orderedSurfaces = matchedRule
     ? matchedRule.preferredOrder.filter(s => profileSurfaces.has(s))
     : profile.availableSurfaces;
+
+  // CLI-Anything override: when an installed harness exists, it ALWAYS wins over
+  // programmatic/native_cli. The user has a dedicated CLI for this app — use it.
+  // This prevents task rules like "create image" from routing to Pillow when
+  // cli-anything-inkscape is installed and ready.
+  if (profile.cliAnything?.installed && orderedSurfaces.includes('cli_anything') && orderedSurfaces[0] !== 'cli_anything') {
+    orderedSurfaces = ['cli_anything', ...orderedSurfaces.filter(s => s !== 'cli_anything')];
+    console.log(`[Router] CLI-Anything installed for ${appId} — promoted to first surface`);
+  }
 
   if (orderedSurfaces.length === 0) {
     return { ...defaultPlan, appId, appProfile: profile, reasoning: 'No compatible surfaces. Falling back to GUI.' };
   }
 
   const selected = orderedSurfaces[0];
-  const disallowed = matchedRule?.disallowed || [];
 
   // Map control surfaces to Anthropic tool names that should be REMOVED
+  //
+  // gui_interact is only filtered when cli_anything is the selected surface AND the harness
+  // is installed. In that case, the CLI is strictly better than GUI — the LLM ignores
+  // prompt constraints when it sees a visible window, so we must remove the tool entirely.
+  // For all other surfaces, gui_interact remains available as a fallback.
   const disallowedTools: string[] = [];
-  if (selected === 'programmatic' && !orderedSurfaces.includes('gui')) {
-    // Don't remove GUI tools entirely — just deprioritize via constraint
-  }
 
   // Build the constraint string for the system prompt
   let constraint = '';
@@ -598,24 +618,35 @@ export function routeTask(userMessage: string, appId: string | null): ExecutionP
   switch (selected) {
     case 'programmatic': {
       const alts = profile.programmaticAlternatives?.join(', ') || 'python3';
-      constraint = `[EXECUTION PLAN] Task: "${appId}" operation. Use shell_exec with ${alts} — this is a programmatic task. Do NOT open ${profile.displayName}'s GUI. Do NOT use gui_interact or app_control. Write a Python/CLI script to accomplish this directly.`;
-      reasoning = `${profile.displayName} task routed to programmatic (${alts}). GUI is unnecessary.`;
-      disallowedTools.push('gui_interact', 'app_control');
+      constraint = `[EXECUTION PLAN] Task: "${appId}" operation. Use shell_exec with ${alts} — this is a programmatic task. Do NOT open ${profile.displayName}'s GUI unless the task specifically requires interacting with a running window. Write a Python/CLI script to accomplish this directly. If the task requires window interaction (menus, dialogs, typing into the app), use gui_interact macros instead.`;
+      reasoning = `${profile.displayName} task routed to programmatic (${alts}). GUI available as fallback.`;
       break;
     }
     case 'cli_anything': {
       const cmd = profile.cliAnything?.command || `cli-anything-${appId}`;
       const isInstalled = profile.cliAnything?.installed === true;
       const cmds = profile.cliAnything?.commands?.join(', ') || 'use --help to discover';
+      const skillMd = profile.cliAnything?.skillContent;
       if (isInstalled) {
-        constraint = `[EXECUTION PLAN] Use app_control with app="${appId}" — CLI-Anything harness is installed (${cmd}). Available commands: ${cmds}. Do NOT use gui_interact unless app_control fails.`;
-        reasoning = `${profile.displayName} has CLI-Anything harness. Using structured CLI.`;
+        // If we have SKILL.md content, inject it directly — eliminates the --help discovery step
+        const skillBlock = skillMd
+          ? `\n\n--- CLI SKILL REFERENCE ---\n${skillMd}\n--- END SKILL REFERENCE ---`
+          : `\n\nWorkflow:\n1. shell_exec("${cmd} --help") to see all commands\n2. shell_exec("${cmd} --json <command>") for each step\n3. All output is structured JSON when using --json flag`;
+
+        constraint = `[EXECUTION PLAN — MANDATORY] You MUST use shell_exec to run "${cmd}" commands for this task. Do NOT use gui_interact, do NOT take screenshots, do NOT use app_control. Run the CLI directly via shell_exec.
+
+CLI: ${cmd}
+Available command groups: ${cmds}
+Always use --json flag for machine-readable output.
+
+This CLI controls ${profile.displayName} WITHOUT the GUI. It is faster, more reliable, and deterministic. Do NOT interact with any visible ${profile.displayName} window — use the CLI instead.${skillBlock}`;
+        reasoning = `${profile.displayName} has CLI-Anything harness (${cmd})${skillMd ? ' + SKILL.md' : ''}. Using structured CLI.`;
+        // Hard filter: remove gui_interact AND app_control so the LLM can only use shell_exec
+        // with the CLI-Anything command. app_control's fallback chain can route to GUI internally.
+        disallowedTools.push('gui_interact', 'app_control', 'dbus_control');
       } else {
-        // Profile says cli_anything is an option but it's not actually installed
-        // Fall through to next surface instead of giving a plan that will fail
         const nextSurfaces = orderedSurfaces.filter(s => s !== 'cli_anything');
         if (nextSurfaces.length > 0) {
-          // Recursive-like: just pick the next surface
           const fallbackSurface = nextSurfaces[0];
           constraint = `[EXECUTION PLAN] CLI-Anything harness for ${profile.displayName} is not installed. Falling back to ${fallbackSurface} surface.`;
           reasoning = `${profile.displayName} cli_anything not installed, falling back to ${fallbackSurface}.`;
@@ -624,14 +655,12 @@ export function routeTask(userMessage: string, appId: string | null): ExecutionP
           reasoning = `${profile.displayName} cli_anything not installed, app_control will try fallback chain.`;
         }
       }
-      disallowedTools.push('gui_interact');
       break;
     }
     case 'native_cli': {
       const help = profile.nativeCli?.helpSummary || '';
-      constraint = `[EXECUTION PLAN] Use shell_exec with "${profile.nativeCli?.command || appId}" CLI. ${help}. Prefer headless/batch mode. Do NOT open the GUI unless CLI cannot accomplish the task.`;
-      reasoning = `${profile.displayName} has native CLI. Using headless mode.`;
-      disallowedTools.push('gui_interact');
+      constraint = `[EXECUTION PLAN] Use shell_exec with "${profile.nativeCli?.command || appId}" CLI. ${help}. Prefer headless/batch mode. If the task requires interacting with a running window (menus, dialogs, typing), use gui_interact macros instead of raw xdotool.`;
+      reasoning = `${profile.displayName} has native CLI. Using headless mode. GUI available as fallback.`;
       break;
     }
     case 'dbus': {
@@ -639,11 +668,10 @@ export function routeTask(userMessage: string, appId: string | null): ExecutionP
       const bin = profile.binaryPath || appId;
       constraint = `[EXECUTION PLAN] Use dbus_control to interact with ${profile.displayName} via DBus service "${svc}". Use MPRIS interface for media control. If the DBus call fails with ServiceUnknown, launch with shell_exec("setsid ${bin} >/dev/null 2>&1 &"), wait 5s, then retry. IMPORTANT: After sending a play/OpenUri command, the DBus response is a void return (no data) — this means SUCCESS. Do NOT call PlayPause after OpenUri — the track is already playing. To verify, use dbus_control get_property with method="Metadata" to read the current track. A void "method return" means the command worked.`;
       reasoning = `${profile.displayName} has DBus interface. Using programmatic control.`;
-      disallowedTools.push('gui_interact');
       break;
     }
     case 'gui': {
-      constraint = `[EXECUTION PLAN] Use gui_interact for ${profile.displayName}. Window matcher: "${profile.windowMatcher || appId}". Use batch_actions for multi-step sequences. Use keyboard shortcuts when possible.`;
+      constraint = `[EXECUTION PLAN] Use gui_interact for ${profile.displayName}. Window matcher: "${profile.windowMatcher || appId}". PREFER gui_interact macros (launch_and_focus, open_menu_path, fill_dialog, confirm_dialog, export_file, click_and_type) over raw primitives — each macro replaces 3-5 primitive calls. Use batch_actions for any remaining multi-step sequences. Use keyboard shortcuts when possible.`;
       reasoning = `${profile.displayName} requires GUI interaction. No structured control surface available.`;
       break;
     }
@@ -710,7 +738,7 @@ export function expectedToolForSurface(surface: ControlSurface): string {
   switch (surface) {
     case 'programmatic': return 'shell_exec';
     case 'dbus':         return 'dbus_control';
-    case 'cli_anything': return 'app_control';
+    case 'cli_anything': return 'shell_exec';  // CLI-Anything harnesses are called via shell_exec, not app_control
     case 'native_cli':   return 'shell_exec';
     case 'gui':          return 'gui_interact';
   }
@@ -854,4 +882,196 @@ export async function checkCliAnythingInstalled(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// ═══════════════════════════════════
+// Auto-Install CLI-Anything Harness
+//
+// When a task targets an app that:
+//   1. Has no CLI-Anything harness installed
+//   2. Has a pre-built harness in ~/CLI-Anything/<app>/agent-harness
+//   3. The app binary is installed on the system
+//
+// Automatically install the harness, update the profile, and
+// re-route to cli_anything — all before the LLM starts.
+// ═══════════════════════════════════
+
+/** Track apps we've already attempted auto-install for (per-session). */
+const autoInstallAttempted = new Set<string>();
+
+/**
+ * Attempt to auto-install a CLI-Anything harness for an app.
+ * 
+ * Returns true if a harness was installed (profile updated, ready to use).
+ * Returns false if no harness could be installed (no pre-built, install failed, etc.).
+ * 
+ * Called by the agent loop during pre-LLM setup when an app is detected
+ * but has no cli_anything surface available.
+ */
+export async function autoInstallHarness(appId: string): Promise<boolean> {
+  const normalizedId = appId.toLowerCase().replace(/[^a-z0-9-]/g, '');
+  
+  // Don't retry within the same session
+  if (autoInstallAttempted.has(normalizedId)) return false;
+  autoInstallAttempted.add(normalizedId);
+
+  // Check if already installed
+  try {
+    await execAsync(`which cli-anything-${normalizedId} 2>/dev/null`, { timeout: 2000 });
+    console.log(`[CLI-Anything] cli-anything-${normalizedId} already on PATH`);
+    return false; // Already installed, scanHarnesses should have caught it
+  } catch {
+    // Not installed — proceed
+  }
+
+  // Check if pre-built harness exists in the repo
+  const homedir = os.homedir();
+  const repoPaths = [
+    `${homedir}/CLI-Anything/${normalizedId}/agent-harness/setup.py`,
+    `${homedir}/cli-anything/${normalizedId}/agent-harness/setup.py`,
+    `${homedir}/Desktop/CLI-Anything/${normalizedId}/agent-harness/setup.py`,
+  ];
+
+  let harnessDir: string | null = null;
+  for (const setupPath of repoPaths) {
+    try {
+      await execAsync(`test -f "${setupPath}"`, { timeout: 1000 });
+      harnessDir = setupPath.replace('/setup.py', '');
+      break;
+    } catch { /* not found */ }
+  }
+
+  if (!harnessDir) {
+    // No local repo — try to clone it
+    if (!PREBUILT_HARNESSES.has(normalizedId)) {
+      console.log(`[CLI-Anything] No pre-built harness for "${normalizedId}" and no local repo found`);
+      return false;
+    }
+
+    console.log(`[CLI-Anything] Pre-built harness available for "${normalizedId}". Cloning repo...`);
+    const cloneDir = `${homedir}/CLI-Anything`;
+    try {
+      await execAsync(`test -d "${cloneDir}/.git"`, { timeout: 1000 });
+      // Repo exists, just check if the specific harness dir is there
+      try {
+        await execAsync(`test -f "${cloneDir}/${normalizedId}/agent-harness/setup.py"`, { timeout: 1000 });
+        harnessDir = `${cloneDir}/${normalizedId}/agent-harness`;
+      } catch {
+        console.log(`[CLI-Anything] Repo exists but no harness for "${normalizedId}" found. Pulling latest...`);
+        try {
+          await execAsync(`cd "${cloneDir}" && git pull --ff-only 2>/dev/null`, { timeout: 15000 });
+          await execAsync(`test -f "${cloneDir}/${normalizedId}/agent-harness/setup.py"`, { timeout: 1000 });
+          harnessDir = `${cloneDir}/${normalizedId}/agent-harness`;
+        } catch {
+          console.warn(`[CLI-Anything] Still no harness for "${normalizedId}" after pull`);
+          return false;
+        }
+      }
+    } catch {
+      // No repo at all — clone it
+      try {
+        console.log(`[CLI-Anything] Cloning CLI-Anything repo to ${cloneDir}...`);
+        await execAsync(
+          `git clone --depth 1 https://github.com/HKUDS/CLI-Anything.git "${cloneDir}"`,
+          { timeout: 60000 },
+        );
+        harnessDir = `${cloneDir}/${normalizedId}/agent-harness`;
+        // Verify it exists
+        await execAsync(`test -f "${harnessDir}/setup.py"`, { timeout: 1000 });
+      } catch (err: any) {
+        console.warn(`[CLI-Anything] Failed to clone repo: ${err.message?.slice(0, 100)}`);
+        return false;
+      }
+    }
+  }
+
+  if (!harnessDir) return false;
+
+  // Install the harness
+  console.log(`[CLI-Anything] Auto-installing harness from ${harnessDir}...`);
+  try {
+    const { stdout, stderr } = await execAsync(
+      `cd "${harnessDir}" && pip install -e . --break-system-packages 2>&1`,
+      { timeout: 60000 },
+    );
+    console.log(`[CLI-Anything] Install output: ${(stdout || stderr).trim().split('\n').slice(-2).join(' | ')}`);
+  } catch (err: any) {
+    console.warn(`[CLI-Anything] pip install failed: ${err.message?.slice(0, 200)}`);
+    return false;
+  }
+
+  // Verify it's on PATH
+  try {
+    const { stdout } = await execAsync(`which cli-anything-${normalizedId} 2>/dev/null`, { timeout: 2000 });
+    if (!stdout.trim()) throw new Error('not on PATH');
+  } catch {
+    console.warn(`[CLI-Anything] Installed but cli-anything-${normalizedId} not on PATH`);
+    return false;
+  }
+
+  // Discover commands
+  let commands: string[] | undefined;
+  try {
+    const { stdout } = await execAsync(
+      `cli-anything-${normalizedId} --help 2>/dev/null | grep -E '^  [a-z]' | awk '{print $1}'`,
+      { timeout: 5000 },
+    );
+    const parsed = stdout.trim().split('\n').filter(Boolean);
+    if (parsed.length > 0) commands = parsed;
+  } catch { /* non-fatal */ }
+
+  // Check for and read SKILL.md
+  let skillPath: string | undefined;
+  let skillContent: string | undefined;
+  try {
+    const { stdout } = await execAsync(
+      `python3 -c "import cli_anything.${normalizedId}; import os; print(os.path.dirname(cli_anything.${normalizedId}.__file__))" 2>/dev/null`,
+      { timeout: 3000 },
+    );
+    const pkgDir = stdout.trim();
+    if (pkgDir) {
+      const candidatePath = `${pkgDir}/skills/SKILL.md`;
+      try {
+        await execAsync(`test -f "${candidatePath}"`, { timeout: 1000 });
+        skillPath = candidatePath;
+        const { stdout: rawSkill } = await execAsync(`cat "${candidatePath}"`, { timeout: 3000 });
+        if (rawSkill.trim()) skillContent = rawSkill.trim();
+      } catch { /* no SKILL.md */ }
+    }
+  } catch { /* non-fatal */ }
+
+  // Update the profile in the registry
+  const profile = getAppProfile(normalizedId);
+  if (profile) {
+    profile.cliAnything = {
+      command: `cli-anything-${normalizedId}`,
+      installed: true,
+      commands,
+      skillPath,
+      skillContent,
+    };
+    if (!profile.availableSurfaces.includes('cli_anything')) {
+      // Insert cli_anything right after programmatic (or at the front)
+      const progIdx = profile.availableSurfaces.indexOf('programmatic');
+      profile.availableSurfaces.splice(progIdx + 1, 0, 'cli_anything');
+    }
+    profile.lastScanned = new Date().toISOString();
+    updateAppProfile(profile);
+  } else {
+    // Create a new profile for this app
+    const newProfile: AppProfile = {
+      appId: normalizedId,
+      displayName: normalizedId.charAt(0).toUpperCase() + normalizedId.slice(1),
+      binaryPath: normalizedId,
+      availableSurfaces: ['cli_anything', 'gui'],
+      cliAnything: { command: `cli-anything-${normalizedId}`, installed: true, commands, skillPath, skillContent },
+      windowMatcher: normalizedId,
+      confidence: 0.8,
+      lastScanned: new Date().toISOString(),
+    };
+    updateAppProfile(newProfile);
+  }
+
+  console.log(`[CLI-Anything] ✓ Auto-installed cli-anything-${normalizedId} (${commands?.length || '?'} commands${skillPath ? ', SKILL.md found' : ''})`);
+  return true;
 }

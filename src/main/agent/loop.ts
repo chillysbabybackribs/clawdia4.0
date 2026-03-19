@@ -23,6 +23,8 @@ import { fireNestedCancel } from './loop-cancel';
 import { runPreLLMSetup } from './loop-setup';
 import { dispatchTools, type DispatchContext } from './loop-dispatch';
 import { verifyFileOutcomes, runRecoveryIteration, logVerificationSummary } from './loop-recovery';
+import { cancelPendingApprovals } from './approval-manager';
+import { appendRunEvent } from '../db/run-events';
 
 const MAX_ITERATIONS = 50;
 const MAX_WALL_MS = 10 * 60 * 1000;
@@ -55,6 +57,7 @@ export function cancelLoop(): void {
     activeAbortController.abort();
     console.log('[Loop] Cancel requested');
   }
+  cancelPendingApprovals();
   fireNestedCancel();   // abort harness generation if running
   if (pauseResolve) { pauseResolve(); pauseResolve = null; }
   isPaused = false;
@@ -90,6 +93,7 @@ function isCancelled(): boolean {
 // ═══════════════════════════════════
 
 export interface LoopOptions {
+  runId?: string;
   apiKey: string;
   model?: string;
   onStreamText?: (text: string) => void;
@@ -150,7 +154,7 @@ export async function runAgentLoop(
   history: Anthropic.MessageParam[],
   options: LoopOptions,
 ): Promise<{ response: string; toolCalls: { name: string; status: string; detail?: string }[] }> {
-  const { apiKey, onStreamText, onThinking, onToolActivity, onToolStream, onStreamEnd } = options;
+  const { apiKey, onStreamText, onThinking, onToolActivity, onToolStream, onStreamEnd, runId } = options;
 
   activeAbortController = new AbortController();
   isPaused = false;
@@ -160,9 +164,28 @@ export async function runAgentLoop(
   // ── Classify ──
   const profile = classify(userMessage);
   console.log(`[Agent] Classified: group=${profile.toolGroup} modules=[${[...profile.promptModules]}] model=${profile.model} greeting=${profile.isGreeting}`);
+  if (runId) {
+    appendRunEvent(runId, {
+      kind: 'run_classified',
+      phase: 'classification',
+      payload: {
+        toolGroup: profile.toolGroup,
+        promptModules: [...profile.promptModules],
+        modelTier: profile.model,
+        isGreeting: profile.isGreeting,
+      },
+    });
+  }
 
   const modelId = pickModel(profile.model, options.model, profile.isGreeting);
   console.log(`[Agent] Using model: ${modelId}`);
+  if (runId) {
+    appendRunEvent(runId, {
+      kind: 'model_selected',
+      phase: 'classification',
+      payload: { modelId },
+    });
+  }
 
   const client = new AnthropicClient(apiKey, modelId);
   const staticPrompt = buildStaticPrompt(profile.toolGroup, profile.promptModules);
@@ -170,6 +193,17 @@ export async function runAgentLoop(
   // ── Pre-LLM Setup (extracted to loop-setup.ts) ──
   const setup = await runPreLLMSetup(userMessage, profile, apiKey, options.onProgress);
   const { executionPlan } = setup;
+  if (runId) {
+    appendRunEvent(runId, {
+      kind: 'preflight_completed',
+      phase: 'setup',
+      payload: {
+        selectedSurface: executionPlan?.selectedSurface || null,
+        appId: executionPlan?.appId || null,
+        disallowedTools: executionPlan?.disallowedTools || [],
+      },
+    });
+  }
 
   // ── Build dynamic prompt ──
   const dynamicPrompt = buildDynamicPrompt({
@@ -198,6 +232,8 @@ export async function runAgentLoop(
 
   // ── Dispatch context (mutable, shared with loop-dispatch) ──
   const dispatchCtx: DispatchContext = {
+    runId,
+    signal: activeAbortController.signal,
     tools,
     executionPlan,
     toolGroup: profile.toolGroup,
@@ -226,6 +262,13 @@ export async function runAgentLoop(
     // ── Loop control gate ──
     if (isCancelled()) {
       console.log(`[Agent] Cancelled at iteration ${iteration}`);
+      if (runId) {
+        appendRunEvent(runId, {
+          kind: 'run_cancel_requested',
+          phase: 'control',
+          payload: { iteration },
+        });
+      }
       finalText = finalText || '[Cancelled by user]';
       break;
     }
@@ -233,9 +276,23 @@ export async function runAgentLoop(
     if (isPaused) {
       options.onPaused?.();
       onThinking?.('Paused — waiting to resume...');
+      if (runId) {
+        appendRunEvent(runId, {
+          kind: 'run_paused',
+          phase: 'control',
+          payload: { iteration },
+        });
+      }
       await waitIfPaused();
       if (isCancelled()) { finalText = '[Cancelled by user]'; break; }
       options.onResumed?.();
+      if (runId) {
+        appendRunEvent(runId, {
+          kind: 'run_resumed',
+          phase: 'control',
+          payload: { iteration },
+        });
+      }
     }
 
     // Inject pending user context
@@ -244,9 +301,23 @@ export async function runAgentLoop(
       pendingContext = null;
       messages.push({ role: 'user', content: `[USER CONTEXT] ${ctx}` });
       console.log(`[Agent] Injected user context: ${ctx.slice(0, 80)}`);
+      if (runId) {
+        appendRunEvent(runId, {
+          kind: 'context_injected',
+          phase: 'control',
+          payload: { text: ctx.slice(0, 500) },
+        });
+      }
     }
 
     onThinking?.('Thinking...');
+    if (runId) {
+      appendRunEvent(runId, {
+        kind: 'thinking',
+        phase: 'llm',
+        payload: { iteration },
+      });
+    }
 
     // ── Mid-loop injections ──
     if (!guiBatchNudgeSent && profile.promptModules.has('desktop_apps')
@@ -279,6 +350,13 @@ export async function runAgentLoop(
         break;
       }
       console.error(`[Agent] LLM error:`, err.message);
+      if (runId) {
+        appendRunEvent(runId, {
+          kind: 'llm_error',
+          phase: 'llm',
+          payload: { iteration, message: err.message },
+        });
+      }
       finalText = `I encountered an error: ${err.message}`;
       break;
     }
@@ -308,6 +386,13 @@ export async function runAgentLoop(
       }
 
       finalText = responseText;
+      if (runId) {
+        appendRunEvent(runId, {
+          kind: 'assistant_response',
+          phase: 'llm',
+          payload: { iteration, text: responseText.slice(0, 1000) },
+        });
+      }
       break;
     }
 
@@ -339,6 +424,13 @@ export async function runAgentLoop(
   if (finalText && !finalText.startsWith('[Cancelled') && !profile.isGreeting && dispatchCtx.allToolCalls.length > 0) {
     const issue = verifyFileOutcomes(finalText, dispatchCtx.allToolCalls);
     if (issue) {
+      if (runId) {
+        appendRunEvent(runId, {
+          kind: 'recovery_started',
+          phase: 'recovery',
+          payload: { issue },
+        });
+      }
       finalText = await runRecoveryIteration(issue, finalText, {
         client,
         messages,
@@ -352,6 +444,13 @@ export async function runAgentLoop(
         toolCallCount: dispatchCtx.toolCallCount,
       });
       onStreamEnd?.();
+      if (runId) {
+        appendRunEvent(runId, {
+          kind: 'recovery_completed',
+          phase: 'recovery',
+          payload: { finalText: finalText.slice(0, 1000) },
+        });
+      }
     }
   }
 
@@ -382,6 +481,16 @@ export async function runAgentLoop(
 
   // ── Verification summary ──
   logVerificationSummary(dispatchCtx.allVerifications);
+  if (runId && dispatchCtx.allVerifications.length > 0) {
+    appendRunEvent(runId, {
+      kind: 'verification_summary',
+      phase: 'verification',
+      payload: {
+        checks: dispatchCtx.allVerifications.length,
+        failed: dispatchCtx.allVerifications.filter(v => !v.passed).length,
+      },
+    });
+  }
 
   // Clean up
   activeAbortController = null;

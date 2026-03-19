@@ -22,7 +22,7 @@ textarea { field-sizing: content; }
    ══════════════════════════════════════════════════ */
 
 .markdown-prose {
-  font-size: 0.925rem;
+  font-size: 1rem;
   line-height: 1.72;
   color: #e0e0e4;
   word-wrap: break-word;

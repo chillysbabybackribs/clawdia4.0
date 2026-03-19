@@ -5,14 +5,17 @@ import BrowserPanel from './components/BrowserPanel';
 import ConversationsView from './components/ConversationsView';
 import SettingsView from './components/SettingsView';
 import WelcomeScreen from './components/WelcomeScreen';
+import ProcessesPanel from './components/ProcessesPanel';
 
-export type View = 'chat' | 'conversations' | 'settings';
+export type View = 'chat' | 'conversations' | 'settings' | 'processes';
 
 export default function App() {
   const [activeView, setActiveView] = useState<View>('chat');
   const [browserVisible, setBrowserVisible] = useState(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [chatKey, setChatKey] = useState(0);
   const [loadConversationId, setLoadConversationId] = useState<string | null>(null);
+  const [selectedProcessId, setSelectedProcessId] = useState<string | null>(null);
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null); // null = loading
 
   // Check for API key on mount
@@ -40,8 +43,14 @@ export default function App() {
 
   const handleLoadConversation = useCallback(async (id: string) => {
     setLoadConversationId(id);
+    setSelectedProcessId(null);
     setChatKey(k => k + 1);
     setActiveView('chat');
+  }, []);
+
+  const handleOpenProcess = useCallback((processId: string) => {
+    setSelectedProcessId(processId);
+    setActiveView('processes');
   }, []);
 
   const handleToggleBrowser = useCallback(() => {
@@ -60,6 +69,7 @@ export default function App() {
       if (ctrl && e.key === ',') { e.preventDefault(); setActiveView(v => v === 'settings' ? 'chat' : 'settings'); }
       if (ctrl && e.key === 'h') { e.preventDefault(); setActiveView(v => v === 'conversations' ? 'chat' : 'conversations'); }
       if (ctrl && e.key === 'b') { e.preventDefault(); handleToggleBrowser(); }
+      if (ctrl && e.key === 's' && !e.shiftKey) { e.preventDefault(); setSidebarCollapsed(v => !v); }
       if (e.key === 'Escape' && activeView !== 'chat') setActiveView('chat');
     };
     window.addEventListener('keydown', handler);
@@ -86,6 +96,10 @@ export default function App() {
         activeView={activeView}
         onViewChange={setActiveView}
         onNewChat={handleNewChat}
+        onLoadConversation={handleLoadConversation}
+        onOpenProcess={handleOpenProcess}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed(v => !v)}
       />
 
       <div
@@ -97,6 +111,7 @@ export default function App() {
             key={chatKey}
             browserVisible={browserVisible}
             onToggleBrowser={handleToggleBrowser}
+            onOpenSettings={() => setActiveView('settings')}
             loadConversationId={loadConversationId}
           />
         )}
@@ -106,6 +121,15 @@ export default function App() {
             onLoadConversation={handleLoadConversation}
           />
         )}
+        {activeView === 'processes' && (
+          <ProcessesPanel
+            onBack={() => setActiveView('chat')}
+            initialRunId={selectedProcessId}
+            onAttach={(conversationId) => {
+              handleLoadConversation(conversationId);
+            }}
+          />
+        )}
         {activeView === 'settings' && (
           <SettingsView onBack={() => setActiveView('chat')} />
         )}
@@ -113,7 +137,7 @@ export default function App() {
 
       {browserVisible && (
         <div
-          className="flex flex-col min-w-0 h-full border-l-[2px] border-white/[0.04]"
+          className="flex flex-col min-w-0 h-full border-l-[2px] border-white/[0.06] shadow-[inset_2px_0_8px_rgba(0,0,0,0.3),-2px_0_12px_rgba(0,0,0,0.4)]"
           style={{ flex: '65 0 0' }}
         >
           <BrowserPanel />

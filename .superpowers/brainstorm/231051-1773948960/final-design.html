@@ -1,0 +1,229 @@
+<h2>Terminal Log Strip — Final Design</h2>
+<p class="subtitle">Live state (left) and collapsed state (right) — click to confirm</p>
+
+<style>
+* { box-sizing: border-box; }
+.mock-chat {
+  background: #0e0e12;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.08);
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  display: flex;
+  flex-direction: column;
+}
+.mock-header {
+  background: #13131a;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding: 7px 14px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.mock-header .dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(138,180,248,0.6); display: inline-block; animation: pulse 1.4s ease-in-out infinite; }
+.mock-messages { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; }
+.user-bubble {
+  align-self: flex-end;
+  background: rgba(138,180,248,0.85);
+  color: #fff;
+  border-radius: 14px 14px 3px 14px;
+  padding: 7px 13px;
+  font-size: 12px;
+  max-width: 80%;
+}
+.ai-text {
+  color: rgba(255,255,255,0.82);
+  font-size: 12px;
+  line-height: 1.55;
+  max-width: 88%;
+}
+.status-shimmer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(138,180,248,0.55);
+  font-size: 11px;
+  padding: 2px 0;
+}
+.shimmer-dot { width: 5px; height: 5px; border-radius: 50%; background: rgba(138,180,248,0.6); animation: pulse 1.4s ease-in-out infinite; }
+
+/* ── Terminal strip (live) ── */
+.terminal-strip-live {
+  border-top: 1px solid rgba(255,255,255,0.07);
+  background: #080a0f;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+  font-size: 10.5px;
+  line-height: 1.55;
+  padding: 5px 14px;
+  height: 72px;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+.terminal-strip-live .cmd { color: rgba(255,255,255,0.38); }
+.terminal-strip-live .out { color: rgba(255,255,255,0.72); }
+.terminal-strip-live .dim { color: rgba(255,255,255,0.25); }
+
+/* ── Terminal strip (collapsed) ── */
+.terminal-strip-collapsed {
+  border-top: 1px solid rgba(255,255,255,0.07);
+  background: #080a0f;
+  flex-shrink: 0;
+}
+.terminal-strip-collapsed .toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 14px;
+  cursor: pointer;
+  user-select: none;
+}
+.terminal-strip-collapsed .toggle-label {
+  font-size: 10.5px;
+  color: rgba(255,255,255,0.32);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.terminal-strip-collapsed .toggle-label .icon {
+  opacity: 0.5;
+}
+.terminal-strip-collapsed .chevron {
+  color: rgba(255,255,255,0.25);
+  font-size: 12px;
+  transition: transform 0.2s;
+  line-height: 1;
+}
+.terminal-strip-collapsed .expanded-content {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 10.5px;
+  line-height: 1.55;
+  padding: 0 14px 8px;
+  color: rgba(255,255,255,0.55);
+  border-top: 1px solid rgba(255,255,255,0.04);
+  max-height: 120px;
+  overflow-y: auto;
+}
+.terminal-strip-collapsed .expanded-content .cmd { color: rgba(255,255,255,0.3); }
+.terminal-strip-collapsed .expanded-content .out { color: rgba(255,255,255,0.65); }
+
+/* Status bar (below strip) */
+.mock-input {
+  background: rgba(255,255,255,0.03);
+  border-top: 1px solid rgba(255,255,255,0.05);
+  padding: 8px 14px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.18);
+  flex-shrink: 0;
+}
+
+@keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.split-label { font-size: 11px; font-weight: 600; color: rgba(255,255,255,0.5); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.06em; }
+
+/* Interactive demo on collapsed side */
+#toggle-demo { cursor: pointer; }
+#toggle-demo .expanded-content { display: none; }
+#toggle-demo.open .chevron { transform: rotate(180deg); }
+#toggle-demo.open .expanded-content { display: block; }
+
+.confirm-card {
+  margin-top: 18px;
+  border-radius: 8px;
+  border: 1.5px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.02);
+  overflow: hidden;
+}
+.confirm-option {
+  padding: 11px 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: rgba(255,255,255,0.7);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  transition: background 0.15s;
+}
+.confirm-option:last-child { border-bottom: none; }
+.confirm-option:hover { background: rgba(255,255,255,0.04); }
+.confirm-option.selected { background: rgba(138,180,248,0.07); color: rgba(138,180,248,0.9); }
+.confirm-option .letter { width: 20px; height: 20px; border-radius: 4px; background: rgba(255,255,255,0.08); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; flex-shrink: 0; }
+</style>
+
+<div class="split">
+  <!-- LEFT: Live state -->
+  <div>
+    <div class="split-label">During generation</div>
+    <div class="mock-chat" style="height:270px">
+      <div class="mock-header"><span class="dot"></span> Generating…</div>
+      <div class="mock-messages">
+        <div class="user-bubble">Use Kdenlive to export an MP4</div>
+        <div class="ai-text">Phase 1 complete. Now building the harness directory structure and core modules.</div>
+        <div class="status-shimmer"><div class="shimmer-dot"></div> Running shell_exec — pip install -e .</div>
+      </div>
+      <!-- Live terminal strip: 3 lines ~72px -->
+      <div class="terminal-strip-live">
+        <div class="cmd">$ kdenlive --help</div>
+        <div class="out">Usage: kdenlive [options] [files]</div>
+        <div class="dim">KDE Non-Linear Video Editor…</div>
+        <div class="cmd" style="margin-top:3px">$ mkdir -p ~/CLI-Anything/kdenlive/…</div>
+        <div class="out">Directories created</div>
+        <div class="cmd" style="margin-top:3px">$ pip install -e . 2>&amp;1</div>
+        <div class="out">Successfully installed cli-anything-kdenlive</div>
+      </div>
+      <div class="mock-input">Add a follow-up…</div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Collapsed state (interactive) -->
+  <div>
+    <div class="split-label">After generation — click the strip</div>
+    <div class="mock-chat" style="height:270px">
+      <div class="mock-header" style="animation:none">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.35)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        Done
+      </div>
+      <div class="mock-messages">
+        <div class="user-bubble">Use Kdenlive to export an MP4</div>
+        <div class="ai-text">✓ CLI harness for Kdenlive installed. I'm now ready to help you export your project as an MP4. What's the project file path?</div>
+      </div>
+      <!-- Collapsed strip: interactive demo -->
+      <div class="terminal-strip-collapsed" id="toggle-demo" onclick="this.classList.toggle('open')">
+        <div class="toggle-row">
+          <div class="toggle-label">
+            <svg class="icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            terminal log
+          </div>
+          <div class="chevron">&#8964;</div>
+        </div>
+        <div class="expanded-content">
+          <div class="cmd">$ kdenlive --help</div>
+          <div class="out">Usage: kdenlive [options] [files]</div>
+          <div class="cmd" style="margin-top:3px">$ mkdir -p ~/CLI-Anything/kdenlive/agent-harness</div>
+          <div class="out">Directories created</div>
+          <div class="cmd" style="margin-top:3px">$ pip install -e . 2>&amp;1</div>
+          <div class="out">Successfully installed cli-anything-kdenlive-0.1.0</div>
+          <div class="cmd" style="margin-top:3px">$ which cli-anything-kdenlive</div>
+          <div class="out">/home/dp/.local/bin/cli-anything-kdenlive</div>
+        </div>
+      </div>
+      <div class="mock-input">Add a follow-up…</div>
+    </div>
+  </div>
+</div>
+
+<div class="confirm-card">
+  <div class="confirm-option selected" data-choice="approve" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    This looks right — proceed with spec and plan
+  </div>
+  <div class="confirm-option" data-choice="adjust" onclick="toggleSelect(this)">
+    <div class="letter">~</div>
+    Close but needs adjustments — I'll describe in terminal
+  </div>
+</div>

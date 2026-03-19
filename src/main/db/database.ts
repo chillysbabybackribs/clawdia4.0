@@ -12,6 +12,10 @@
  *   coordinate_cache — app, window_key, element, x, y, confidence (v4)
  *   site_profiles    — domain, auth_status, visit_count, nav_hints, account_info (v7)
  *   browser_playbooks— domain, task_pattern, steps, success_count, fail_count (v8)
+ *   runs             — durable task runs for detached/reviewable execution history (v9)
+ *   run_events       — structured durable run event log (v10)
+ *   run_changes      — reviewable normalized change records (v11)
+ *   run_approvals    — durable approval checkpoints for sensitive actions (v12)
  */
 
 import Database from 'better-sqlite3';
@@ -22,6 +26,12 @@ import { app } from 'electron';
 let db: Database.Database | null = null;
 
 function getDbPath(): string {
+  // Allow override for testing outside Electron
+  if (process.env.CLAWDIA_DB_PATH) {
+    const dir = path.dirname(process.env.CLAWDIA_DB_PATH);
+    fs.mkdirSync(dir, { recursive: true });
+    return process.env.CLAWDIA_DB_PATH;
+  }
   const configDir = path.join(app.getPath('userData'));
   fs.mkdirSync(configDir, { recursive: true });
   return path.join(configDir, 'data.sqlite');
@@ -201,5 +211,120 @@ function runMigrations(db: Database.Database): void {
     `);
   }
 
-  console.log(`[DB] Schema at version ${Math.max(currentVersion, 8)}`);
+  if (currentVersion < 9) {
+    console.log('[DB] Running migration v9: durable runs');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS runs (
+        id               TEXT PRIMARY KEY,
+        conversation_id  TEXT NOT NULL,
+        title            TEXT NOT NULL,
+        goal             TEXT NOT NULL,
+        status           TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed', 'cancelled')),
+        started_at       TEXT NOT NULL,
+        updated_at       TEXT NOT NULL,
+        completed_at     TEXT,
+        tool_call_count  INTEGER NOT NULL DEFAULT 0,
+        error            TEXT,
+        was_detached     INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_runs_conversation ON runs(conversation_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_runs_updated_at ON runs(updated_at DESC);
+      INSERT INTO schema_version (version) VALUES (9);
+    `);
+  }
+
+  if (currentVersion < 10) {
+    console.log('[DB] Running migration v10: run_events');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS run_events (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id       TEXT NOT NULL,
+        seq          INTEGER NOT NULL,
+        ts           TEXT NOT NULL,
+        kind         TEXT NOT NULL,
+        phase        TEXT,
+        surface      TEXT,
+        tool_name    TEXT,
+        payload_json TEXT NOT NULL DEFAULT '{}'
+      );
+      CREATE INDEX IF NOT EXISTS idx_run_events_run_seq ON run_events(run_id, seq ASC);
+      CREATE INDEX IF NOT EXISTS idx_run_events_kind ON run_events(kind, ts DESC);
+      INSERT INTO schema_version (version) VALUES (10);
+    `);
+  }
+
+  if (currentVersion < 11) {
+    console.log('[DB] Running migration v11: run_changes');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS run_changes (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id       TEXT NOT NULL,
+        event_id     INTEGER,
+        change_type  TEXT NOT NULL,
+        target       TEXT NOT NULL,
+        summary      TEXT NOT NULL,
+        diff_text    TEXT,
+        created_at   TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_run_changes_run_id ON run_changes(run_id, id ASC);
+      CREATE INDEX IF NOT EXISTS idx_run_changes_change_type ON run_changes(change_type, created_at DESC);
+      INSERT INTO schema_version (version) VALUES (11);
+    `);
+  }
+
+  if (currentVersion < 12) {
+    console.log('[DB] Running migration v12: awaiting-approval runs + run_approvals');
+    db.exec(`
+      ALTER TABLE runs RENAME TO runs_old;
+
+      CREATE TABLE IF NOT EXISTS runs (
+        id               TEXT PRIMARY KEY,
+        conversation_id  TEXT NOT NULL,
+        title            TEXT NOT NULL,
+        goal             TEXT NOT NULL,
+        status           TEXT NOT NULL CHECK(status IN ('running', 'awaiting_approval', 'completed', 'failed', 'cancelled')),
+        started_at       TEXT NOT NULL,
+        updated_at       TEXT NOT NULL,
+        completed_at     TEXT,
+        tool_call_count  INTEGER NOT NULL DEFAULT 0,
+        error            TEXT,
+        was_detached     INTEGER NOT NULL DEFAULT 0
+      );
+
+      INSERT INTO runs (
+        id, conversation_id, title, goal, status,
+        started_at, updated_at, completed_at, tool_call_count, error, was_detached
+      )
+      SELECT
+        id, conversation_id, title, goal, status,
+        started_at, updated_at, completed_at, tool_call_count, error, was_detached
+      FROM runs_old;
+
+      DROP TABLE runs_old;
+
+      CREATE INDEX IF NOT EXISTS idx_runs_conversation ON runs(conversation_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_runs_updated_at ON runs(updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS run_approvals (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id        TEXT NOT NULL,
+        status        TEXT NOT NULL CHECK(status IN ('pending', 'approved', 'denied')),
+        action_type   TEXT NOT NULL,
+        target        TEXT NOT NULL,
+        summary       TEXT NOT NULL,
+        request_json  TEXT NOT NULL DEFAULT '{}',
+        created_at    TEXT NOT NULL,
+        resolved_at   TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_run_approvals_run_id ON run_approvals(run_id, id ASC);
+      CREATE INDEX IF NOT EXISTS idx_run_approvals_status ON run_approvals(status, created_at DESC);
+
+      INSERT INTO schema_version (version) VALUES (12);
+    `);
+  }
+
+  console.log(`[DB] Schema at version ${Math.max(currentVersion, 12)}`);
 }

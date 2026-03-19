@@ -135,11 +135,11 @@ const EXTRA_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: 'gui_interact',
-    description: 'GUI automation for DESKTOP applications — LAST RESORT. Only for native desktop apps (GIMP, Blender, LibreOffice, etc.) when no programmatic, DBus, or CLI surface works. NEVER use gui_interact for the browser — use browser_click, browser_type, browser_navigate instead. Primitive actions: batch_actions, click, type, key, wait, focus, screenshot, analyze_screenshot, verify_window_title, verify_file_exists, list_windows, find_window. GUI Macros (prefer these for common workflows): launch_and_focus (launch app + wait + focus + OCR), open_menu_path (navigate menus via keyboard), fill_dialog (tab through fields + type values + confirm), confirm_dialog (wait + Enter or click button), export_file (shortcut + fill path + confirm + verify).',
+    description: 'GUI automation for DESKTOP applications. NEVER use for the browser. PREFER structured accessibility (a11y_*) actions for menus, buttons, dialogs, text fields — they use semantic element identity instead of coordinates. Use a11y_get_tree to inspect an app\'s UI structure, a11y_find to locate elements by role+name, a11y_do_action to click/activate buttons and menu items, a11y_set_value to type into text fields and spin buttons, a11y_get_state to read back values. Scope with "scope" param to target a specific dialog (e.g. scope="Scale Image"). Fall back to raw primitives (click/type/key) or macros (open_menu_path, fill_dialog, export_file, click_and_type) only when a11y is unavailable or the task requires canvas/pixel interaction. Primitives: batch_actions, click, type, key, wait, focus, screenshot, analyze_screenshot, verify_window_title, verify_file_exists, list_windows, find_window. Macros: launch_and_focus, open_menu_path, fill_dialog, confirm_dialog, export_file, click_and_type.',
     input_schema: {
       type: 'object' as const,
       properties: {
-        action: { type: 'string', enum: ['batch_actions', 'screenshot_and_focus', 'analyze_screenshot', 'click', 'type', 'key', 'screenshot', 'find_window', 'focus', 'list_windows', 'wait', 'verify_window_title', 'verify_file_exists', 'screenshot_region', 'launch_and_focus', 'open_menu_path', 'fill_dialog', 'confirm_dialog', 'export_file'] },
+        action: { type: 'string', enum: ['batch_actions', 'screenshot_and_focus', 'analyze_screenshot', 'click', 'type', 'key', 'screenshot', 'find_window', 'focus', 'list_windows', 'wait', 'verify_window_title', 'verify_file_exists', 'screenshot_region', 'launch_and_focus', 'open_menu_path', 'fill_dialog', 'confirm_dialog', 'export_file', 'click_and_type', 'a11y_get_tree', 'a11y_find', 'a11y_do_action', 'a11y_set_value', 'a11y_get_state', 'a11y_list_apps'] },
         window: { type: 'string', description: 'Window title. For batch_actions, set here to apply to all steps.' },
         x: { type: 'number' }, y: { type: 'number' },
         text: { type: 'string', description: 'Text to type, key combo, or filepath' },
@@ -152,6 +152,12 @@ const EXTRA_TOOLS: Anthropic.Tool[] = [
         confirm: { type: 'boolean', description: 'For fill_dialog: press Enter after filling (default: true)' },
         settle_ms: { type: 'number', description: 'For confirm_dialog: ms to wait before confirming (default: 300)' },
         verify: { type: 'boolean', description: 'Force or skip post-action OCR verification' },
+        scope: { type: 'string', description: 'For a11y_* actions: dialog/window name to scope search into (e.g. "Scale Image", "Export Image")' },
+        a11y_action: { type: 'string', enum: ['click', 'activate', 'press', 'toggle'], description: 'For a11y_do_action: semantic action to perform' },
+        role: { type: 'string', description: 'For a11y_* actions: accessibility role (e.g. "push button", "spin button", "menu item", "text")' },
+        name: { type: 'string', description: 'For a11y_* actions: accessible element name (e.g. "OK", "Width", "File")' },
+        value: { type: 'string', description: 'For a11y_set_value: value to set on the element' },
+        depth: { type: 'number', description: 'For a11y_get_tree: max tree depth (default 6)' },
         rx: { type: 'number' }, ry: { type: 'number' }, rw: { type: 'number' }, rh: { type: 'number' },
         actions: { type: 'array', description: 'For batch_actions. Max 20 steps.', items: { type: 'object', properties: { action: { type: 'string', enum: ['click', 'type', 'key', 'focus', 'screenshot', 'wait', 'verify_window_title', 'verify_file_exists'] }, window: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' }, text: { type: 'string' }, path: { type: 'string' }, delay: { type: 'number' }, ms: { type: 'number' } }, required: ['action'] } },
       },

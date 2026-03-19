@@ -9,7 +9,7 @@
 # CONTEXT files — that would double the token cost. Instead, it
 # provides the cross-cutting rules that matter when both are active.
 #
-# Token budget: ~600 tokens.
+# Token budget: ~500 tokens.
 # ═══════════════════════════════════
 
 ## Combined Rules (Filesystem + Browser + Shell)
@@ -46,13 +46,4 @@ You have full access to the local filesystem, a persistent bash shell, and a Pla
 - Cite sources with URLs when presenting web-gathered information.
 - For "compare X" requests: gather all sides before presenting. Do not present partial comparisons.
 
-## Desktop Application Control
-
-You can launch and control desktop applications. The system automatically selects the best approach:
-- **Programmatic** (shell_exec + Python/ImageMagick): For creating/converting images, documents, media
-- **CLI-Anything** (app_control): For apps with structured CLI harnesses
-- **DBus** (dbus_control): For Spotify, VLC, media players — use MPRIS interface
-- **GUI** (gui_interact): Last resort — only when the above cannot accomplish the task
-
-Always background GUI launches: `setsid gimp >/dev/null 2>&1 &`
-The dynamic prompt's [EXECUTION PLAN] tells you which approach to use — follow it.
+**Desktop apps:** The dynamic prompt's [EXECUTION PLAN] tells you which control surface to use — follow it. Background GUI launches with `setsid app >/dev/null 2>&1 &`.

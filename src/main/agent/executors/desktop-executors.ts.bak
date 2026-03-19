@@ -1,15 +1,15 @@
 /**
  * Desktop Tool Executors — Application control surfaces.
  * 
- * Control surface priority is PROFILE-DRIVEN, not fixed here.
- * The app-registry (routeTask) selects the surface per-task based on:
- *   - the app's AppProfile.availableSurfaces
- *   - the task type (TASK_RULES regex match)
- *   - whether a CLI-Anything harness is installed (auto-promoted if so)
+ * Control surface priority (highest → lowest):
+ *   1. programmatic — shell_exec with Python/ImageMagick/ffmpeg
+ *   2. dbus         — dbus_control for MPRIS/DBus-capable apps
+ *   3. cli_anything — app_control with CLI-Anything harness
+ *   4. native_cli   — shell_exec with app's native CLI/batch mode
+ *   5. gui          — gui_interact (last resort)
  * 
+ * The app-registry routing layer selects the surface before the LLM acts.
  * These executors carry out whichever surface was chosen.
- * NOTE: app_control is bypassed entirely when routeTask selects cli_anything
- * (the LLM calls shell_exec with the harness directly).
  *
  * Phase 1 additions:
  *   - UI State integration: skip redundant wmctrl focus in batch when window unchanged
@@ -60,7 +60,6 @@ import {
 import {
   getAppProfile,
   getHarnessGuidance,
-  listProfiles,
   type AppProfile,
   type ControlSurface,
   recordFallback,
@@ -383,7 +382,7 @@ async function tryControlSurface(
       // GUI is gui_interact's domain, not app_control's.
       return {
         ok: false,
-        result: `[Skip] GUI surface — not handled by app_control.`,
+        result: `[Skip] GUI surface — use gui_interact directly if needed.`,
       };
     }
 
@@ -437,6 +436,7 @@ export async function executeAppControl(input: Record<string, any>): Promise<str
 Tried: ${tried.join(' → ')}
 
 Fallback options:
+- Use gui_interact if the app is visually open
 - Use shell_exec to launch it: setsid ${profile.binaryPath || appName} >/dev/null 2>&1 &${harnessBlock}`;
   }
 
@@ -448,7 +448,8 @@ Fallback options:
     return `[No profile or binary found for "${app}"]
 
 This app is not in the registry and is not installed. Try:
-- shell_exec to check: which ${appName}${harnessBlock}`;
+- shell_exec to check: which ${appName}
+- gui_interact to interact with a running window${harnessBlock}`;
   }
 
   console.log(`[app_control] No profile for ${app}, using raw native CLI`);
@@ -1432,14 +1433,11 @@ export async function getDesktopCapabilities(): Promise<string> {
     } catch {}
   }
 
-  // CLI-Anything harnesses — read from registry (populated by scanHarnesses)
-  // instead of running a redundant compgen shell call.
+  // CLI-Anything harnesses
   let harnesses: string[] = [];
   try {
-    const profiles = listProfiles();
-    harnesses = profiles
-      .filter(p => p.cliAnything?.installed)
-      .map(p => p.appId);
+    const { stdout } = await execAsync('bash -c "compgen -c cli-anything-" 2>/dev/null || echo ""', { timeout: 3000 });
+    harnesses = stdout.trim().split('\n').map(s => s.replace(/.*cli-anything-/, '').trim()).filter(Boolean);
   } catch {}
 
   // Display layout via xrandr — critical for multi-monitor coordinate translation

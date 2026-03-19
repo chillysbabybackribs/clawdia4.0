@@ -1,0 +1,362 @@
+/**
+ * Process Manager — Tracks agent processes for the Cursor-style UX.
+ *
+ * Pattern:
+ *   1. User sends a message → loop starts → attached (streaming to renderer)
+ *   2. User clicks "Detach" → loop keeps running, events buffered
+ *   3. User starts new chat → new loop starts attached
+ *   4. Old loop completes in background → shows in process list
+ *   5. User clicks process → loads conversation from DB
+ *
+ * Only ONE loop runs at a time (serial, not concurrent).
+ * The process manager tracks state, routes events, and maintains history.
+ */
+
+import type { BrowserWindow } from 'electron';
+import { IPC_EVENTS } from '../../shared/ipc-channels';
+import {
+  completeRun,
+  createRun,
+  deleteRun,
+  evictOldRuns,
+  getRun,
+  incrementRunToolCount,
+  listRuns,
+  reconcileInterruptedRuns,
+  setRunStatus,
+  setRunDetached,
+} from '../db/runs';
+import { reconcilePendingRunApprovals } from '../db/run-approvals';
+import { appendRunEvent } from '../db/run-events';
+
+// ═══════════════════════════════════
+// Types
+// ═══════════════════════════════════
+
+export type ProcessStatus = 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled';
+
+export interface ProcessInfo {
+  id: string;
+  conversationId: string;
+  status: ProcessStatus;
+  summary: string;
+  startedAt: number;
+  completedAt?: number;
+  toolCallCount: number;
+  error?: string;
+  isAttached: boolean;
+  wasDetached: boolean;
+}
+
+interface InternalProcess extends ProcessInfo {
+  outputBuffer: Array<{ type: string; data: any }>;
+}
+
+// ═══════════════════════════════════
+// State
+// ═══════════════════════════════════
+
+const processes: Map<string, InternalProcess> = new Map();
+let attachedId: string | null = null;
+let win: BrowserWindow | null = null;
+const MAX_HISTORY = 20;
+const MAX_BUFFER = 1500;
+
+// ═══════════════════════════════════
+// Init
+// ═══════════════════════════════════
+
+export function initProcessManager(mainWindow: BrowserWindow): void {
+  win = mainWindow;
+  reconcileInterruptedRuns();
+  reconcilePendingRunApprovals();
+  hydratePersistedRuns();
+  broadcast();
+}
+
+// ═══════════════════════════════════
+// Lifecycle
+// ═══════════════════════════════════
+
+/**
+ * Register a new process when the agent loop starts.
+ * Called from the CHAT_SEND handler in main.ts.
+ */
+export function registerProcess(conversationId: string, message: string): string {
+  const id = `proc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+  const proc: InternalProcess = {
+    id,
+    conversationId,
+    status: 'running',
+    summary: message.length > 80 ? message.slice(0, 77) + '...' : message,
+    startedAt: Date.now(),
+    toolCallCount: 0,
+    isAttached: true,
+    wasDetached: false,
+    outputBuffer: [],
+  };
+
+  processes.set(id, proc);
+  createRun(id, conversationId, message);
+  appendRunEvent(id, {
+    kind: 'run_started',
+    phase: 'lifecycle',
+    payload: { conversationId, goal: message },
+  });
+  attachedId = id;
+  broadcast();
+  return id;
+}
+
+/**
+ * Mark a process as completed/failed.
+ * Called when runAgentLoop resolves or rejects.
+ */
+export function completeProcess(processId: string, status: 'completed' | 'failed' | 'cancelled', error?: string): void {
+  const proc = processes.get(processId);
+  if (!proc) {
+    completeRun(processId, status, error);
+    evictOldRuns(MAX_HISTORY);
+    return;
+  }
+  proc.status = status;
+  proc.completedAt = Date.now();
+  if (error) proc.error = error;
+  completeRun(processId, status, error);
+  appendRunEvent(processId, {
+    kind: status === 'completed' ? 'run_completed' : status === 'cancelled' ? 'run_cancelled' : 'run_failed',
+    phase: 'lifecycle',
+    payload: { error },
+  });
+
+  // If this was attached and completed, auto-detach so user isn't stuck
+  // (they might have already started a new chat)
+  if (attachedId === processId && status !== 'completed') {
+    // Keep attached on success so the response streams through
+  }
+
+  broadcast();
+  evictOld();
+
+  const dur = ((proc.completedAt - proc.startedAt) / 1000).toFixed(1);
+  console.log(`[Process] ${processId} ${status} (${proc.toolCallCount} tools, ${dur}s)`);
+}
+
+/**
+ * Increment tool call count for a running process.
+ */
+export function recordToolCall(processId: string): void {
+  const proc = processes.get(processId);
+  if (proc) proc.toolCallCount++;
+  incrementRunToolCount(processId);
+}
+
+export function setProcessStatus(
+  processId: string,
+  status: Extract<ProcessStatus, 'running' | 'awaiting_approval'>,
+  error?: string,
+): boolean {
+  const proc = processes.get(processId);
+  if (!proc) {
+    setRunStatus(processId, status, error);
+    return false;
+  }
+
+  proc.status = status;
+  if (error) proc.error = error;
+  setRunStatus(processId, status, error);
+  broadcast();
+  return true;
+}
+
+/**
+ * Detach the current process to background.
+ * Events will be buffered instead of sent to renderer.
+ * Returns the detached process ID.
+ */
+export function detachCurrent(): string | null {
+  const id = attachedId;
+  if (!id) return null;
+
+  const proc = processes.get(id);
+  if (proc) {
+    proc.isAttached = false;
+    proc.wasDetached = true;
+    setRunDetached(id, true);
+  }
+  attachedId = null;
+  appendRunEvent(id, {
+    kind: 'run_detached',
+    phase: 'lifecycle',
+    payload: {},
+  });
+
+  broadcast();
+  console.log(`[Process] Detached ${id} to background`);
+  return id;
+}
+
+/**
+ * Attach to a process — switch the renderer to show it.
+ * Returns buffered events for replay.
+ */
+export function attachTo(processId: string): { process: ProcessInfo; buffer: Array<{ type: string; data: any }> } | null {
+  const proc = processes.get(processId);
+  if (!proc) return null;
+
+  // Detach current if any
+  if (attachedId && attachedId !== processId) {
+    const current = processes.get(attachedId);
+    if (current) current.isAttached = false;
+  }
+
+  attachedId = processId;
+  proc.isAttached = true;
+  broadcast();
+  appendRunEvent(processId, {
+    kind: 'run_attached',
+    phase: 'lifecycle',
+    payload: { bufferedEventCount: proc.outputBuffer.length },
+  });
+
+  console.log(`[Process] Attached to ${processId} (${proc.outputBuffer.length} buffered events)`);
+  return { process: serialize(proc), buffer: [...proc.outputBuffer] };
+}
+
+/**
+ * Route an event from the agent loop. If the process is attached,
+ * send to renderer. Always buffer.
+ */
+export function routeEvent(processId: string, ipcChannel: string, data: any): void {
+  const proc = processes.get(processId);
+  if (!proc) return;
+
+  // Buffer (with cap)
+  proc.outputBuffer.push({ type: ipcChannel, data });
+  if (proc.outputBuffer.length > MAX_BUFFER) {
+    proc.outputBuffer = proc.outputBuffer.slice(-MAX_BUFFER + 500);
+  }
+
+  // Send to renderer if attached
+  if (processId === attachedId && win) {
+    win.webContents.send(ipcChannel, data);
+  }
+}
+
+/**
+ * Check if a process is currently attached (streaming to renderer).
+ */
+export function isAttached(processId: string): boolean {
+  return attachedId === processId;
+}
+
+/**
+ * Get the currently attached process ID.
+ */
+export function getAttachedId(): string | null {
+  return attachedId;
+}
+
+/**
+ * List all processes for the sidebar.
+ */
+export function listProcesses(): ProcessInfo[] {
+  return [...processes.values()]
+    .sort((a, b) => b.startedAt - a.startedAt)
+    .map(serialize);
+}
+
+/**
+ * Dismiss a completed process from the list.
+ */
+export function dismissProcess(processId: string): boolean {
+  const proc = processes.get(processId);
+  const persisted = getRun(processId);
+  if (
+    (!proc && !persisted) ||
+    proc?.status === 'running' ||
+    proc?.status === 'awaiting_approval' ||
+    persisted?.status === 'running' ||
+    persisted?.status === 'awaiting_approval'
+  ) return false;
+  processes.delete(processId);
+  deleteRun(processId);
+  if (attachedId === processId) attachedId = null;
+  broadcast();
+  return true;
+}
+
+/**
+ * Mark a running process as cancelled.
+ * The loop cancellation is handled separately by loop.ts.
+ */
+export function cancelProcess(processId: string): boolean {
+  const proc = processes.get(processId);
+  if (!proc || proc.status !== 'running') return false;
+
+  completeProcess(processId, 'cancelled');
+  return true;
+}
+
+/**
+ * Check if any process is currently running.
+ */
+export function hasRunningProcess(): boolean {
+  return [...processes.values()].some(p => p.status === 'running' || p.status === 'awaiting_approval');
+}
+
+// ═══════════════════════════════════
+// Internals
+// ═══════════════════════════════════
+
+function serialize(proc: InternalProcess): ProcessInfo {
+  return {
+    id: proc.id,
+    conversationId: proc.conversationId,
+    status: proc.status,
+    summary: proc.summary,
+    startedAt: proc.startedAt,
+    completedAt: proc.completedAt,
+    toolCallCount: proc.toolCallCount,
+    error: proc.error,
+    isAttached: proc.id === attachedId,
+    wasDetached: proc.wasDetached,
+  };
+}
+
+function broadcast(): void {
+  win?.webContents.send('process:list', listProcesses());
+}
+
+function evictOld(): void {
+  const done = [...processes.values()]
+    .filter(p => p.status !== 'running' && p.status !== 'awaiting_approval')
+    .sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
+  while (done.length > MAX_HISTORY) {
+    const oldest = done.pop()!;
+    processes.delete(oldest.id);
+  }
+  evictOldRuns(MAX_HISTORY);
+}
+
+function hydratePersistedRuns(): void {
+  const persisted = listRuns(MAX_HISTORY);
+  processes.clear();
+
+  for (const row of persisted) {
+    processes.set(row.id, {
+      id: row.id,
+      conversationId: row.conversation_id,
+      status: row.status,
+      summary: row.title,
+      startedAt: new Date(row.started_at).getTime(),
+      completedAt: row.completed_at ? new Date(row.completed_at).getTime() : undefined,
+      toolCallCount: row.tool_call_count,
+      error: row.error || undefined,
+      isAttached: false,
+      wasDetached: !!row.was_detached,
+      outputBuffer: [],
+    });
+  }
+}

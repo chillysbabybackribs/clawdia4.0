@@ -9,6 +9,7 @@ export default function SettingsView({ onBack }: SettingsViewProps) {
   const [keyVisible, setKeyVisible] = useState(false);
   const [saved, setSaved] = useState(false);
   const [currentModel, setCurrentModel] = useState('claude-sonnet-4-6');
+  const [unrestrictedMode, setUnrestrictedMode] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const originalKeyRef = useRef('');
 
@@ -19,12 +20,14 @@ export default function SettingsView({ onBack }: SettingsViewProps) {
     Promise.all([
       api.settings.getApiKey(),
       api.settings.getModel(),
-    ]).then(([key, model]: [string, string]) => {
+      api.settings.getUnrestrictedMode(),
+    ]).then(([key, model, unrestricted]: [string, string, boolean]) => {
       if (key) {
         setApiKey(key);
         originalKeyRef.current = key;
       }
       if (model) setCurrentModel(model);
+      setUnrestrictedMode(!!unrestricted);
       setLoaded(true);
     });
   }, []);
@@ -36,6 +39,7 @@ export default function SettingsView({ onBack }: SettingsViewProps) {
     // Always save the key (even if unchanged — it's idempotent)
     await api.settings.setApiKey(apiKey);
     await api.settings.setModel(currentModel);
+    await api.settings.setUnrestrictedMode(unrestrictedMode);
     originalKeyRef.current = apiKey;
 
     setSaved(true);
@@ -107,6 +111,24 @@ export default function SettingsView({ onBack }: SettingsViewProps) {
                 </label>
               ))}
             </div>
+          </section>
+
+          <section className="flex flex-col gap-2">
+            <label className="text-xs font-medium text-text-secondary uppercase tracking-wider">Execution Guardrails</label>
+            <label className="flex items-start gap-3 px-3 py-3 rounded-xl border border-white/[0.06] bg-white/[0.02] cursor-pointer">
+              <input
+                type="checkbox"
+                checked={unrestrictedMode}
+                onChange={(e) => setUnrestrictedMode(e.target.checked)}
+                className="mt-0.5 accent-[#ff7a00]"
+              />
+              <div className="flex flex-col gap-1">
+                <span className="text-sm text-text-primary">Unrestricted mode</span>
+                <span className="text-2xs text-text-muted">
+                  Bypass approval checkpoints entirely. Clawdia will execute sensitive actions without pausing.
+                </span>
+              </div>
+            </label>
           </section>
 
           {/* Save */}

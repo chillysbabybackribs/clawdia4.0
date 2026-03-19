@@ -1,0 +1,203 @@
+<h2>Terminal Log Panel — Layout Options</h2>
+<p class="subtitle">Where should live terminal output appear while the agent is working?</p>
+
+<style>
+.mock-chat {
+  background: #0e0e12;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.08);
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  width: 100%;
+}
+.mock-header {
+  background: #13131a;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding: 8px 14px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.35);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mock-header .dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(138,180,248,0.6); display: inline-block; animation: pulse 1.4s ease-in-out infinite; }
+.mock-messages { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.user-bubble {
+  align-self: flex-end;
+  background: rgba(138,180,248,0.85);
+  color: #fff;
+  border-radius: 14px 14px 3px 14px;
+  padding: 7px 13px;
+  font-size: 12px;
+  max-width: 75%;
+}
+.ai-text {
+  color: rgba(255,255,255,0.82);
+  font-size: 12px;
+  line-height: 1.55;
+  max-width: 88%;
+}
+.thinking-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(255,255,255,0.35);
+  font-size: 11px;
+  padding: 2px 0;
+}
+.thinking-dot { width: 5px; height: 5px; border-radius: 50%; background: rgba(138,180,248,0.7); animation: pulse 1.4s ease-in-out infinite; }
+.terminal-block {
+  background: #080a0f;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 7px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+  font-size: 10.5px;
+  padding: 8px 10px;
+  color: #8be08b;
+  line-height: 1.5;
+  overflow: hidden;
+}
+.terminal-block .cmd { color: rgba(255,255,255,0.5); margin-bottom: 3px; }
+.terminal-block .out { color: #8be08b; }
+.terminal-block .dim { color: rgba(255,255,255,0.28); }
+.status-shimmer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(138,180,248,0.55);
+  font-size: 11px;
+  padding: 3px 0;
+}
+.shimmer-dot { width: 5px; height: 5px; border-radius: 50%; background: rgba(138,180,248,0.6); animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+
+/* Layout A — Inline between thought sentences */
+.layout-a .terminal-block { margin: 5px 0; max-width: 88%; }
+
+/* Layout B — Fixed card above status bar */
+.fixed-terminal {
+  background: #080a0f;
+  border-top: 1px solid rgba(255,255,255,0.07);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 10.5px;
+  padding: 6px 14px;
+  color: #8be08b;
+  max-height: 90px;
+  overflow-y: auto;
+  line-height: 1.5;
+  flex-shrink: 0;
+}
+.fixed-terminal .cmd { color: rgba(255,255,255,0.4); }
+
+/* Layout C — Collapsible side drawer */
+.side-drawer {
+  background: #080a0f;
+  border-left: 1px solid rgba(255,255,255,0.07);
+  width: 220px;
+  flex-shrink: 0;
+  font-family: monospace;
+  font-size: 10px;
+  padding: 8px;
+  color: #8be08b;
+  overflow-y: auto;
+  max-height: 200px;
+}
+.side-drawer-header {
+  color: rgba(255,255,255,0.3);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  padding-bottom: 4px;
+}
+
+.cards { display: grid; grid-template-columns: 1fr; gap: 16px; }
+.card { cursor: pointer; border-radius: 10px; border: 1.5px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.025); padding: 14px; transition: all 0.18s; }
+.card:hover { border-color: rgba(138,180,248,0.4); background: rgba(138,180,248,0.04); }
+.card.selected { border-color: rgba(138,180,248,0.7); background: rgba(138,180,248,0.07); }
+.card-label { font-size: 11px; font-weight: 600; color: rgba(255,255,255,0.9); margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+.badge { background: rgba(138,180,248,0.15); color: rgba(138,180,248,0.9); font-size: 9px; padding: 1px 6px; border-radius: 4px; font-weight: 500; }
+.card-desc { font-size: 11px; color: rgba(255,255,255,0.45); margin-bottom: 10px; }
+</style>
+
+<div class="cards">
+
+  <!-- Option A: Inline between thoughts -->
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-label">A — Inline terminal blocks between thought sentences <span class="badge">Your description</span></div>
+    <div class="card-desc">Each shell_exec result appears as a dark code block inline in the message flow, interspersed with the LLM's narration text.</div>
+    <div class="mock-chat">
+      <div class="mock-header"><span class="dot"></span> Generating…</div>
+      <div class="mock-messages layout-a">
+        <div class="user-bubble">Use Kdenlive to create a project</div>
+        <div class="ai-text">Let me start with Phase 1: analyzing Kdenlive's CLI interface.</div>
+        <div class="terminal-block" style="max-width:88%">
+          <div class="cmd">$ kdenlive --help</div>
+          <div class="out">Usage: kdenlive [options] [files]<br>KDE Non-Linear Video Editor</div>
+        </div>
+        <div class="ai-text">Phase 1 complete. Now designing the harness structure.</div>
+        <div class="terminal-block" style="max-width:88%">
+          <div class="cmd">$ man kdenlive | head -40</div>
+          <div class="out">KDENLIVE(1)  KDE Non-Linear Video…</div>
+          <div class="dim">…</div>
+        </div>
+        <div class="thinking-line"><div class="thinking-dot"></div> Writing core modules…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Option B: Fixed terminal strip above status -->
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-label">B — Fixed terminal strip (always visible, scrollable) <span class="badge">Clean separation</span></div>
+    <div class="card-desc">A fixed-height panel docked below the message stream shows live terminal output. The chat stays clean, logs are always visible without interrupting text flow.</div>
+    <div class="mock-chat" style="display:flex;flex-direction:column;max-height:220px">
+      <div class="mock-header"><span class="dot"></span> Generating…</div>
+      <div class="mock-messages" style="flex:1;overflow:hidden">
+        <div class="user-bubble">Use Kdenlive to create a project</div>
+        <div class="ai-text">Let me start with Phase 1: analyzing Kdenlive's CLI interface. Phase 1 complete — designing harness structure now.</div>
+        <div class="status-shimmer"><div class="shimmer-dot"></div> Running shell_exec — kdenlive --help</div>
+      </div>
+      <div class="fixed-terminal">
+        <div class="cmd">$ kdenlive --help</div>
+        <div>Usage: kdenlive [options] [files]</div>
+        <div>KDE Non-Linear Video Editor</div>
+        <div class="cmd" style="margin-top:4px">$ mkdir -p ~/CLI-Anything/kdenlive/agent-harness</div>
+        <div>Directories created</div>
+        <div class="cmd" style="margin-top:4px">$ pip install -e . 2>&amp;1</div>
+        <div>Successfully installed cli-anything-kdenlive-0.1.0</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Option C: Hybrid — thought text + collapsible terminal accordion per tool call -->
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-label">C — Expandable terminal inside each tool card <span class="badge">Already exists</span></div>
+    <div class="card-desc">The current ToolActivity cards already have a scrollable output area — but they're hidden behind collapsed headers during streaming. This option just auto-expands them and shows output immediately, no new component needed.</div>
+    <div class="mock-chat">
+      <div class="mock-header"><span class="dot"></span> Generating…</div>
+      <div class="mock-messages">
+        <div class="user-bubble">Use Kdenlive to create a project</div>
+        <div class="ai-text">Phase 1: analyzing Kdenlive…</div>
+        <div style="border:1px solid rgba(255,255,255,0.08);border-radius:7px;overflow:hidden;max-width:88%">
+          <div style="background:#13131a;padding:6px 10px;font-size:11px;color:rgba(255,255,255,0.6);display:flex;align-items:center;gap:6px">
+            <div class="shimmer-dot"></div> Ran command: kdenlive --help
+          </div>
+          <div class="terminal-block" style="border-radius:0;border:none;margin:0">
+            <div class="out">Usage: kdenlive [options] [files]<br>KDE Non-Linear Video Editor<br>…</div>
+          </div>
+        </div>
+        <div style="border:1px solid rgba(255,255,255,0.08);border-radius:7px;overflow:hidden;max-width:88%">
+          <div style="background:#13131a;padding:6px 10px;font-size:11px;color:rgba(255,255,255,0.6);display:flex;align-items:center;gap:6px">
+            <div class="thinking-dot"></div> Wrote file: __init__.py <span style="font-size:10px;color:rgba(255,255,255,0.3)">(running)</span>
+          </div>
+          <div class="terminal-block" style="border-radius:0;border:none;margin:0">
+            <div class="out">[Written 83 bytes to /home/dp/CLI-Anything/…]</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>

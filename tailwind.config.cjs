@@ -13,10 +13,10 @@ module.exports = {
           5: '#2e2e36',
         },
         text: {
-          primary: '#d8d8dc',
-          secondary: '#6b6b78',
-          tertiary: '#4a4a56',
-          muted: '#3a3a44',
+          primary: '#e4e4e8',
+          secondary: '#8e8e9a',
+          tertiary: '#5e5e6a',
+          muted: '#46464f',
         },
         accent: {
           DEFAULT: '#4f8ff7',

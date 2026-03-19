@@ -46,7 +46,7 @@ export interface BrowserTab {
 export interface ProcessInfo {
   id: string;
   conversationId: string;
-  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  status: 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled';
   summary: string;
   startedAt: number;
   completedAt?: number;
@@ -56,7 +56,7 @@ export interface ProcessInfo {
   wasDetached: boolean;
 }
 
-export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
+export type RunStatus = 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled';
 
 export interface RunSummary {
   id: string;
@@ -92,6 +92,18 @@ export interface RunChange {
   summary: string;
   diffText?: string;
   createdAt: string;
+}
+
+export interface RunApproval {
+  id: number;
+  runId: string;
+  status: 'pending' | 'approved' | 'denied';
+  actionType: string;
+  target: string;
+  summary: string;
+  request: Record<string, any>;
+  createdAt: string;
+  resolvedAt?: string;
 }
 
 export interface ChatSendResult {

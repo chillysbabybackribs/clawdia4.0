@@ -59,7 +59,7 @@ export default function TerminalLogStrip({ lines, isStreaming: _ }: TerminalLogS
       >
         <span style={{
           fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-          fontSize: '10.5px',
+          fontSize: '12px',
           color: 'rgba(255,255,255,0.32)',
           display: 'flex',
           alignItems: 'center',
@@ -88,7 +88,7 @@ export default function TerminalLogStrip({ lines, isStreaming: _ }: TerminalLogS
           ref={scrollRef}
           style={{
             fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-            fontSize: '10.5px',
+            fontSize: '12px',
             lineHeight: '1.55',
             padding: '0 14px 8px',
             borderTop: '1px solid rgba(255,255,255,0.04)',

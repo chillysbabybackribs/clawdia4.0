@@ -28,6 +28,25 @@ interface ClawdiaAPI {
     setApiKey: (key: string) => Promise<any>;
     getModel: () => Promise<string>;
     setModel: (model: string) => Promise<any>;
+    getUnrestrictedMode: () => Promise<boolean>;
+    setUnrestrictedMode: (enabled: boolean) => Promise<any>;
+  };
+  process: {
+    list: () => Promise<any>;
+    detach: () => Promise<any>;
+    attach: (processId: string) => Promise<any>;
+    cancel: (processId: string) => Promise<any>;
+    dismiss: (processId: string) => Promise<any>;
+    onListChanged: (cb: (processes: any[]) => void) => () => void;
+  };
+  run: {
+    list: () => Promise<any>;
+    get: (runId: string) => Promise<any>;
+    events: (runId: string) => Promise<any>;
+    changes: (runId: string) => Promise<any>;
+    approvals: (runId: string) => Promise<any>;
+    approve: (approvalId: number) => Promise<any>;
+    deny: (approvalId: number) => Promise<any>;
   };
   window: {
     minimize: () => Promise<void>;

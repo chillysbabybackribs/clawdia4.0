@@ -20,7 +20,7 @@ function Clock() {
     const interval = setInterval(() => setTime(fmt()), 30_000);
     return () => clearInterval(interval);
   }, []);
-  return <span className="text-[12px] text-text-secondary tabular-nums">{time}</span>;
+  return <span className="text-[13px] text-text-secondary tabular-nums">{time}</span>;
 }
 
 /** Copy button with checkmark feedback */
@@ -111,7 +111,7 @@ function AssistantMessage({ message, streamMap }: { message: Message; streamMap?
           )}
           {!message.isStreaming && message.content && (
             <div className="flex items-center gap-2 mt-1">
-              <span className="text-[10px] text-text-secondary/70">{message.timestamp}</span>
+              <span className="text-[11px] text-text-secondary/70">{message.timestamp}</span>
               <CopyButton text={message.content} />
             </div>
           )}
@@ -131,7 +131,7 @@ function AssistantMessage({ message, streamMap }: { message: Message; streamMap?
         {hasContent && <MarkdownRenderer content={message.content} isStreaming={false} />}
         {hasContent && (
           <div className="flex items-center gap-2 mt-2">
-            <span className="text-[10px] text-text-secondary/70">{message.timestamp}</span>
+            <span className="text-[11px] text-text-secondary/70">{message.timestamp}</span>
             <CopyButton text={message.content} />
           </div>
         )}
@@ -144,9 +144,9 @@ function UserMessage({ message }: { message: Message }) {
   return (
     <div className="flex flex-col items-end gap-1 animate-slide-up">
       <div className="max-w-[85%] rounded-2xl rounded-br-md px-4 py-2.5 bg-accent/90 text-white">
-        <div className="text-[0.9rem] leading-relaxed whitespace-pre-wrap">{message.content}</div>
+        <div className="text-[1rem] leading-relaxed whitespace-pre-wrap">{message.content}</div>
       </div>
-      <span className="text-[10px] text-text-secondary/70 mr-1">{message.timestamp}</span>
+      <span className="text-[11px] text-text-secondary/70 mr-1">{message.timestamp}</span>
     </div>
   );
 }
@@ -453,7 +453,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
             <div className="flex items-center justify-center h-[60vh] text-text-muted">
               <div className="flex flex-col items-center gap-3">
                 <div className="opacity-[0.12]"><svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="0.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg></div>
-                <span className="text-[13px] text-text-secondary/50">Ask Clawdia anything</span>
+                <span className="text-[14px] text-text-secondary/50">Ask Clawdia anything</span>
               </div>
             </div>
           )}

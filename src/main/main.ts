@@ -11,16 +11,27 @@ import {
   detachCurrent, attachTo, cancelProcess as cancelProc, dismissProcess,
   listProcesses, getAttachedId, recordToolCall,
 } from './agent/process-manager';
+import { approveRunApproval, denyRunApproval, listApprovalsForRun } from './agent/approval-manager';
 import { resetGuiStateForNewConversation } from './agent/executors/desktop-executors';
 import { destroyShell } from './agent/executors/core-executors';
 import { extractMemoryInBackground } from './agent/memory-extractor';
-import { getApiKey, setApiKey, getSelectedModel, setSelectedModel } from './store';
+import {
+  getApiKey,
+  setApiKey,
+  getSelectedModel,
+  setSelectedModel,
+  getUnrestrictedMode,
+  setUnrestrictedMode,
+} from './store';
 import { getDb, closeDb } from './db/database';
 import {
   createConversation, listConversations, getConversation,
   deleteConversation, addMessage, getAnthropicHistory,
   getRendererMessages, getMessageCount,
 } from './db/conversations';
+import { getRunRecord, listRunRecords } from './db/runs';
+import { getRunEventRecords } from './db/run-events';
+import { listRunChanges } from './db/run-changes';
 import {
   initBrowser, navigate, goBack, goForward, reload,
   setBounds, closeBrowser,
@@ -107,6 +118,7 @@ function setupIpcHandlers(): void {
 
     try {
       const result = await runAgentLoop(message, history, {
+        runId: processId,
         apiKey,
         model: getSelectedModel(),
         onStreamText: (chunk) => routeEvent(processId, IPC_EVENTS.CHAT_STREAM_TEXT, chunk),
@@ -129,11 +141,17 @@ function setupIpcHandlers(): void {
         extractMemoryInBackground(apiKey, message, result.response);
       }
 
-      return { ok: true, response: result.response, toolCalls: result.toolCalls, conversationId: activeConversationId };
+      return {
+        ok: true,
+        runId: processId,
+        response: result.response,
+        toolCalls: result.toolCalls,
+        conversationId: activeConversationId,
+      };
     } catch (err: any) {
       completeProcess(processId, 'failed', err.message);
       console.error('[Main] Agent loop error:', err);
-      return { error: err.message || 'Unknown error' };
+      return { error: err.message || 'Unknown error', runId: processId };
     }
   });
 
@@ -181,10 +199,15 @@ function setupIpcHandlers(): void {
   ipcMain.handle(IPC.API_KEY_SET, async (_e, key: string) => { setApiKey(key); return { ok: true }; });
   ipcMain.handle(IPC.MODEL_GET, async () => getSelectedModel());
   ipcMain.handle(IPC.MODEL_SET, async (_e, model: string) => { setSelectedModel(model); return { ok: true }; });
-  ipcMain.handle(IPC.SETTINGS_GET, async (_e, key: string) => key === 'apiKey' ? (getApiKey() ? 'set' : '') : null);
+  ipcMain.handle(IPC.SETTINGS_GET, async (_e, key: string) => {
+    if (key === 'apiKey') return getApiKey() ? 'set' : '';
+    if (key === 'unrestrictedMode') return getUnrestrictedMode();
+    return null;
+  });
   ipcMain.handle(IPC.SETTINGS_SET, async (_e, key: string, value: any) => {
     if (key === 'apiKey') setApiKey(value);
     if (key === 'model') setSelectedModel(value);
+    if (key === 'unrestrictedMode') setUnrestrictedMode(!!value);
     return { ok: true };
   });
 
@@ -248,6 +271,29 @@ function setupIpcHandlers(): void {
   });
   ipcMain.handle(IPC.PROCESS_DISMISS, async (_e, processId: string) => {
     return { ok: dismissProcess(processId) };
+  });
+
+  // ── Runs (Phase 3 read-only review surface) ──
+  ipcMain.handle(IPC.RUN_LIST, async () => listRunRecords());
+  ipcMain.handle(IPC.RUN_GET, async (_e, runId: string) => {
+    return getRunRecord(runId);
+  });
+  ipcMain.handle(IPC.RUN_EVENTS, async (_e, runId: string) => {
+    return getRunEventRecords(runId);
+  });
+  ipcMain.handle(IPC.RUN_CHANGES, async (_e, runId: string) => {
+    return listRunChanges(runId);
+  });
+  ipcMain.handle(IPC.RUN_APPROVALS, async (_e, runId: string) => {
+    return listApprovalsForRun(runId);
+  });
+  ipcMain.handle(IPC.RUN_APPROVE, async (_e, approvalId: number) => {
+    const approval = approveRunApproval(approvalId);
+    return { ok: !!approval, approval };
+  });
+  ipcMain.handle(IPC.RUN_DENY, async (_e, approvalId: number) => {
+    const approval = denyRunApproval(approvalId);
+    return { ok: !!approval, approval };
   });
 
   // ── Browser URL autocomplete ──
