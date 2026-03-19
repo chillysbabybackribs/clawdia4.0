@@ -42,19 +42,28 @@ export async function installApp(
   appId: string,
   onProgress: (text: string) => void,
 ): Promise<boolean> {
+  // Sanitise appId — only allow lowercase alphanumeric and hyphens
+  const safeId = appId.toLowerCase().replace(/[^a-z0-9-]/g, '');
+  if (!safeId) {
+    onProgress(`[Install] Invalid app identifier: ${appId}`);
+    return false;
+  }
+
   // Already installed — fast path
-  if (await binaryOnPath(appId)) return true;
+  if (await binaryOnPath(safeId)) return true;
 
   // 1. Try flatpak --user (no auth needed)
   if (await hasBin('flatpak')) {
     onProgress(`Installing ${appId} via flatpak (user install, no password needed)...`);
     try {
       await execAsync(
-        `flatpak install --user -y flathub ${appId} 2>&1`,
+        `flatpak install --user -y flathub ${safeId} 2>&1`,
         { timeout: INSTALL_TIMEOUT },
       );
-      // Flatpak binaries may not be on PATH directly — check both
-      if (await binaryOnPath(appId) || await binaryOnPath(`flatpak`)) {
+      // Check if flatpak app is now available
+      const { stdout: listOut } = await execAsync(`flatpak list --app --columns=name 2>/dev/null`, { timeout: 5000 });
+      const isListed = listOut.toLowerCase().includes(safeId.toLowerCase());
+      if (isListed || await binaryOnPath(safeId)) {
         onProgress(`✓ Installed ${appId} via flatpak.`);
         return true;
       }
@@ -63,20 +72,20 @@ export async function installApp(
     }
   }
 
-  // 2. Try pkexec apt (GUI password dialog)
-  if (await hasBin('pkexec') && await hasBin('apt')) {
+  // 2. Try pkexec apt-get (GUI password dialog)
+  if (await hasBin('pkexec') && await hasBin('apt-get')) {
     onProgress(`Installing ${appId} via apt (a password dialog will appear)...`);
     try {
       await execAsync(
-        `pkexec apt install -y ${appId} 2>&1`,
+        `DEBIAN_FRONTEND=noninteractive pkexec apt-get install -y ${safeId} 2>&1`,
         { timeout: INSTALL_TIMEOUT },
       );
-      if (await binaryOnPath(appId)) {
+      if (await binaryOnPath(safeId)) {
         onProgress(`✓ Installed ${appId} via apt.`);
         return true;
       }
     } catch (e: any) {
-      console.log(`[Install] pkexec apt failed for ${appId}: ${e.message?.slice(0, 100)}`);
+      console.log(`[Install] pkexec apt-get failed for ${appId}: ${e.message?.slice(0, 100)}`);
     }
   }
 
@@ -85,10 +94,10 @@ export async function installApp(
     onProgress(`Installing ${appId} via snap (a password dialog will appear)...`);
     try {
       await execAsync(
-        `pkexec snap install ${appId} 2>&1`,
+        `pkexec snap install ${safeId} 2>&1`,
         { timeout: INSTALL_TIMEOUT },
       );
-      if (await binaryOnPath(appId)) {
+      if (await binaryOnPath(safeId)) {
         onProgress(`✓ Installed ${appId} via snap.`);
         return true;
       }
@@ -100,9 +109,9 @@ export async function installApp(
   // All methods failed
   onProgress(
     `Could not install ${appId} automatically. Please run one of:\n` +
-    `  sudo apt install ${appId}\n` +
-    `  sudo snap install ${appId}\n` +
-    `  flatpak install flathub ${appId}\n` +
+    `  sudo apt-get install ${safeId}\n` +
+    `  sudo snap install ${safeId}\n` +
+    `  flatpak install flathub ${safeId}\n` +
     `Then try your request again.`,
   );
   return false;

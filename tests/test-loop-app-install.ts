@@ -1,4 +1,5 @@
-// Tests for installApp() — uses mocked execAsync so no real installs happen
+// Integration smoke tests for installApp() — makes real system calls.
+// testUnknownApp may take 15-30s as it exhausts all install strategies.
 import { installApp } from '../src/main/agent/loop-app-install';
 
 // Minimal smoke test: already-installed binary returns true immediately
@@ -14,10 +15,10 @@ async function testAlreadyInstalled() {
 
 async function testUnknownApp() {
   const progress: string[] = [];
-  // '__nonexistent_app_xyz__' will never be installed
-  const result = await installApp('__nonexistent_app_xyz__', (msg) => progress.push(msg));
+  // 'zzz-nonexistent-app-xyz' will never be installed
+  const result = await installApp('zzz-nonexistent-app-xyz', (msg) => progress.push(msg));
   if (result) throw new Error('Expected false for unknown app');
-  if (!progress.some(m => m.includes('__nonexistent_app_xyz__'))) {
+  if (!progress.some(m => m.includes('zzz-nonexistent-app-xyz'))) {
     throw new Error('Expected narration mentioning app name');
   }
   console.log('✓ unknown app returns false with narration');
