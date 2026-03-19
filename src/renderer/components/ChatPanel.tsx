@@ -76,13 +76,22 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function AssistantMessage({ message, streamMap }: { message: Message; streamMap?: ToolStreamMap }) {
+function AssistantMessage({ message, streamMap, onRateTool }: { message: Message; streamMap?: ToolStreamMap; onRateTool?: (messageId: string, toolId: string, rating: 'up' | 'down' | null, note?: string) => void }) {
+  const handleRate = useCallback((toolId: string, rating: 'up' | 'down' | null, note?: string) => {
+    onRateTool?.(message.id, toolId, rating, note);
+  }, [message.id, onRateTool]);
+
   return (
     <div className="flex justify-start animate-slide-up group">
       <div className="max-w-[92%] px-1 py-2 text-text-primary">
         {message.toolCalls && message.toolCalls.length > 0 && (
           <div className="mb-2">
-            <ToolActivity tools={message.toolCalls} streamMap={streamMap} />
+            <ToolActivity
+              tools={message.toolCalls}
+              streamMap={streamMap}
+              messageId={message.id}
+              onRateTool={handleRate}
+            />
           </div>
         )}
         <MarkdownRenderer content={message.content} isStreaming={message.isStreaming} />
@@ -111,6 +120,7 @@ function UserMessage({ message }: { message: Message }) {
 export default function ChatPanel({ browserVisible, onToggleBrowser, loadConversationId }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [statusText, setStatusText] = useState('');
   // toolId → accumulated stdout/stderr lines for the live stream panel
   const [streamMap, setStreamMap] = useState<ToolStreamMap>({});
@@ -304,8 +314,57 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, loadConvers
   const handleStop = useCallback(() => {
     (window as any).clawdia?.chat.stop();
     setIsStreaming(false);
+    setIsPaused(false);
     setStatusText('');
   }, []);
+
+  const handlePause = useCallback(() => {
+    (window as any).clawdia?.chat.pause();
+    setIsPaused(true);
+    setStatusText('Paused — type to add context, or resume');
+  }, []);
+
+  const handleResume = useCallback(() => {
+    (window as any).clawdia?.chat.resume();
+    setIsPaused(false);
+    setStatusText('Resuming...');
+  }, []);
+
+  const handleRateTool = useCallback((messageId: string, toolId: string, rating: 'up' | 'down' | null, note?: string) => {
+    const api = (window as any).clawdia;
+    if (!api) return;
+    // Update local state immediately for responsive UI
+    setMessages(prev => prev.map(m => {
+      if (m.id !== messageId || !m.toolCalls) return m;
+      return {
+        ...m,
+        toolCalls: m.toolCalls.map(tc => {
+          if (tc.id !== toolId) return tc;
+          const updated = { ...tc, rating };
+          if (note !== undefined) updated.ratingNote = note;
+          if (rating === null) { updated.rating = null; updated.ratingNote = undefined; }
+          if (rating === 'up') { updated.ratingNote = undefined; }
+          return updated;
+        }),
+      };
+    }));
+    // Persist to database
+    api.chat.rateTool(messageId, toolId, rating, note);
+  }, []);
+
+  const handleAddContext = useCallback((text: string) => {
+    (window as any).clawdia?.chat.addContext(text);
+    // Show it in the chat as a visual indicator
+    const contextMsg: Message = {
+      id: `context-${Date.now()}`,
+      role: 'user',
+      content: `💬 ${text}`,
+      timestamp: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+    };
+    setMessages(prev => [...prev, contextMsg]);
+    setStatusText('Context added — will be used in next iteration');
+    requestAnimationFrame(() => scrollToBottom('smooth'));
+  }, [scrollToBottom]);
 
   return (
     <div className="flex flex-col h-full">
@@ -335,7 +394,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, loadConvers
           )}
           {messages.map(msg =>
             msg.role === 'assistant'
-              ? <AssistantMessage key={msg.id} message={msg} streamMap={msg.isStreaming ? streamMap : undefined} />
+              ? <AssistantMessage key={msg.id} message={msg} streamMap={msg.isStreaming ? streamMap : undefined} onRateTool={handleRateTool} />
               : <UserMessage key={msg.id} message={msg} />
           )}
           {isStreaming && <StatusLine text={statusText} />}
@@ -343,7 +402,15 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, loadConvers
         </div>
       </div>
 
-      <InputBar onSend={handleSend} isStreaming={isStreaming} onStop={handleStop} />
+      <InputBar
+        onSend={handleSend}
+        isStreaming={isStreaming}
+        isPaused={isPaused}
+        onStop={handleStop}
+        onPause={handlePause}
+        onResume={handleResume}
+        onAddContext={handleAddContext}
+      />
     </div>
   );
 }

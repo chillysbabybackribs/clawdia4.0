@@ -20,7 +20,7 @@ const BROWSER_RE = /https?:\/\/|search\b|look\s?up|google|browse|find online|nav
 
 const RESEARCH_RE = /compare|vs\b|best\b|recommend|analyze|report|pricing/i;
 
-const FILESYSTEM_RE = /(read|write|edit|create|delete|move|copy|rename).*file|src\/|\.(ts|tsx|js|jsx|py|rs|go|java|cpp|c|h)\b|package\.json|Cargo\.toml|refactor|debug\b|implement|fix.*bug|build\b|compile|npm |pip |cargo |git |\bls |\bcd |\bcat |\bgrep |\bfind |\bmkdir |\brm |\bchmod |\bsudo /i;
+const FILESYSTEM_RE = /(read|write|edit|create|delete|move|copy|rename|save).*file|save.*(to|as|in|on).*(\/|~\/|desktop|documents)|src\/|\.(ts|tsx|js|jsx|py|rs|go|java|cpp|c|h|md|txt|json|yaml|yml|toml|sh|cfg|conf)\b|package\.json|Cargo\.toml|refactor|debug\b|implement|fix.*bug|build\b|compile|npm |pip |cargo |git |\bls |\bcd |\bcat |\bgrep |\bfind |\bmkdir |\brm |\bchmod |\bsudo /i;
 
 const DOCUMENT_RE = /document|report|spreadsheet|pdf\b|docx|xlsx|csv\b|slides|presentation|write.*memo|write.*letter/i;
 
@@ -60,7 +60,8 @@ export function classify(message: string): TaskProfile {
     .filter(Boolean).length;
 
   // Rule 6: Multi-domain → full
-  if (trimmed.length > 200 && domainMatches >= 2) {
+  // Two+ domain signals = cross-domain task, regardless of message length
+  if (domainMatches >= 2) {
     return { toolGroup: 'full', promptModules: modules, model: 'sonnet', isGreeting: false };
   }
 

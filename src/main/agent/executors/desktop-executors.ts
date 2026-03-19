@@ -60,6 +60,7 @@ import {
   type ControlSurface,
   recordFallback,
 } from '../../db/app-registry';
+import { getDb } from '../../db/database';
 
 const execAsync = promisify(exec);
 const TIMEOUT = 30_000;
@@ -246,13 +247,10 @@ async function smartFocus(winName: string): Promise<{ focused: boolean; skipped:
 
   recordFocus(guiState, winName, '');
 
-  // ── Phase 2: Load persisted coordinates from cross-session cache ──
+  // ── Load persisted coordinates from cross-session cache ──
   const app = guiState.focusedWindow?.app || 'unknown';
   if (app !== 'unknown') {
     try {
-      const db = (await import('../../db/coordinate-cache')).getCachedTargetsSummary;
-      // Load rows directly for in-memory population
-      const { getDb } = await import('../../db/database');
       const rows = getDb().prepare(`
         SELECT element, x, y, confidence FROM coordinate_cache
         WHERE app = ? AND window_key = ?
@@ -427,6 +425,122 @@ This app is not in the registry and is not installed. Try:
 }
 
 // ═══════════════════════════════════
+// Conditional Post-Click Verification
+//
+// Runs OCR after high-risk clicks to give the LLM post-action state.
+// "High-risk" means: the click likely changed UI state (opened a
+// menu, triggered a dialog, submitted a form, navigated). Low-risk
+// repetitive clicks (e.g. color picking, canvas drawing) skip this.
+// ═══════════════════════════════════
+
+/** Labels whose clicks are likely to change window/dialog state. */
+const HIGH_RISK_LABEL_RE = /\b(menu|file|edit|view|image|layer|filters?|tools?|windows?|help|save|export|open|new|import|ok|cancel|apply|close|yes|no|delete|confirm|submit|accept|create|next|back|finish|preferences|settings|dialog|print|undo|redo)\b/i;
+
+/** Keyboard shortcuts that are likely to open dialogs or menus. */
+const HIGH_RISK_KEY_RE = /^(ctrl\+[nospeqwz]|alt\+f|ctrl\+shift\+[es]|F[0-9]+|Return|Escape)$/i;
+
+/**
+ * Decide whether a click or key action warrants post-action OCR verification.
+ *
+ * Triggers on:
+ *   1. Click lands on a known target whose label matches a state-change pattern
+ *   2. Confidence is low (< 0.5) — early in the interaction, we need feedback
+ *   3. The LLM explicitly requested verification via input.verify = true
+ *   4. Key combo that likely opens a dialog/menu (Ctrl+N, Ctrl+S, Alt+F, etc.)
+ *
+ * Skips when:
+ *   - tesseract is not installed
+ *   - the click has no named target and confidence is high (canvas/drawing clicks)
+ *   - the LLM explicitly set verify = false
+ */
+function shouldVerifyAction(
+  action: string,
+  input: Record<string, any>,
+  x?: number,
+  y?: number,
+): boolean {
+  // Explicit LLM opt-in/opt-out
+  if (input.verify === true) return true;
+  if (input.verify === false) return false;
+
+  if (action === 'key' && input.text) {
+    return HIGH_RISK_KEY_RE.test(input.text);
+  }
+
+  if (action !== 'click') return false;
+  if (x == null || y == null) return false;
+
+  // Low confidence — we need to see what happened
+  if (guiState.confidence < 0.5) return true;
+
+  // Check if the click targeted a named element with a risky label
+  const hitTarget = Object.entries(guiState.knownTargets)
+    .find(([, t]) => t.x === x && t.y === y);
+  if (hitTarget) {
+    const [label] = hitTarget;
+    if (HIGH_RISK_LABEL_RE.test(label)) return true;
+  }
+
+  // For clicks at coordinates near the top of the window (menu bar area, y < 80),
+  // assume menu interaction — these almost always change state
+  if (y < 80) return true;
+
+  return false;
+}
+
+/**
+ * Run a lightweight post-action OCR check.
+ * Returns a compact state summary string to append to the action result,
+ * or empty string if OCR is unavailable or fails.
+ * Updates guiState with any newly discovered targets.
+ */
+async function postActionVerify(windowTitle?: string): Promise<string> {
+  if (!await cmdExists('tesseract') || !await cmdExists('scrot')) return '';
+
+  const filename = `/tmp/clawdia-verify-${Date.now()}.png`;
+  const captureWindow = windowTitle || guiState.focusedWindow?.title;
+
+  if (captureWindow) {
+    // Focused window capture is faster and cleaner than full screen
+    await wait(300); // Brief settle time after the click
+    await run(`scrot -u ${filename}`);
+  } else {
+    await wait(300);
+    await run(`scrot ${filename}`);
+  }
+
+  const analysis = await runScreenshotAnalyzer(filename, { title: captureWindow || '' });
+  if (!analysis) return '';
+
+  // Cache any new targets discovered
+  for (const t of analysis.targets) {
+    cacheTarget(guiState, t.label, t.x, t.y);
+    if (guiState.activeApp && captureWindow) {
+      storeCoordinate(guiState.activeApp, captureWindow, t.label, t.x, t.y, guiState.confidence);
+    }
+  }
+
+  recordScreenshot(guiState);
+  console.log(`[Desktop] Post-action verify: ${analysis.targets.length} targets, dialog=${analysis.summary.includes('DIALOG')}`);
+
+  // Return compact summary (not the full OCR text — keep it concise)
+  const lines: string[] = ['[Post-action state]'];
+  if (analysis.summary.includes('DIALOG')) {
+    // Dialog detected — include full dialog info, this is critical
+    const dialogLines = analysis.summary.split('\n').filter(l => l.includes('DIALOG') || l.includes('Dialog'));
+    lines.push(...dialogLines);
+  }
+  if (analysis.targets.length > 0) {
+    lines.push(`Visible targets: ${analysis.targets.map(t => `"${t.label}"`).slice(0, 8).join(', ')}`);
+  }
+  // Include window title if it changed (menu opened, dialog appeared)
+  const windowLine = analysis.summary.split('\n').find(l => l.startsWith('Window:'));
+  if (windowLine) lines.push(windowLine);
+
+  return lines.join('\n');
+}
+
+// ═══════════════════════════════════
 // GUI Automation — gui_interact (State-Aware)
 // ═══════════════════════════════════
 
@@ -492,7 +606,12 @@ async function execSingleAction(input: Record<string, any>, batchWindow?: string
           storeCoordinate(guiState.activeApp, effectiveWindow, hitTarget[0], x, y, guiState.confidence);
         }
       }
-      return `Clicked (${x}, ${y})`;
+      // Conditional post-click verification for high-risk actions
+      let verifyBlock = '';
+      if (shouldVerifyAction('click', input, x, y)) {
+        verifyBlock = await postActionVerify(effectiveWindow);
+      }
+      return `Clicked (${x}, ${y})${verifyBlock ? '\n' + verifyBlock : ''}`;
     }
 
     case 'type': {
@@ -518,7 +637,12 @@ async function execSingleAction(input: Record<string, any>, batchWindow?: string
       if (delayMs) await wait(delayMs);
       await run(`xdotool key ${text}`);
       recordSuccess(guiState, 'key', text);
-      return `Key: ${text}`;
+      // Conditional verification for high-risk shortcuts (Ctrl+N, Ctrl+S, etc.)
+      let keyVerifyBlock = '';
+      if (shouldVerifyAction('key', input)) {
+        keyVerifyBlock = await postActionVerify(effectiveWindow);
+      }
+      return `Key: ${text}${keyVerifyBlock ? '\n' + keyVerifyBlock : ''}`;
     }
 
     case 'screenshot': {
@@ -643,6 +767,251 @@ async function execSingleAction(input: Record<string, any>, batchWindow?: string
       return `[Screenshot: ${filename}]\n\n${analysis.summary}`;
     }
 
+    // ═══════════════════════════════════
+    // GUI Macros — High-level composite actions
+    //
+    // Each macro composes existing primitives (focus, key, type, wait, click)
+    // into a single action for common multi-step workflows.
+    // They reduce tool-call count and eliminate repeated low-level reasoning.
+    // ═══════════════════════════════════
+
+    case 'launch_and_focus': {
+      // Launch an app, wait for it to appear, focus its window, and capture initial state.
+      // Replaces: shell_exec("setsid app &") + wait + gui_interact(focus) + gui_interact(analyze_screenshot)
+      const appBinary = input.app || text;
+      if (!appBinary) return '[Error] launch_and_focus requires "app" (binary name) or "text".';
+      const windowMatch = effectiveWindow || appBinary;
+
+      // Launch in background
+      await run(`setsid ${appBinary} >/dev/null 2>&1 &`);
+      console.log(`[Macro] launch_and_focus: launched "${appBinary}", waiting for window...`);
+
+      // Wait for window to appear (poll wmctrl up to 10s)
+      const launchStart = Date.now();
+      let found = false;
+      while (Date.now() - launchStart < 10_000) {
+        await wait(500);
+        const windows = await run('wmctrl -l 2>/dev/null');
+        if (new RegExp(windowMatch, 'i').test(windows)) { found = true; break; }
+      }
+      if (!found) {
+        return `[Macro] Launched "${appBinary}" but no window matching "${windowMatch}" appeared within 10s. Use list_windows to check.`;
+      }
+
+      // Focus the window
+      await smartFocus(windowMatch);
+      await wait(500); // Extra settle time for fresh launch
+
+      // Capture initial state via OCR
+      let ocrResult = '';
+      if (await cmdExists('tesseract') && await cmdExists('scrot')) {
+        const filename = `/tmp/clawdia-launch-${Date.now()}.png`;
+        await run(`scrot -u ${filename}`);
+        recordScreenshot(guiState);
+        const analysis = await runScreenshotAnalyzer(filename, { title: windowMatch });
+        if (analysis) {
+          for (const t of analysis.targets) {
+            cacheTarget(guiState, t.label, t.x, t.y);
+            if (guiState.activeApp) {
+              storeCoordinate(guiState.activeApp, windowMatch, t.label, t.x, t.y, guiState.confidence);
+            }
+          }
+          ocrResult = `\n\n${analysis.summary}`;
+        }
+      }
+
+      recordSuccess(guiState, 'launch_and_focus', appBinary);
+      return `[Macro] Launched and focused "${appBinary}" → "${windowMatch}"${ocrResult}`;
+    }
+
+    case 'open_menu_path': {
+      // Navigate a menu hierarchy using keyboard (Alt+key → arrow keys → Enter).
+      // input.path: array of menu labels, e.g. ["File", "Export As"] or "File > Export As"
+      // More reliable than coordinate clicking on menus.
+      let menuPath: string[];
+      if (Array.isArray(input.path)) {
+        menuPath = input.path;
+      } else if (typeof input.path === 'string') {
+        menuPath = input.path.split(/\s*>\s*/);
+      } else if (text) {
+        menuPath = text.split(/\s*>\s*/);
+      } else {
+        return '[Error] open_menu_path requires "path" as array ["File","Export As"] or string "File > Export As".';
+      }
+      if (menuPath.length === 0) return '[Error] Menu path is empty.';
+
+      if (effectiveWindow) {
+        const { skipped } = await smartFocus(effectiveWindow);
+        if (!skipped) await wait(100);
+      }
+
+      // Open the first menu via Alt+first-letter (standard GTK/Qt convention)
+      const firstMenu = menuPath[0].trim();
+      const firstLetter = firstMenu[0].toLowerCase();
+      await run(`xdotool key alt+${firstLetter}`);
+      await wait(300);
+
+      // Navigate to each subsequent submenu item by typing its first letters
+      // and pressing Enter/Right to open submenus
+      for (let i = 1; i < menuPath.length; i++) {
+        const item = menuPath[i].trim();
+        // Type the item name for menu search (GTK menus support type-ahead)
+        for (const char of item.slice(0, 5)) {
+          await run(`xdotool key ${char.toLowerCase()}`);
+          await wait(50);
+        }
+        await wait(200);
+        if (i < menuPath.length - 1) {
+          // Submenu — press Right to open it
+          await run('xdotool key Right');
+          await wait(200);
+        } else {
+          // Final item — press Enter to activate
+          await run('xdotool key Return');
+          await wait(300);
+        }
+      }
+
+      // Post-action verification to see what opened
+      const verifyResult = await postActionVerify(effectiveWindow);
+      recordSuccess(guiState, 'open_menu_path', menuPath.join(' > '));
+      return `[Macro] Menu: ${menuPath.join(' > ')}${verifyResult ? '\n' + verifyResult : ''}`;
+    }
+
+    case 'fill_dialog': {
+      // Fill multiple fields in a dialog by tabbing through them, then confirm.
+      // input.fields: array of {value: string} in tab order, or [{label, value}]
+      // input.confirm: boolean (default true) — press Enter after filling
+      const fields = input.fields as Array<{ value: string; label?: string }>;
+      if (!fields || !Array.isArray(fields) || fields.length === 0) {
+        return '[Error] fill_dialog requires "fields" array with {value} objects in tab order.';
+      }
+
+      if (effectiveWindow) {
+        const { skipped } = await smartFocus(effectiveWindow);
+        if (!skipped) await wait(100);
+      }
+
+      const results: string[] = [];
+      for (let i = 0; i < fields.length; i++) {
+        const field = fields[i];
+        if (i > 0) {
+          // Tab to next field
+          await run('xdotool key Tab');
+          await wait(100);
+        }
+        // Select all existing text in the field and replace it
+        await run('xdotool key ctrl+a');
+        await wait(50);
+        // Type the new value
+        const value = String(field.value);
+        await run(`xdotool type --delay 10 -- "${value.replace(/"/g, '\\"')}"`);
+        results.push(`Field ${i + 1}${field.label ? ` (${field.label})` : ''}: "${value.slice(0, 40)}"`);
+        await wait(100);
+      }
+
+      // Confirm dialog unless explicitly disabled
+      const shouldConfirm = input.confirm !== false;
+      if (shouldConfirm) {
+        await wait(200);
+        await run('xdotool key Return');
+        await wait(300);
+        results.push('→ Confirmed (Enter)');
+      }
+
+      recordSuccess(guiState, 'fill_dialog', `${fields.length} fields`);
+      const verifyResult = shouldConfirm ? await postActionVerify(effectiveWindow) : '';
+      return `[Macro] Filled dialog (${fields.length} fields):\n${results.join('\n')}${verifyResult ? '\n' + verifyResult : ''}`;
+    }
+
+    case 'confirm_dialog': {
+      // Wait briefly for dialog to settle, then press Enter (or click a named button).
+      // input.button: optional button label to click instead of Enter
+      // input.settle_ms: optional settle time (default 300)
+      if (effectiveWindow) {
+        const { skipped } = await smartFocus(effectiveWindow);
+        if (!skipped) await wait(100);
+      }
+
+      const settleMs = input.settle_ms || 300;
+      await wait(settleMs);
+
+      if (input.button) {
+        // Try to find the named button in cached targets and click it
+        const buttonLabel = String(input.button).toLowerCase();
+        const target = Object.entries(guiState.knownTargets)
+          .find(([label]) => label.toLowerCase().includes(buttonLabel));
+        if (target) {
+          const [label, coords] = target;
+          await run(`xdotool mousemove ${coords.x} ${coords.y} click 1`);
+          recordSuccess(guiState, 'confirm_dialog', label);
+          return `[Macro] Clicked "${label}" at (${coords.x}, ${coords.y})`;
+        }
+        // Button not in cache — fall back to Enter
+        console.log(`[Macro] confirm_dialog: button "${input.button}" not in cache, using Enter`);
+      }
+
+      await run('xdotool key Return');
+      recordSuccess(guiState, 'confirm_dialog', 'Enter');
+      const verifyResult = await postActionVerify(effectiveWindow);
+      return `[Macro] Confirmed dialog (Enter)${verifyResult ? '\n' + verifyResult : ''}`;
+    }
+
+    case 'export_file': {
+      // Full export workflow: trigger export shortcut → fill path → confirm.
+      // input.path: output file path (required)
+      // input.shortcut: override shortcut (default: ctrl+shift+e for "Export As")
+      // input.app: app name for shortcut lookup
+      const exportPath = input.path || input.export_path;
+      if (!exportPath) return '[Error] export_file requires "path" (output file path).';
+
+      if (effectiveWindow) {
+        const { skipped } = await smartFocus(effectiveWindow);
+        if (!skipped) await wait(100);
+      }
+
+      // Determine the export shortcut
+      let shortcut = input.shortcut as string | undefined;
+      if (!shortcut) {
+        // Look up from shortcut registry
+        const app = input.app || guiState.activeApp || '';
+        const { resolveShortcut } = require('../gui/shortcuts');
+        shortcut = resolveShortcut(app, 'export_as') || resolveShortcut(app, 'save_as') || 'ctrl+shift+e';
+      }
+
+      // Trigger export shortcut
+      await run(`xdotool key ${shortcut}`);
+      await wait(800); // Export dialogs take a moment to open
+
+      // The export dialog should now be focused with a filename/path field.
+      // Select all text in the path field and type the new path.
+      await run('xdotool key ctrl+a');
+      await wait(100);
+      await run(`xdotool type --delay 10 -- "${exportPath.replace(/"/g, '\\"')}"`);
+      await wait(200);
+
+      // Confirm the export
+      await run('xdotool key Return');
+      await wait(500);
+
+      // Some apps show an "overwrite?" confirmation
+      // Check if a dialog appeared and confirm it too
+      const afterExport = await postActionVerify(effectiveWindow);
+      if (afterExport.includes('DIALOG') || afterExport.toLowerCase().includes('overwrite') || afterExport.toLowerCase().includes('replace')) {
+        await wait(200);
+        await run('xdotool key Return'); // Confirm overwrite
+        await wait(300);
+      }
+
+      // Verify file exists
+      const resolvedPath = exportPath.replace(/^~\//, os.homedir() + '/');
+      const fileCheck = await run(`stat --printf="%s bytes" "${resolvedPath}" 2>/dev/null`);
+      const fileStatus = fileCheck.startsWith('[Error]') ? 'File NOT found' : `File: ${fileCheck}`;
+
+      recordSuccess(guiState, 'export_file', exportPath);
+      return `[Macro] Export → ${exportPath}\nShortcut: ${shortcut}\n${fileStatus}${afterExport ? '\n' + afterExport : ''}`;
+    }
+
     case 'screenshot_region': {
       // Capture only a specific region (saves bandwidth + processing time)
       const { rx, ry, rw, rh } = input;
@@ -669,6 +1038,12 @@ async function execSingleAction(input: Record<string, any>, batchWindow?: string
 export async function executeGuiInteract(input: Record<string, any>): Promise<string> {
   const { action } = input;
   if (!action) return '[Error] action is required.';
+
+  // Guard: prevent gui_interact from being used on the browser panel
+  const winName = (input.window || '').toLowerCase();
+  if (/clawdia|electron|chromium|browser/i.test(winName) && action !== 'list_windows' && action !== 'verify_window_title') {
+    return '[Error] Do not use gui_interact for the browser. Use browser_click, browser_type, and browser_navigate instead — they operate at the DOM level and are faster and more reliable than xdotool pixel clicking.';
+  }
 
   const sessionType = process.env.XDG_SESSION_TYPE || '';
   if (sessionType === 'wayland' && action !== 'list_windows' && action !== 'verify_window_title' && action !== 'verify_file_exists') {

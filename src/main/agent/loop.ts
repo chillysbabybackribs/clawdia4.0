@@ -19,10 +19,13 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { BrowserWindow } from 'electron';
 import { classify, type TaskProfile, type ToolGroup } from './classifier';
 import { buildStaticPrompt, buildDynamicPrompt } from './prompt-builder';
-import { getToolsForGroup, filterTools, executeTool } from './tool-builder';
+import { getToolsForGroup, filterTools, executeTool, isKnownTool } from './tool-builder';
 import { AnthropicClient, resolveModelId, type LLMResponse } from './client';
 import { getPromptContext } from '../db/memory';
 import { checkRecall, searchPastConversations } from '../db/conversation-recall';
+import { getSiteContextPrompt } from '../db/site-profiles';
+import { savePlaybook, getPlaybookPrompt, getDomainPlaybookSummary } from '../db/browser-playbooks';
+import { extractDomain } from '../db/site-profiles';
 import { getDesktopCapabilities, getGuiState, resetGuiStateForNewConversation, warmCoordinatesForApp } from './executors/desktop-executors';
 import { getStateSummary } from './gui/ui-state';
 import { getShortcutPromptBlock } from './gui/shortcuts';
@@ -31,10 +34,14 @@ import {
   recordSurfaceUsage, recordSurfaceDeviation, type ExecutionPlan,
 } from '../db/app-registry';
 import { IPC_EVENTS } from '../../shared/ipc-channels';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 const MAX_ITERATIONS = 30;
 const MAX_WALL_MS = 10 * 60 * 1000;
-const MAX_HISTORY_TURNS = 16;
+const MAX_HISTORY_TURNS = 16;       // Fallback cap (used alongside token budget)
+const MAX_HISTORY_TOKENS = 80_000;  // ~40% of 200K context — leave room for system prompt + new response
 const WRAP_UP_THRESHOLD = 25;
 const GUI_BATCH_NUDGE_AT = 2;
 
@@ -45,7 +52,8 @@ const TOOL_RESULT_CAPS: Record<string, number> = {
   shell_exec: 10_000, file_read: 20_000, file_write: 500, file_edit: 500,
   directory_tree: 5_000, browser_search: 5_000, browser_navigate: 10_000,
   browser_read_page: 10_000, browser_click: 5_000, browser_type: 500,
-  browser_extract: 10_000, browser_screenshot: 1_000, create_document: 500,
+  browser_extract: 10_000, browser_screenshot: 1_000, browser_scroll: 10_000,
+  create_document: 500,
   memory_search: 3_000, memory_store: 500, recall_context: 5_000,
   app_control: 10_000, gui_interact: 5_000, dbus_control: 8_000,
 };
@@ -58,6 +66,71 @@ function ensureRegistry(): void {
   try { seedRegistry(); registrySeeded = true; } catch (e) { console.warn('[Registry] Seed failed:', e); }
 }
 
+// ═══════════════════════════════════
+// Loop Control — Cancel, Pause, Add Context
+//
+// The running loop checks these controls between iterations.
+// Cancel: aborts the LLM call via AbortController
+// Pause: holds at iteration boundary until resumed
+// Add Context: injects a user message before the next LLM call
+// ═══════════════════════════════════
+
+let activeAbortController: AbortController | null = null;
+let isPaused = false;
+let pauseResolve: (() => void) | null = null;
+let pendingContext: string | null = null;
+
+/** Cancel the running agent loop. */
+export function cancelLoop(): void {
+  if (activeAbortController) {
+    activeAbortController.abort();
+    console.log('[Loop] Cancel requested');
+  }
+  // Also unpause if paused so the loop can exit
+  if (pauseResolve) {
+    pauseResolve();
+    pauseResolve = null;
+  }
+  isPaused = false;
+}
+
+/** Pause the loop — it will hold after the current tool execution completes. */
+export function pauseLoop(): void {
+  isPaused = true;
+  console.log('[Loop] Pause requested — will hold after current iteration');
+}
+
+/** Resume a paused loop. */
+export function resumeLoop(): void {
+  isPaused = false;
+  if (pauseResolve) {
+    pauseResolve();
+    pauseResolve = null;
+    console.log('[Loop] Resumed');
+  }
+}
+
+/** Inject additional context that the LLM will see on its next iteration. */
+export function addContext(text: string): void {
+  pendingContext = text;
+  console.log(`[Loop] Context queued (${text.length} chars) — will inject on next iteration`);
+  // If paused, also resume so the context gets processed
+  if (isPaused) resumeLoop();
+}
+
+/** Wait until unpaused. Returns immediately if not paused. */
+function waitIfPaused(): Promise<void> {
+  if (!isPaused) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    pauseResolve = resolve;
+  });
+}
+
+/** Check if cancelled. */
+function isCancelled(): boolean {
+  return activeAbortController?.signal.aborted ?? false;
+}
+
 export interface LoopOptions {
   apiKey: string;
   model?: string;
@@ -67,6 +140,8 @@ export interface LoopOptions {
   /** Progressive stdout/stderr chunks from shell_exec. toolId matches the running tool. */
   onToolStream?: (payload: { toolId: string; toolName: string; chunk: string }) => void;
   onStreamEnd?: () => void;
+  onPaused?: () => void;
+  onResumed?: () => void;
   window?: BrowserWindow;
 }
 
@@ -77,13 +152,142 @@ function pickModel(classifierModel: string, storedModel?: string, isGreeting?: b
   return resolveModelId(classifierModel);
 }
 
+/**
+ * Estimate token count for a message. Uses chars/4 heuristic for text,
+ * counts tool_result content directly. This is approximate but fast
+ * and avoids importing a full tokenizer.
+ */
+function estimateTokens(msg: Anthropic.MessageParam): number {
+  if (typeof msg.content === 'string') {
+    return Math.ceil(msg.content.length / 4);
+  }
+  if (Array.isArray(msg.content)) {
+    let total = 0;
+    for (const block of msg.content as any[]) {
+      if (block.type === 'text') total += Math.ceil((block.text?.length || 0) / 4);
+      else if (block.type === 'tool_use') total += Math.ceil(JSON.stringify(block.input || {}).length / 4) + 20;
+      else if (block.type === 'tool_result') total += Math.ceil((typeof block.content === 'string' ? block.content.length : JSON.stringify(block.content || '').length) / 4);
+      else total += 50; // image blocks, etc. — rough estimate
+    }
+    return total;
+  }
+  return 50;
+}
+
+/**
+ * Trim history to fit within token budget.
+ *
+ * Strategy: walk from oldest to newest, dropping messages until the total
+ * is under MAX_HISTORY_TOKENS. Also respects MAX_HISTORY_TURNS as a hard cap.
+ * Always ensures the first message is role='user' (Anthropic API requirement).
+ */
 function trimHistory(history: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
-  if (history.length <= MAX_HISTORY_TURNS) return history;
-  const trimmed = history.slice(-MAX_HISTORY_TURNS);
+  // Hard turn cap first
+  let trimmed = history.length > MAX_HISTORY_TURNS
+    ? history.slice(-MAX_HISTORY_TURNS)
+    : [...history];
+
+  // Token-aware trimming: drop oldest messages until under budget
+  let totalTokens = trimmed.reduce((sum, m) => sum + estimateTokens(m), 0);
+
+  while (totalTokens > MAX_HISTORY_TOKENS && trimmed.length > 2) {
+    const dropped = trimmed.shift()!;
+    totalTokens -= estimateTokens(dropped);
+  }
+
+  // Ensure first message is user role
   if (trimmed.length > 0 && trimmed[0].role === 'assistant') trimmed.shift();
+
   const droppedCount = history.length - trimmed.length;
-  if (droppedCount > 0) console.log(`[Agent] History trimmed: kept ${trimmed.length} of ${history.length}`);
+  if (droppedCount > 0) {
+    console.log(`[Agent] History trimmed: kept ${trimmed.length} of ${history.length} messages (~${Math.round(totalTokens / 1000)}K tokens)`);
+  }
   return trimmed;
+}
+
+// ═══════════════════════════════════
+// Post-Loop Task Verification
+//
+// Lightweight mechanical checks run after the main loop ends.
+// Only verifies high-signal outcomes (file existence + non-empty).
+// Does NOT validate content quality — just that the artifact exists.
+// ═══════════════════════════════════
+
+/** Resolve ~ and $HOME in file paths to absolute. */
+function resolvePath(p: string): string {
+  if (p.startsWith('~/')) return p.replace('~', os.homedir());
+  if (p.startsWith('$HOME/')) return p.replace('$HOME', os.homedir());
+  return p;
+}
+
+/**
+ * Verify that files claimed by the task actually exist and are non-empty.
+ * Returns null if no issues found, or a description of the first failure.
+ *
+ * Checks two sources:
+ *   1. Tool calls: file_write and create_document with successful status
+ *   2. Final text: file paths mentioned in the LLM's response
+ */
+function verifyFileOutcomes(
+  finalText: string,
+  toolCalls: Array<{ name: string; status: string; input?: Record<string, any> }>,
+): string | null {
+  const checkedPaths = new Set<string>();
+
+  // Source 1: Successful file_write calls — we know the exact path
+  for (const tc of toolCalls) {
+    if (tc.status !== 'success') continue;
+    let filePath: string | undefined;
+
+    if (tc.name === 'file_write' && tc.input?.path) {
+      filePath = resolvePath(tc.input.path);
+    } else if (tc.name === 'create_document' && tc.input?.filename) {
+      const dir = tc.input.output_dir || path.join(os.homedir(), 'Documents', 'Clawdia');
+      filePath = path.join(dir, tc.input.filename);
+    }
+
+    if (filePath && !checkedPaths.has(filePath)) {
+      checkedPaths.add(filePath);
+      try {
+        const stat = fs.statSync(filePath);
+        if (stat.size === 0) {
+          console.warn(`[Verify] File exists but is empty: ${filePath}`);
+          return `File was created but is empty (0 bytes): ${filePath}`;
+        }
+      } catch {
+        console.warn(`[Verify] File not found: ${filePath}`);
+        return `File does not exist: ${filePath}`;
+      }
+    }
+  }
+
+  // Source 2: File paths mentioned in the final response text
+  // Match common patterns: ~/path, /home/user/path, /tmp/path
+  const pathRe = /(?:~\/|\$HOME\/|\/home\/\w+\/|\/tmp\/)[^\s,;"')>]+/g;
+  const mentioned = finalText.match(pathRe) || [];
+  for (const raw of mentioned) {
+    // Clean trailing punctuation that's likely not part of the path
+    const cleaned = raw.replace(/[.!?)]+$/, '');
+    const abs = resolvePath(cleaned);
+    if (checkedPaths.has(abs)) continue; // Already verified via tool call
+    checkedPaths.add(abs);
+
+    // Only verify paths that look like files (have an extension)
+    if (!/\.[a-zA-Z0-9]{1,6}$/.test(abs)) continue;
+
+    try {
+      const stat = fs.statSync(abs);
+      if (stat.size === 0) {
+        console.warn(`[Verify] Mentioned file is empty: ${abs}`);
+        return `File mentioned in response is empty (0 bytes): ${abs}`;
+      }
+    } catch {
+      console.warn(`[Verify] Mentioned file not found: ${abs}`);
+      return `File mentioned in response does not exist: ${abs}`;
+    }
+  }
+
+  return null; // All checks passed
 }
 
 export async function runAgentLoop(
@@ -92,6 +296,11 @@ export async function runAgentLoop(
   options: LoopOptions,
 ): Promise<{ response: string; toolCalls: { name: string; status: string; detail?: string }[] }> {
   const { apiKey, onStreamText, onThinking, onToolActivity, onToolStream, onStreamEnd } = options;
+
+  // Set up loop control for this run
+  activeAbortController = new AbortController();
+  isPaused = false;
+  pendingContext = null;
 
   // Ensure registry is seeded
   ensureRegistry();
@@ -106,73 +315,101 @@ export async function runAgentLoop(
   const staticPrompt = buildStaticPrompt(profile.toolGroup, profile.promptModules);
 
   // ═══════════════════════════════════════════
-  // MEMORY — Demand-driven, not auto-injected
+  // PRE-LLM SETUP — Memory + Recall + Desktop routing
   //
-  // 1. User-set memories (source='user') always injected — these are explicit
-  // 2. FTS memories only injected if recall triggers (semantic or explicit)
-  // 3. Cross-conversation recall from past chats when relevant
+  // All independent work runs in parallel:
+  //   - Memory context (sync SQLite)
+  //   - Conversation recall (sync SQLite FTS)
+  //   - Desktop: scanHarnesses + getCapabilities + discoverApps (async shell)
   // ═══════════════════════════════════════════
-  let memoryContext = '';
-  let recallContext = '';
-  if (!profile.isGreeting && userMessage.length > 10) {
-    // Always inject user-set memories (they explicitly asked to remember these)
-    try { memoryContext = getPromptContext(300, undefined); } catch {}
+  // Use a mutable container so TypeScript doesn't narrow closured assignments to `never`
+  const ctx = {
+    memoryContext: '',
+    recallContext: '',
+    siteContext: '',
+    playbookContext: '',
+    desktopContext: '',
+    executionPlan: null as ExecutionPlan | null,
+    shortcutContext: '',
+    guiStateContext: '',
+  };
 
-    // Check for cross-conversation recall (semantic or explicit)
-    try {
-      const recall = checkRecall(userMessage, null);
-      if (recall.triggered) {
-        recallContext = recall.promptBlock;
-        console.log(`[Recall] ${recall.reason}: ${recall.exchanges.length} exchange(s) from past conversations`);
+  const isDesktopTask = profile.promptModules.has('desktop_apps');
+  const needsMemory = !profile.isGreeting && userMessage.length > 10;
+
+  // Build an array of independent async tasks to run in parallel
+  const setupTasks: Promise<void>[] = [];
+
+  // Memory + recall (sync SQLite, wrapped in async for Promise.all)
+  if (needsMemory) {
+    setupTasks.push((async () => {
+      try { ctx.memoryContext = getPromptContext(300, undefined); } catch {}
+      try {
+        const recall = checkRecall(userMessage, null);
+        if (recall.triggered) {
+          ctx.recallContext = recall.promptBlock;
+          console.log(`[Recall] ${recall.reason}: ${recall.exchanges.length} exchange(s) from past conversations`);
+        }
+      } catch {}
+      try { ctx.siteContext = getSiteContextPrompt(); } catch {}
+      // Playbook injection — reuse learned browser navigation sequences for repeat tasks
+      if (profile.toolGroup !== 'core') {
+        try {
+          ctx.playbookContext = getPlaybookPrompt(userMessage);
+          if (ctx.playbookContext) {
+            console.log(`[Playbook] Injecting learned navigation for this task`);
+          }
+        } catch {}
       }
-    } catch {}
+    })());
   }
 
-  // ═══════════════════════════════════════════
-  // PRE-LLM ROUTING — Control Surface Registry
-  // ═══════════════════════════════════════════
-  let desktopContext = '';
-  let executionPlan: ExecutionPlan | null = null;
-  let shortcutContext = '';
-  let guiStateContext = '';
+  // Desktop setup: harness scan + capabilities + app discovery (all async shell)
+  if (isDesktopTask) {
+    setupTasks.push((async () => {
+      // These three are independent — run in parallel
+      const [, , targetApp] = await Promise.all([
+        scanHarnesses().catch(() => {}),
+        getDesktopCapabilities().then(c => { ctx.desktopContext = c; }).catch(() => {}),
+        Promise.resolve(extractAppName(userMessage)).then(sync =>
+          sync || discoverApps(userMessage),
+        ),
+      ]);
 
-  if (profile.promptModules.has('desktop_apps')) {
-    // Scan for CLI-Anything harnesses (once per session)
-    try { await scanHarnesses(); } catch {}
+      if (targetApp) {
+        ctx.executionPlan = routeTask(userMessage, targetApp);
+        console.log(`[Router] App: ${targetApp} → surface: ${ctx.executionPlan.selectedSurface} | reasoning: ${ctx.executionPlan.reasoning}`);
+        recordSurfaceUsage(ctx.executionPlan.selectedSurface);
+        ctx.shortcutContext = getShortcutPromptBlock(targetApp);
+        warmCoordinatesForApp(targetApp);
+      }
 
-    // Get desktop capabilities (display layout, tools, etc.)
-    try { desktopContext = await getDesktopCapabilities(); } catch {}
-
-    // Detect target app and compute execution plan
-    // Fast sync check first, then async discovery if needed
-    const targetApp = extractAppName(userMessage) || await discoverApps(userMessage);
-    if (targetApp) {
-      executionPlan = routeTask(userMessage, targetApp);
-      console.log(`[Router] App: ${targetApp} → surface: ${executionPlan.selectedSurface} | reasoning: ${executionPlan.reasoning}`);
-      recordSurfaceUsage(executionPlan.selectedSurface);
-
-      // Inject keyboard shortcuts for detected app
-      shortcutContext = getShortcutPromptBlock(targetApp);
-
-      // PHASE 2: Pre-warm in-memory coordinate targets from persistent SQLite cache
-      // This eliminates orientation screenshots for apps we've used before
-      warmCoordinatesForApp(targetApp);
-    }
-
-    // Inject GUI state summary (focus, confidence, known targets)
-    const guiState = getGuiState();
-    guiStateContext = getStateSummary(guiState);
+      const guiState = getGuiState();
+      ctx.guiStateContext = getStateSummary(guiState);
+    })());
   }
+
+  // Run all setup in parallel
+  if (setupTasks.length > 0) {
+    const setupStart = Date.now();
+    await Promise.all(setupTasks);
+    console.log(`[Agent] Pre-LLM setup: ${Date.now() - setupStart}ms (${setupTasks.length} parallel task(s))`);
+  }
+
+  // Destructure for readability after parallel setup
+  const { executionPlan } = ctx;
 
   const dynamicPrompt = buildDynamicPrompt({
     model: modelId,
     toolGroup: profile.toolGroup,
-    memoryContext,
-    recallContext,
-    desktopContext,
+    memoryContext: ctx.memoryContext,
+    recallContext: ctx.recallContext,
+    siteContext: ctx.siteContext,
+    playbookContext: ctx.playbookContext,
+    desktopContext: ctx.desktopContext,
     executionConstraint: executionPlan?.constraint,
-    shortcutContext,
-    guiStateContext,
+    shortcutContext: ctx.shortcutContext,
+    guiStateContext: ctx.guiStateContext,
     isGreeting: profile.isGreeting,
   });
 
@@ -185,9 +422,10 @@ export async function runAgentLoop(
   const trimmedHistory = trimHistory(history);
   const messages: Anthropic.MessageParam[] = [...trimmedHistory, { role: 'user', content: userMessage }];
 
-  const allToolCalls: { name: string; status: string; detail?: string }[] = [];
+  const allToolCalls: { name: string; status: string; detail?: string; input?: Record<string, any> }[] = [];
   let toolCallCount = 0;
   let guiBatchNudgeSent = false;
+  let escalatedToFull = false; // Mid-loop tool group escalation flag
   const startTime = Date.now();
   let finalText = '';
 
@@ -195,6 +433,29 @@ export async function runAgentLoop(
     if (Date.now() - startTime > MAX_WALL_MS) {
       console.warn(`[Agent] Wall time limit reached at iteration ${iteration}`);
       break;
+    }
+
+    // ── Loop control gate: cancel / pause / add context ──
+    if (isCancelled()) {
+      console.log(`[Agent] Cancelled at iteration ${iteration}`);
+      finalText = finalText || '[Cancelled by user]';
+      break;
+    }
+
+    if (isPaused) {
+      options.onPaused?.();
+      onThinking?.('Paused — waiting to resume...');
+      await waitIfPaused();
+      if (isCancelled()) { finalText = '[Cancelled by user]'; break; }
+      options.onResumed?.();
+    }
+
+    // Inject pending user context if any
+    if (pendingContext !== null) {
+      const ctx: string = pendingContext;
+      pendingContext = null;
+      messages.push({ role: 'user', content: `[USER CONTEXT] ${ctx}` });
+      console.log(`[Agent] Injected user context: ${ctx.slice(0, 80)}`);
     }
 
     onThinking?.('Thinking...');
@@ -221,8 +482,13 @@ export async function runAgentLoop(
       response = await client.chat(messages, profile.isGreeting ? [] : tools, staticPrompt, dynamicPrompt, (chunk) => {
         iterationText += chunk;
         onStreamText?.(chunk);
-      });
+      }, { signal: activeAbortController?.signal });
     } catch (err: any) {
+      if (err.name === 'AbortError' || isCancelled()) {
+        console.log('[Agent] LLM call aborted by user');
+        finalText = finalText || iterationText || '[Cancelled by user]';
+        break;
+      }
       console.error(`[Agent] LLM error:`, err.message);
       finalText = `I encountered an error: ${err.message}`;
       break;
@@ -336,11 +602,25 @@ export async function runAgentLoop(
         }
         catch (err: any) { result = `[Error] ${err.message}`; }
 
+        // ── Mid-loop escalation: upgrade tool group if a known tool was missing ──
+        if (result.startsWith('[Error] Unknown tool:') && !escalatedToFull && isKnownTool(toolUse.name)) {
+          console.warn(`[Escalation] Tool "${toolUse.name}" exists but was not in group "${profile.toolGroup}". Upgrading to full.`);
+          tools = getToolsForGroup('full');
+          escalatedToFull = true;
+          // Re-execute now that the executor is reachable
+          try {
+            const chunkCb = onToolStream
+              ? (tn: string, chunk: string) => onToolStream({ toolId: toolUse.id, toolName: tn, chunk })
+              : undefined;
+            result = await executeTool(toolUse.name, toolUse.input as any, chunkCb);
+          } catch (err: any) { result = `[Error] ${err.message}`; }
+        }
+
         const durationMs = Date.now() - startMs;
         const status = result.startsWith('[Error') ? 'error' : 'success';
 
         onToolActivity?.({ name: toolUse.name, status, detail });
-        allToolCalls.push({ name: toolUse.name, status, detail });
+        allToolCalls.push({ name: toolUse.name, status, detail, input: toolUse.input as Record<string, any> });
         console.log(`[Agent] Result (${durationMs}ms): ${result.slice(0, 200)}`);
 
         // Phase 5: Track surface deviations
@@ -366,12 +646,93 @@ export async function runAgentLoop(
 
     messages.push({ role: 'user', content: toolResults as any });
 
+    // Inject escalation notice so the LLM knows broader tools are now available
+    if (escalatedToFull && !messages.some(m =>
+      typeof m.content === 'string' && m.content.includes('[SYSTEM] Additional tools are now available'),
+    )) {
+      messages.push({
+        role: 'user',
+        content: '[SYSTEM] Additional tools are now available. Your tool set has been expanded. Proceed with your task.',
+      });
+    }
+
     if (iteration === MAX_ITERATIONS - 1) {
       finalText = responseText || '[Reached iteration limit.]';
     }
   }
 
   onStreamEnd?.();
+
+  // ── Post-loop task verification: check file outcomes before claiming success ──
+  if (finalText && !finalText.startsWith('[Cancelled') && !profile.isGreeting && allToolCalls.length > 0) {
+    const issue = verifyFileOutcomes(finalText, allToolCalls);
+    if (issue) {
+      console.warn(`[Verify] Task verification failed: ${issue}`);
+      // Give the LLM one recovery iteration
+      onStreamText?.('\n\n__RESET__');
+      messages.push({ role: 'assistant', content: finalText });
+      messages.push({
+        role: 'user',
+        content: `[SYSTEM] Verification failed: ${issue}. The file you claimed to create does not exist or is empty. Fix this now — create or re-create the file, then confirm.`,
+      });
+
+      try {
+        let recoveryText = '';
+        const recoveryResponse = await client.chat(
+          messages, tools, staticPrompt, dynamicPrompt,
+          (chunk) => { recoveryText += chunk; onStreamText?.(chunk); },
+          { signal: activeAbortController?.signal },
+        );
+
+        const recoveryToolUses = recoveryResponse.content.filter(
+          (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
+        );
+
+        // If the LLM emits tool calls, execute them
+        if (recoveryToolUses.length > 0) {
+          messages.push({ role: 'assistant', content: recoveryResponse.content as any });
+          const recoveryResults: Anthropic.ToolResultBlockParam[] = [];
+          for (const toolUse of recoveryToolUses) {
+            toolCallCount++;
+            const detail = summarizeInput(toolUse.name, toolUse.input as any);
+            onToolActivity?.({ name: toolUse.name, status: 'running', detail });
+            let result: string;
+            try {
+              result = await executeTool(toolUse.name, toolUse.input as any);
+            } catch (err: any) { result = `[Error] ${err.message}`; }
+            const status = result.startsWith('[Error') ? 'error' : 'success';
+            onToolActivity?.({ name: toolUse.name, status, detail });
+            allToolCalls.push({ name: toolUse.name, status, detail, input: toolUse.input as Record<string, any> });
+            recoveryResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: result });
+          }
+          messages.push({ role: 'user', content: recoveryResults as any });
+
+          // One final LLM call to get the updated response text
+          let finalRecoveryText = '';
+          await client.chat(
+            messages, [], staticPrompt, dynamicPrompt,
+            (chunk) => { finalRecoveryText += chunk; onStreamText?.(chunk); },
+            { signal: activeAbortController?.signal },
+          );
+          if (finalRecoveryText) finalText = finalRecoveryText;
+        } else {
+          // LLM responded with text only (e.g., explaining the issue)
+          const textBlocks = recoveryResponse.content.filter(
+            (b): b is Anthropic.TextBlock => b.type === 'text',
+          );
+          const text = textBlocks.map(b => b.text).join('');
+          if (text) finalText = text;
+        }
+
+        console.log(`[Verify] Recovery iteration complete`);
+      } catch (err: any) {
+        console.warn(`[Verify] Recovery failed: ${err.message}`);
+        // Non-fatal — keep the original finalText
+      }
+
+      onStreamEnd?.();
+    }
+  }
 
   // ── Background memory extraction ──
   // Fire-and-forget: extract facts from this exchange for future context.
@@ -381,6 +742,29 @@ export async function runAgentLoop(
       extractMemoryInBackground(apiKey, userMessage, finalText);
     } catch { /* non-fatal */ }
   }
+
+  // ── Save playbook if this was a successful browser-heavy task ──
+  const browserToolCalls = allToolCalls.filter(tc =>
+    tc.name.startsWith('browser_') && tc.status === 'success',
+  );
+  if (browserToolCalls.length >= 2 && finalText && !finalText.startsWith('[Cancelled')) {
+    try {
+      savePlaybook(
+        userMessage,
+        browserToolCalls.map(tc => ({
+          name: tc.name,
+          input: tc.input || {},
+          summary: tc.detail || tc.name,
+        })),
+      );
+    } catch { /* non-fatal */ }
+  }
+
+  // Clean up loop control state
+  activeAbortController = null;
+  isPaused = false;
+  pendingContext = null;
+  pauseResolve = null;
 
   return { response: finalText, toolCalls: allToolCalls };
 }
@@ -397,6 +781,7 @@ function summarizeInput(toolName: string, input: Record<string, any>): string {
     case 'browser_click': return input.target || '';
     case 'browser_type': return input.text?.slice(0, 40) || '';
     case 'browser_extract': return input.instruction?.slice(0, 60) || '';
+    case 'browser_scroll': return `${input.direction || 'down'}${input.amount ? ` ${input.amount}px` : ''}`;
     case 'create_document': return input.filename || '';
     case 'memory_search': return input.query || '';
     case 'memory_store': return `${input.category}/${input.key}` || '';

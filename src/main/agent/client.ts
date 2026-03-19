@@ -9,6 +9,22 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 
+// ═══════════════════════════════════
+// Singleton SDK instance pool — reuse HTTP connections
+// ═══════════════════════════════════
+const sdkPool: Map<string, Anthropic> = new Map();
+
+/** Get or create a shared Anthropic SDK instance for the given API key. */
+export function getSharedSdk(apiKey: string): Anthropic {
+  let sdk = sdkPool.get(apiKey);
+  if (!sdk) {
+    sdk = new Anthropic({ apiKey, timeout: 300_000 });
+    sdkPool.set(apiKey, sdk);
+    console.log(`[Client] Created shared Anthropic SDK instance (pool size: ${sdkPool.size})`);
+  }
+  return sdk;
+}
+
 export interface LLMResponse {
   content: Anthropic.ContentBlock[];
   stopReason: string;
@@ -48,7 +64,7 @@ export class AnthropicClient {
   private model: string;
 
   constructor(apiKey: string, model: string = 'claude-sonnet-4-6') {
-    this.client = new Anthropic({ apiKey, timeout: 300_000 });
+    this.client = getSharedSdk(apiKey);
     this.model = model;
   }
 

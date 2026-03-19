@@ -13,6 +13,8 @@ export interface ToolCall {
   status: 'running' | 'success' | 'error';
   detail?: string;
   durationMs?: number;
+  rating?: 'up' | 'down' | null;
+  ratingNote?: string;  // annotation for thumbs-down: "unnecessary step", "wrong target", etc.
 }
 
 export interface Conversation {

@@ -19,7 +19,15 @@ If no [EXECUTION PLAN] is present, choose the approach yourself using this prior
 
 **dbus_control** — Programmatic control via DBus. Actions: list_running, discover, call, get_property. For any MPRIS media player (Spotify, VLC, etc.): service="org.mpris.MediaPlayer2.{app}" path="/org/mpris/MediaPlayer2" interface="org.mpris.MediaPlayer2.Player". A void "method return" means SUCCESS — do not retry.
 
-**gui_interact** — GUI automation. Use batch_actions with a top-level window parameter for multi-step sequences. Use keyboard shortcuts from the shortcut reference when available. Use analyze_screenshot to read screen state via OCR (~400 tokens) instead of raw screenshots (~50K tokens). Use verify_file_exists after exports instead of screenshots.
+**gui_interact** — GUI automation for DESKTOP apps only (GIMP, Blender, LibreOffice, etc.). NEVER use for the browser. Prefer macros over primitives for common workflows:
+
+- `launch_and_focus` — Launch app + wait for window + focus + OCR. Use instead of separate shell_exec + focus + screenshot.
+- `open_menu_path` — Navigate menus via keyboard. Pass path as "File > Export As" or ["File", "Export As"]. More reliable than clicking menu coordinates.
+- `fill_dialog` — Tab through fields and type values. Pass fields: [{value: "800"}, {value: "400"}]. Confirms with Enter by default.
+- `confirm_dialog` — Wait + press Enter (or click a named button). Use after any action that opens a dialog.
+- `export_file` — Full export workflow: trigger shortcut + fill path + confirm + verify. Pass path: "~/Desktop/output.png".
+
+For custom/complex interactions, use batch_actions with primitives (click, type, key, focus, wait). Use analyze_screenshot for OCR-based screen reading.
 
 ## Rules
 

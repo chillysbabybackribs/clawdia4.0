@@ -59,6 +59,8 @@ export function buildDynamicPrompt(opts: {
   browserUrl?: string;
   memoryContext?: string;
   recallContext?: string;
+  siteContext?: string;
+  playbookContext?: string;
   desktopContext?: string;
   executionConstraint?: string;
   shortcutContext?: string;
@@ -71,9 +73,11 @@ export function buildDynamicPrompt(opts: {
   const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local';
 
+  const desktopDir = path.join(os.homedir(), 'Desktop');
   const lines: string[] = [
     `DATE: ${date} | TIME: ${time} | TZ: ${tz} | YEAR: ${year}`,
-    `SYSTEM: ${os.type()} ${os.release()} (${os.arch()}) | ${os.userInfo().username}@${os.hostname()} | ${os.homedir()}`,
+    `SYSTEM: ${os.type()} ${os.release()} (${os.arch()}) | ${os.userInfo().username}@${os.hostname()}`,
+    `HOME: ${os.homedir()} | CWD: ${desktopDir} (shell starts here)`,
     `MODEL: ${opts.model}`,
     `TOOLS: ${opts.toolGroup} group active`,
   ];
@@ -94,6 +98,12 @@ export function buildDynamicPrompt(opts: {
 
   // Cross-conversation recall — injected only when semantically relevant
   if (opts.recallContext) lines.push('', opts.recallContext);
+
+  // Authenticated site profiles — so LLM knows which accounts are available
+  if (opts.siteContext) lines.push('', opts.siteContext);
+
+  // Playbook — learned navigation sequence for this task
+  if (opts.playbookContext) lines.push('', opts.playbookContext);
 
   if (opts.browserUrl) lines.push(`BROWSER: ${opts.browserUrl}`);
 

@@ -3,7 +3,11 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 interface InputBarProps {
   onSend: (message: string) => void;
   isStreaming: boolean;
+  isPaused: boolean;
   onStop: () => void;
+  onPause: () => void;
+  onResume: () => void;
+  onAddContext: (text: string) => void;
 }
 
 const MODELS = [
@@ -12,18 +16,16 @@ const MODELS = [
   { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', tier: 'haiku' },
 ] as const;
 
-export default function InputBar({ onSend, isStreaming, onStop }: InputBarProps) {
+export default function InputBar({ onSend, isStreaming, isPaused, onStop, onPause, onResume, onAddContext }: InputBarProps) {
   const [text, setText] = useState('');
   const [modelIdx, setModelIdx] = useState(1);
   const [modelOpen, setModelOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-focus the textarea on mount (new chat)
   useEffect(() => {
     textareaRef.current?.focus();
   }, []);
 
-  // Sync model picker with stored setting on mount
   useEffect(() => {
     const api = (window as any).clawdia;
     if (!api) return;
@@ -33,7 +35,6 @@ export default function InputBar({ onSend, isStreaming, onStop }: InputBarProps)
     });
   }, []);
 
-  // Save model when user changes it via picker
   const handleModelChange = useCallback((idx: number) => {
     setModelIdx(idx);
     setModelOpen(false);
@@ -43,20 +44,31 @@ export default function InputBar({ onSend, isStreaming, onStop }: InputBarProps)
 
   const handleSend = useCallback(() => {
     const trimmed = text.trim();
-    if (!trimmed || isStreaming) return;
+    if (!trimmed) return;
+
+    // During streaming: send as context injection instead of new message
+    if (isStreaming) {
+      onAddContext(trimmed);
+      setText('');
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
+      return;
+    }
+
     onSend(trimmed);
     setText('');
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-    }
-  }, [text, isStreaming, onSend]);
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+  }, [text, isStreaming, onSend, onAddContext]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
-  }, [handleSend]);
+    // Escape = stop during streaming
+    if (e.key === 'Escape' && isStreaming) {
+      onStop();
+    }
+  }, [handleSend, isStreaming, onStop]);
 
   const handleInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setText(e.target.value);
@@ -75,7 +87,7 @@ export default function InputBar({ onSend, isStreaming, onStop }: InputBarProps)
           value={text}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
-          placeholder="Ask me anything..."
+          placeholder={isStreaming ? 'Add context for the current task...' : 'Ask me anything...'}
           rows={1}
           className="w-full bg-transparent text-text-primary text-[0.9rem] placeholder:text-text-muted px-4 pt-3 pb-1 resize-none outline-none max-h-[200px] leading-relaxed"
         />
@@ -125,9 +137,50 @@ export default function InputBar({ onSend, isStreaming, onStop }: InputBarProps)
 
           <div className="flex items-center gap-1.5">
             {isStreaming ? (
-              <button onClick={onStop} title="Stop (Esc)" className="flex items-center justify-center w-8 h-8 rounded-lg bg-status-error/20 text-status-error hover:bg-status-error/30 transition-colors cursor-pointer">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
-              </button>
+              <>
+                {/* Pause / Resume button */}
+                <button
+                  onClick={isPaused ? onResume : onPause}
+                  title={isPaused ? 'Resume' : 'Pause'}
+                  className={`flex items-center justify-center w-8 h-8 rounded-lg transition-colors cursor-pointer ${
+                    isPaused
+                      ? 'bg-accent/20 text-accent hover:bg-accent/30'
+                      : 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30'
+                  }`}
+                >
+                  {isPaused ? (
+                    /* Play/Resume icon */
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                      <polygon points="6,4 20,12 6,20" />
+                    </svg>
+                  ) : (
+                    /* Pause icon */
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                      <rect x="5" y="4" width="4" height="16" rx="1" />
+                      <rect x="15" y="4" width="4" height="16" rx="1" />
+                    </svg>
+                  )}
+                </button>
+
+                {/* Add context button — only visible when text is typed during streaming */}
+                {text.trim() && (
+                  <button
+                    onClick={handleSend}
+                    title="Add context to current task"
+                    className="flex items-center justify-center w-8 h-8 rounded-lg bg-accent/20 text-accent hover:bg-accent/30 transition-colors cursor-pointer"
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="12" y1="5" x2="12" y2="19" />
+                      <line x1="5" y1="12" x2="19" y2="12" />
+                    </svg>
+                  </button>
+                )}
+
+                {/* Stop button */}
+                <button onClick={onStop} title="Stop (Esc)" className="flex items-center justify-center w-8 h-8 rounded-lg bg-status-error/20 text-status-error hover:bg-status-error/30 transition-colors cursor-pointer">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+                </button>
+              </>
             ) : (
               <button onClick={handleSend} disabled={!text.trim()} title="Send (Enter)" className="flex items-center justify-center w-8 h-8 rounded-lg transition-all cursor-pointer disabled:opacity-20 disabled:cursor-default bg-accent/90 hover:bg-accent text-white">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></svg>
@@ -137,11 +190,21 @@ export default function InputBar({ onSend, isStreaming, onStop }: InputBarProps)
         </div>
       </div>
 
-      {/* Keyboard shortcut hints */}
+      {/* Keyboard shortcut hints — context-aware */}
       <div className="flex items-center justify-center gap-4 mt-1.5">
-        <span className="text-[9px] text-text-muted/30">Ctrl+N new chat</span>
-        <span className="text-[9px] text-text-muted/30">Ctrl+B toggle browser</span>
-        <span className="text-[9px] text-text-muted/30">Ctrl+H history</span>
+        {isStreaming ? (
+          <>
+            <span className="text-[9px] text-text-muted/30">Esc stop</span>
+            <span className="text-[9px] text-text-muted/30">Enter add context</span>
+            <span className="text-[9px] text-text-muted/30">{isPaused ? '▶ paused' : '⏸ running'}</span>
+          </>
+        ) : (
+          <>
+            <span className="text-[9px] text-text-muted/30">Ctrl+N new chat</span>
+            <span className="text-[9px] text-text-muted/30">Ctrl+B toggle browser</span>
+            <span className="text-[9px] text-text-muted/30">Ctrl+H history</span>
+          </>
+        )}
       </div>
     </div>
   );

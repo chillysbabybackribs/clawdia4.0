@@ -5,8 +5,9 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
 import { IPC, IPC_EVENTS } from '../shared/ipc-channels';
-import { runAgentLoop } from './agent/loop';
+import { runAgentLoop, cancelLoop, pauseLoop, resumeLoop, addContext } from './agent/loop';
 import { resetGuiStateForNewConversation } from './agent/executors/desktop-executors';
+import { destroyShell } from './agent/executors/core-executors';
 import { extractMemoryInBackground } from './agent/memory-extractor';
 import { getApiKey, setApiKey, getSelectedModel, setSelectedModel } from './store';
 import { getDb, closeDb } from './db/database';
@@ -113,7 +114,22 @@ function setupIpcHandlers(): void {
     }
   });
 
-  ipcMain.handle(IPC.CHAT_STOP, async () => ({ ok: true }));
+  ipcMain.handle(IPC.CHAT_STOP, async () => {
+    cancelLoop();
+    return { ok: true };
+  });
+  ipcMain.handle(IPC.CHAT_PAUSE, async () => {
+    pauseLoop();
+    return { ok: true };
+  });
+  ipcMain.handle(IPC.CHAT_RESUME, async () => {
+    resumeLoop();
+    return { ok: true };
+  });
+  ipcMain.handle(IPC.CHAT_ADD_CONTEXT, async (_e, text: string) => {
+    addContext(text);
+    return { ok: true };
+  });
   ipcMain.handle(IPC.CHAT_NEW, async () => {
     const conv = createConversation();
     activeConversationId = conv.id;
@@ -165,10 +181,34 @@ function setupIpcHandlers(): void {
   ipcMain.handle(IPC.BROWSER_TAB_SWITCH, async (_e, id: string) => { switchTab(id); return { ok: true }; });
   ipcMain.handle(IPC.BROWSER_TAB_CLOSE, async (_e, id: string) => { closeTab(id); return { ok: true, tabs: getTabList() }; });
 
+  // ── Tool call rating ──
+  ipcMain.handle(IPC.CHAT_RATE_TOOL, async (_e, messageId: string, toolId: string, rating: 'up' | 'down' | null, note?: string) => {
+    try {
+      const db = getDb();
+      const row = db.prepare('SELECT tool_calls FROM messages WHERE id = ?').get(messageId) as any;
+      if (!row?.tool_calls) return { ok: false };
+      const tools = JSON.parse(row.tool_calls) as any[];
+      const updated = tools.map((t: any) => {
+        if (t.id !== toolId) return t;
+        const patched = { ...t, rating };
+        if (note !== undefined) patched.ratingNote = note;
+        if (rating === null) { delete patched.rating; delete patched.ratingNote; }
+        if (rating === 'up') { delete patched.ratingNote; } // up doesn't need a note
+        return patched;
+      });
+      db.prepare('UPDATE messages SET tool_calls = ? WHERE id = ?').run(JSON.stringify(updated), messageId);
+      console.log(`[Rating] Tool ${toolId} in message ${messageId.slice(0, 8)}: ${rating}${note ? ` ("${note}")` : ''}`);
+      return { ok: true };
+    } catch (err: any) {
+      console.warn(`[Rating] Failed: ${err.message}`);
+      return { ok: false };
+    }
+  });
+
   // ── Browser URL autocomplete ──
   ipcMain.handle(IPC.BROWSER_HISTORY_MATCH, async (_e, prefix: string) => matchUrlHistory(prefix));
 }
 
 app.whenReady().then(createWindow);
-app.on('before-quit', () => closeBrowser());
-app.on('window-all-closed', () => { closeDb(); app.quit(); });
+app.on('before-quit', () => { closeBrowser(); destroyShell(); });
+app.on('window-all-closed', () => { destroyShell(); closeDb(); app.quit(); });

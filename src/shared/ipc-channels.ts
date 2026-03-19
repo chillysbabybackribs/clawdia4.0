@@ -1,6 +1,10 @@
 export const IPC = {
   CHAT_SEND: 'chat:send',
   CHAT_STOP: 'chat:stop',
+  CHAT_PAUSE: 'chat:pause',
+  CHAT_RESUME: 'chat:resume',
+  CHAT_ADD_CONTEXT: 'chat:add-context',
+  CHAT_RATE_TOOL: 'chat:rate-tool',
   CHAT_NEW: 'chat:new',
   CHAT_LIST: 'chat:list',
   CHAT_LOAD: 'chat:load',

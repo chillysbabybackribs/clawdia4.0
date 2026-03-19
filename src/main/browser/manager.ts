@@ -259,7 +259,7 @@ function ensureUrl(url: string): string {
   return u;
 }
 
-export async function navigate(url: string): Promise<{ title: string; url: string; content: string }> {
+export async function navigate(url: string): Promise<{ title: string; url: string; content: string; elements: string }> {
   const view = getActiveView();
   if (!view) throw new Error('No active tab');
   const wc = view.webContents;
@@ -267,7 +267,9 @@ export async function navigate(url: string): Promise<{ title: string; url: strin
     if (!err.message?.includes('ERR_ABORTED')) console.warn(`[Browser] Nav error: ${err.message}`);
   }
   await wait(500);
-  return { title: wc.getTitle(), url: wc.getURL(), content: await getVisibleText() };
+  // Fetch text + interactive elements in parallel
+  const [content, elements] = await Promise.all([getVisibleText(), getInteractiveElements()]);
+  return { title: wc.getTitle(), url: wc.getURL(), content, elements };
 }
 
 export async function goBack(): Promise<void> { const v = getActiveView(); if (v?.webContents.canGoBack()) v.webContents.goBack(); }
@@ -292,7 +294,34 @@ export async function getInteractiveElements(): Promise<string> {
   const view = getActiveView();
   if (!view) return '';
   try {
-    return await view.webContents.executeJavaScript(`(function(){const e=[];document.querySelectorAll('a[href],button,input,textarea,select,[role=button],[onclick]').forEach((el,i)=>{if(i>=50)return;const r=el.getBoundingClientRect();if(r.width===0||r.height===0)return;const t=el.tagName.toLowerCase(),tx=(el.textContent||'').trim().slice(0,80),h=el.getAttribute('href')||'',ty=el.getAttribute('type')||'',p=el.getAttribute('placeholder')||'';let d='['+e.length+'] '+t;if(ty)d+='[type='+ty+']';if(tx)d+=' "'+tx+'"';if(h)d+=' → '+h.slice(0,60);if(p)d+=' ('+p+')';e.push(d)});return e.join('\\n')})()`);
+    return await view.webContents.executeJavaScript(`(function(){
+      var e=[];
+      var sel='a[href],button,input,textarea,select,[role=button],[role=link],[role=tab],[role=menuitem],[onclick],[data-action]';
+      document.querySelectorAll(sel).forEach(function(el){
+        if(e.length>=100)return;
+        var r=el.getBoundingClientRect();
+        if(r.width===0||r.height===0)return;
+        var t=el.tagName.toLowerCase();
+        var tx=(el.textContent||'').trim().replace(/\\s+/g,' ').slice(0,80);
+        var h=el.getAttribute('href')||'';
+        var ty=el.getAttribute('type')||'';
+        var p=el.getAttribute('placeholder')||'';
+        var ar=el.getAttribute('aria-label')||'';
+        var nm=el.getAttribute('name')||'';
+        var rl=el.getAttribute('role')||'';
+        var d='['+e.length+'] '+t;
+        if(rl&&rl!=='button')d+='[role='+rl+']';
+        if(ty)d+='[type='+ty+']';
+        if(ar)d+=' aria="'+ar.slice(0,60)+'"';
+        else if(tx)d+=' "'+tx+'"';
+        if(nm)d+=' name='+nm;
+        if(h&&h.length<80)d+=' → '+h;
+        else if(h)d+=' → '+h.slice(0,60)+'...';
+        if(p)d+=' ('+p+')';
+        e.push(d);
+      });
+      return e.join('\\n');
+    })()`);
   } catch { return ''; }
 }
 
@@ -314,10 +343,232 @@ export async function typeText(text: string, selector?: string): Promise<string>
   } catch (err: any) { return '[Error typing]: ' + err.message; }
 }
 
+export async function scrollPage(direction: 'down' | 'up' | 'top' | 'bottom', amount?: number): Promise<string> {
+  const view = getActiveView();
+  if (!view) throw new Error('No active tab');
+  try {
+    // Scroll and return position info + viewport-visible text.
+    // Handles both document-level scrolling AND scrollable container divs
+    // (Gmail, Twitter, SPAs use overflow containers instead of document scroll).
+    const result = await view.webContents.executeJavaScript(`(function(){
+      var dir = ${JSON.stringify(direction)};
+      var amt = ${amount || 0};
+
+      // Find the actual scrollable element: document OR a scrollable container
+      function findScrollable() {
+        // Check if document itself scrolls
+        if (document.documentElement.scrollHeight > window.innerHeight + 10) {
+          return { el: null, isDoc: true }; // null = use window
+        }
+        // Look for a scrollable container div
+        var candidates = document.querySelectorAll('div, main, section, [role="main"]');
+        for (var i = 0; i < candidates.length; i++) {
+          var el = candidates[i];
+          var style = getComputedStyle(el);
+          if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 50) {
+            return { el: el, isDoc: false };
+          }
+        }
+        return { el: null, isDoc: true }; // fallback to document
+      }
+
+      var target = findScrollable();
+      var scrollEl = target.el;
+
+      // Get current position
+      var before = target.isDoc ? window.scrollY : scrollEl.scrollTop;
+      var maxScroll = target.isDoc
+        ? document.documentElement.scrollHeight - window.innerHeight
+        : scrollEl.scrollHeight - scrollEl.clientHeight;
+      var viewH = target.isDoc ? window.innerHeight : scrollEl.clientHeight;
+      var step = amt || Math.round(viewH * 0.8);
+
+      // Execute scroll
+      if (dir === 'top') {
+        target.isDoc ? window.scrollTo(0, 0) : (scrollEl.scrollTop = 0);
+      } else if (dir === 'bottom') {
+        target.isDoc ? window.scrollTo(0, maxScroll) : (scrollEl.scrollTop = maxScroll);
+      } else if (dir === 'up') {
+        target.isDoc ? window.scrollBy(0, -step) : (scrollEl.scrollTop -= step);
+      } else {
+        target.isDoc ? window.scrollBy(0, step) : (scrollEl.scrollTop += step);
+      }
+
+      var after = target.isDoc ? window.scrollY : scrollEl.scrollTop;
+      var pct = maxScroll > 0 ? Math.round((after / maxScroll) * 100) : 100;
+      var atBottom = (maxScroll - after) < 10;
+      var atTop = after < 10;
+
+      // Extract text that's currently VISIBLE in the viewport, not the full DOM.
+      // This gives the LLM new content it hasn't seen yet.
+      function getViewportText() {
+        var viewTop = target.isDoc ? window.scrollY : scrollEl.getBoundingClientRect().top;
+        var viewBot = viewTop + viewH;
+        var texts = [];
+        var walker = document.createTreeWalker(target.isDoc ? document.body : scrollEl, NodeFilter.SHOW_TEXT, null);
+        var node;
+        while (node = walker.nextNode()) {
+          var range = document.createRange();
+          range.selectNode(node);
+          var rect = range.getBoundingClientRect();
+          // Include text nodes whose bounding rect overlaps the viewport
+          if (rect.bottom > 0 && rect.top < window.innerHeight && rect.width > 0) {
+            var t = node.textContent.trim();
+            if (t.length > 0) texts.push(t);
+          }
+        }
+        return texts.join('\\n').slice(0, 12000);
+      }
+
+      var vpText = getViewportText();
+
+      return JSON.stringify({
+        scrollY: Math.round(after),
+        maxScroll: Math.round(maxScroll),
+        percent: pct,
+        atTop: atTop,
+        atBottom: atBottom,
+        moved: Math.round(after - before),
+        scrollTarget: target.isDoc ? 'document' : (scrollEl.tagName + '.' + (scrollEl.className || '').split(' ')[0]),
+        viewportText: vpText
+      });
+    })()`);
+    const info = JSON.parse(result);
+
+    let status: string;
+    if (info.moved === 0) {
+      status = info.atBottom ? 'Already at bottom of page' : info.atTop ? 'Already at top of page' : 'Scroll position unchanged';
+    } else {
+      status = `Scrolled ${direction} (${Math.abs(info.moved)}px)`;
+    }
+
+    const posInfo = `Position: ${info.percent}% (${info.scrollY}/${info.maxScroll}px)${info.atBottom ? ' [END OF PAGE]' : ''}${info.atTop ? ' [TOP OF PAGE]' : ''}`;
+    const scrollTarget = info.scrollTarget !== 'document' ? ` [scrolled: ${info.scrollTarget}]` : '';
+
+    return `${status} | ${posInfo}${scrollTarget}\n\n${info.viewportText}`;
+  } catch (err: any) { return '[Error scrolling]: ' + err.message; }
+}
+
 export async function extractData(instruction: string): Promise<string> {
   const view = getActiveView();
   if (!view) throw new Error('No active tab');
-  return `[Extraction — "${instruction}"]\n\n${await getVisibleText()}`;
+
+  // Targeted extraction: run JS to extract specific data based on instruction.
+  // We analyze common extraction patterns and use DOM queries directly.
+  try {
+    const result = await view.webContents.executeJavaScript(`(function(){
+      var instruction = ${JSON.stringify(instruction)}.toLowerCase();
+      var out = [];
+
+      // Table extraction
+      if (instruction.match(/table|row|column|header|cell|grid/)) {
+        var tables = document.querySelectorAll('table');
+        tables.forEach(function(table, ti) {
+          if (ti >= 3) return;
+          var rows = [];
+          table.querySelectorAll('tr').forEach(function(tr, ri) {
+            if (ri >= 50) return;
+            var cells = [];
+            tr.querySelectorAll('th, td').forEach(function(td) {
+              cells.push(td.textContent.trim().replace(/\\s+/g, ' ').slice(0, 100));
+            });
+            if (cells.length > 0) rows.push(cells.join(' | '));
+          });
+          if (rows.length > 0) out.push('Table ' + (ti+1) + ':\\n' + rows.join('\\n'));
+        });
+      }
+
+      // List extraction
+      if (instruction.match(/list|items|bullet|options|menu/)) {
+        document.querySelectorAll('ul, ol, [role=list], [role=listbox]').forEach(function(list, li) {
+          if (li >= 5 || out.length >= 3) return;
+          var items = [];
+          list.querySelectorAll('li, [role=option], [role=listitem]').forEach(function(item, ii) {
+            if (ii >= 30) return;
+            var t = item.textContent.trim().replace(/\\s+/g, ' ').slice(0, 150);
+            if (t) items.push('- ' + t);
+          });
+          if (items.length > 0) out.push('List:\\n' + items.join('\\n'));
+        });
+      }
+
+      // Price extraction
+      if (instruction.match(/price|cost|\\$|amount|total|fee/)) {
+        var priceEls = document.querySelectorAll('[class*=price], [class*=cost], [class*=amount], [data-price]');
+        priceEls.forEach(function(el, i) {
+          if (i >= 20) return;
+          var t = el.textContent.trim();
+          if (t && t.match(/[\\$\\d]/)) out.push(t.slice(0, 100));
+        });
+        // Fallback: regex for price patterns in body text
+        if (out.length === 0) {
+          var bodyText = document.body.innerText;
+          var prices = bodyText.match(/\\$[\\d,.]+/g) || [];
+          prices.slice(0, 10).forEach(function(p) { out.push(p); });
+        }
+      }
+
+      // Link extraction
+      if (instruction.match(/link|url|href|navigation|nav/)) {
+        document.querySelectorAll('a[href]').forEach(function(a, i) {
+          if (i >= 30) return;
+          var t = (a.textContent||'').trim().slice(0,80);
+          var h = a.getAttribute('href')||'';
+          if (t && h && !h.startsWith('#') && !h.startsWith('javascript:')) {
+            out.push(t + ' \u2192 ' + h.slice(0, 100));
+          }
+        });
+      }
+
+      // Form field extraction
+      if (instruction.match(/form|field|input|label|submit/)) {
+        document.querySelectorAll('input, textarea, select').forEach(function(el, i) {
+          if (i >= 20) return;
+          var t = el.tagName.toLowerCase();
+          var ty = el.getAttribute('type') || '';
+          var nm = el.getAttribute('name') || '';
+          var p = el.getAttribute('placeholder') || '';
+          var lab = '';
+          var id = el.getAttribute('id');
+          if (id) { var lbl = document.querySelector('label[for="'+id+'"]'); if (lbl) lab = lbl.textContent.trim(); }
+          var v = (el.value || '').slice(0, 50);
+          out.push(t + (ty ? '['+ty+']' : '') + (nm ? ' name='+nm : '') + (lab ? ' label="'+lab+'"' : '') + (p ? ' ('+p+')' : '') + (v ? ' val="'+v+'"' : ''));
+        });
+      }
+
+      // Heading extraction
+      if (instruction.match(/heading|title|section|structure|outline/)) {
+        document.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(function(h, i) {
+          if (i >= 20) return;
+          var t = h.textContent.trim().slice(0, 120);
+          if (t) out.push(h.tagName + ': ' + t);
+        });
+      }
+
+      // Image extraction
+      if (instruction.match(/image|img|photo|picture|src/)) {
+        document.querySelectorAll('img[src]').forEach(function(img, i) {
+          if (i >= 15) return;
+          var alt = img.getAttribute('alt') || '';
+          var src = img.getAttribute('src') || '';
+          if (src) out.push((alt ? alt + ' ' : '') + '\u2192 ' + src.slice(0, 120));
+        });
+      }
+
+      // Generic fallback: if no pattern matched, return main content area text
+      if (out.length === 0) {
+        var main = document.querySelector('main, [role=main], article, .content, #content');
+        var text = (main || document.body).innerText.trim();
+        return '[Extraction] No structured pattern matched for: "' + instruction + '"\\n\\n' + text.slice(0, 8000);
+      }
+
+      return out.join('\\n\\n').slice(0, 10000);
+    })()`);
+    return `[Extraction — "${instruction}"]\n\n${result}`;
+  } catch (err: any) {
+    // Fallback to full text on JS error
+    return `[Extraction — "${instruction}"]\n\n${await getVisibleText()}`;
+  }
 }
 
 export async function takeScreenshot(): Promise<string> {

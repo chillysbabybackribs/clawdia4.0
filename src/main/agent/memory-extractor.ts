@@ -13,7 +13,7 @@
  *   - Rate-limited: max 1 extraction per 10 seconds
  */
 
-import Anthropic from '@anthropic-ai/sdk';
+import { getSharedSdk } from './client';
 import { remember, pruneMemories } from '../db/memory';
 
 const HAIKU_MODEL = 'claude-haiku-4-5-20251001';
@@ -74,7 +74,7 @@ async function doExtraction(
   userMessage: string,
   assistantResponse: string,
 ): Promise<void> {
-  const client = new Anthropic({ apiKey, timeout: 30_000 });
+  const client = getSharedSdk(apiKey);
 
   // Trim inputs to keep costs minimal
   const userTrimmed = userMessage.slice(0, 2000);
@@ -94,8 +94,8 @@ async function doExtraction(
 
   // Parse the response
   const text = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-    .map(b => b.text)
+    .filter(b => b.type === 'text')
+    .map(b => (b as any).text as string)
     .join('');
 
   if (!text.trim()) return;

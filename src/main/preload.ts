@@ -14,6 +14,10 @@ contextBridge.exposeInMainWorld('clawdia', {
   chat: {
     send: (message: string, images?: any[]) => invoke('chat:send', message, images),
     stop: () => invoke('chat:stop'),
+    pause: () => invoke('chat:pause'),
+    resume: () => invoke('chat:resume'),
+    addContext: (text: string) => invoke('chat:add-context', text),
+    rateTool: (messageId: string, toolId: string, rating: 'up' | 'down' | null, note?: string) => invoke('chat:rate-tool', messageId, toolId, rating, note),
     new: () => invoke('chat:new'),
     list: () => invoke('chat:list'),
     load: (id: string) => invoke('chat:load', id),

@@ -3,11 +3,15 @@
  * Single database file at ~/.config/clawdia/data.sqlite
  * 
  * Tables:
- *   conversations   — id, title, created_at, updated_at
- *   messages        — id, conversation_id, role, content, tool_calls, created_at
- *   user_memory     — id, category, key, value, source, confidence, created_at
- *   user_memory_fts — FTS5 virtual table for relevance search
- *   app_registry    — id, profile_json, last_scanned (v3)
+ *   conversations    — id, title, created_at, updated_at (v1)
+ *   messages         — id, conversation_id, role, content, tool_calls, created_at (v1)
+ *   messages_fts     — FTS5 on messages for cross-conversation recall (v6)
+ *   user_memory      — id, category, key, value, source, confidence, created_at (v2)
+ *   user_memory_fts  — FTS5 virtual table for relevance search (v2)
+ *   app_registry     — id, profile_json, last_scanned (v3)
+ *   coordinate_cache — app, window_key, element, x, y, confidence (v4)
+ *   site_profiles    — domain, auth_status, visit_count, nav_hints, account_info (v7)
+ *   browser_playbooks— domain, task_pattern, steps, success_count, fail_count (v8)
  */
 
 import Database from 'better-sqlite3';
@@ -160,5 +164,42 @@ function runMigrations(db: Database.Database): void {
     `);
   }
 
-  console.log(`[DB] Schema at version ${Math.max(currentVersion, 6)}`);
+  if (currentVersion < 7) {
+    console.log('[DB] Running migration v7: site_profiles for browser session awareness');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS site_profiles (
+        domain        TEXT PRIMARY KEY,
+        display_name  TEXT NOT NULL DEFAULT '',
+        auth_status   TEXT NOT NULL DEFAULT 'unknown',
+        last_visited  TEXT NOT NULL DEFAULT (datetime('now')),
+        visit_count   INTEGER NOT NULL DEFAULT 0,
+        nav_hints     TEXT NOT NULL DEFAULT '{}',
+        account_info  TEXT NOT NULL DEFAULT '{}',
+        page_map      TEXT NOT NULL DEFAULT '{}'
+      );
+      CREATE INDEX IF NOT EXISTS idx_site_visits ON site_profiles(visit_count DESC);
+      INSERT INTO schema_version (version) VALUES (7);
+    `);
+  }
+
+  if (currentVersion < 8) {
+    console.log('[DB] Running migration v8: browser_playbooks for learned navigation patterns');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS browser_playbooks (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        domain        TEXT NOT NULL,
+        task_pattern  TEXT NOT NULL,
+        steps         TEXT NOT NULL DEFAULT '[]',
+        success_count INTEGER NOT NULL DEFAULT 1,
+        fail_count    INTEGER NOT NULL DEFAULT 0,
+        last_used     TEXT NOT NULL DEFAULT (datetime('now')),
+        created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(domain, task_pattern)
+      );
+      CREATE INDEX IF NOT EXISTS idx_playbook_domain ON browser_playbooks(domain, success_count DESC);
+      INSERT INTO schema_version (version) VALUES (8);
+    `);
+  }
+
+  console.log(`[DB] Schema at version ${Math.max(currentVersion, 8)}`);
 }

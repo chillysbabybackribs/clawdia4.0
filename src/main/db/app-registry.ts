@@ -230,6 +230,14 @@ const SEED_PROFILES: AppProfile[] = [
 
 export function seedRegistry(): void {
   const db = getDb();
+
+  // Skip if already populated — avoids 10 INSERT queries on every startup
+  const count = (db.prepare('SELECT COUNT(*) as cnt FROM app_registry').get() as any)?.cnt || 0;
+  if (count > 0) {
+    console.log(`[Registry] Already seeded (${count} profiles)`);
+    return;
+  }
+
   const insert = db.prepare(`
     INSERT OR IGNORE INTO app_registry (id, profile_json, last_scanned)
     VALUES (?, ?, ?)
@@ -275,8 +283,9 @@ export async function scanHarnesses(): Promise<void> {
     const { stdout } = await execAsync('bash -c "compgen -c cli-anything-" 2>/dev/null || echo ""', { timeout: 3000 });
     const harnesses = stdout.trim().split('\n').map(s => s.replace(/.*cli-anything-/, '').trim()).filter(Boolean);
 
-    for (const appName of harnesses) {
-      // Try to discover available commands via --help (once per harness)
+    // Discover all harnesses in parallel (each runs --help + SKILL.md check)
+    await Promise.all(harnesses.map(async (appName) => {
+      // Try to discover available commands via --help
       let commands: string[] | undefined;
       try {
         const { stdout: helpOut } = await execAsync(
@@ -337,7 +346,7 @@ export async function scanHarnesses(): Promise<void> {
         updateAppProfile(newProfile);
         console.log(`[Registry] Discovered new CLI-Anything app: ${appName} (${commands?.length || '?'} commands)`);
       }
-    }
+    }));
   } catch { /* no harnesses */ }
 }
 

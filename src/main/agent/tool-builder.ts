@@ -9,7 +9,7 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import type { ToolGroup } from './classifier';
 import { executeShellExec, executeFileRead, executeFileWrite, executeFileEdit, executeDirectoryTree } from './executors/core-executors';
-import { executeBrowserSearch, executeBrowserNavigate, executeBrowserReadPage, executeBrowserClick, executeBrowserType, executeBrowserExtract, executeBrowserScreenshot } from './executors/browser-executors';
+import { executeBrowserSearch, executeBrowserNavigate, executeBrowserReadPage, executeBrowserClick, executeBrowserType, executeBrowserExtract, executeBrowserScreenshot, executeBrowserScroll } from './executors/browser-executors';
 import { executeCreateDocument, executeMemorySearch, executeMemoryStore, executeRecallContext } from './executors/extra-executors';
 import { executeAppControl, executeGuiInteract, executeDbusControl } from './executors/desktop-executors';
 
@@ -80,12 +80,24 @@ const CORE_TOOLS: Anthropic.Tool[] = [
 
 const BROWSER_TOOLS: Anthropic.Tool[] = [
   { name: 'browser_search', description: 'Web search via Google. Returns top 5 results.', input_schema: { type: 'object' as const, properties: { query: { type: 'string', description: 'Search query' } }, required: ['query'] } },
-  { name: 'browser_navigate', description: 'Navigate to URL. Returns title, URL, visible text.', input_schema: { type: 'object' as const, properties: { url: { type: 'string', description: 'URL' } }, required: ['url'] } },
-  { name: 'browser_read_page', description: 'Re-read current page text.', input_schema: { type: 'object' as const, properties: {} } },
-  { name: 'browser_click', description: 'Click element by index, selector, or text.', input_schema: { type: 'object' as const, properties: { target: { type: 'string', description: 'Element index/selector/text' } }, required: ['target'] } },
+  { name: 'browser_navigate', description: 'Navigate to URL. Returns title, URL, visible text, AND a numbered list of interactive elements (buttons, links, inputs) with their types, labels, and aria attributes. Use element indices from this list for precise clicking.', input_schema: { type: 'object' as const, properties: { url: { type: 'string', description: 'URL' } }, required: ['url'] } },
+  { name: 'browser_read_page', description: 'Re-read current page text + interactive elements. Use after SPA navigation or dynamic content changes. Returns the same format as browser_navigate (text + element list).', input_schema: { type: 'object' as const, properties: {} } },
+  { name: 'browser_click', description: 'Click element by index number (from element list), CSS selector, or visible text match. Returns click confirmation + updated interactive elements. Use index for precision: browser_click("3") clicks element [3]. Use CSS selector for specifics: browser_click("[aria-label=Compose]"). Use text for simple cases: browser_click("Submit").', input_schema: { type: 'object' as const, properties: { target: { type: 'string', description: 'Element index number, CSS selector, or text to match' } }, required: ['target'] } },
   { name: 'browser_type', description: 'Type text into input field.', input_schema: { type: 'object' as const, properties: { text: { type: 'string', description: 'Text to type' }, selector: { type: 'string', description: 'Optional CSS selector' } }, required: ['text'] } },
-  { name: 'browser_extract', description: 'Extract structured data from page.', input_schema: { type: 'object' as const, properties: { instruction: { type: 'string', description: 'What to extract' }, schema: { type: 'object', description: 'JSON schema' } }, required: ['instruction'] } },
+  { name: 'browser_extract', description: 'Extract targeted structured data from the current page. Supports: tables ("extract the pricing table"), lists ("list all menu items"), prices ("find all prices"), links ("extract navigation links"), forms ("list form fields"), headings ("page structure"), images ("list images with alt text"). More efficient than browser_read_page when you need specific data.', input_schema: { type: 'object' as const, properties: { instruction: { type: 'string', description: 'What to extract — be specific (e.g. "pricing table", "form fields", "navigation links")' } }, required: ['instruction'] } },
   { name: 'browser_screenshot', description: 'Screenshot browser viewport.', input_schema: { type: 'object' as const, properties: {} } },
+  {
+    name: 'browser_scroll',
+    description: 'Scroll the browser page. Use to access content below the fold or return to the top. Returns visible text after scrolling plus scroll position (percentage, at-top/at-bottom indicators). Default scrolls ~80% of viewport height.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        direction: { type: 'string', enum: ['down', 'up', 'top', 'bottom'], description: 'Scroll direction. "down"/"up" scroll incrementally, "top"/"bottom" jump to page edges.' },
+        amount: { type: 'number', description: 'Pixels to scroll (optional — defaults to 80% of viewport)' },
+      },
+      required: ['direction'],
+    },
+  },
 ];
 
 const EXTRA_TOOLS: Anthropic.Tool[] = [
@@ -123,16 +135,23 @@ const EXTRA_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: 'gui_interact',
-    description: 'GUI automation — LAST RESORT. Only use when no programmatic, DBus, or CLI surface can accomplish the task, or when the [EXECUTION PLAN] specifies gui surface. Use batch_actions for multi-step sequences. Use analyze_screenshot for OCR-based screen reading (~400 tokens vs 50K for vision). Actions: batch_actions, click, type, key, wait, focus, screenshot, analyze_screenshot, verify_window_title, verify_file_exists, list_windows, find_window.',
+    description: 'GUI automation for DESKTOP applications — LAST RESORT. Only for native desktop apps (GIMP, Blender, LibreOffice, etc.) when no programmatic, DBus, or CLI surface works. NEVER use gui_interact for the browser — use browser_click, browser_type, browser_navigate instead. Primitive actions: batch_actions, click, type, key, wait, focus, screenshot, analyze_screenshot, verify_window_title, verify_file_exists, list_windows, find_window. GUI Macros (prefer these for common workflows): launch_and_focus (launch app + wait + focus + OCR), open_menu_path (navigate menus via keyboard), fill_dialog (tab through fields + type values + confirm), confirm_dialog (wait + Enter or click button), export_file (shortcut + fill path + confirm + verify).',
     input_schema: {
       type: 'object' as const,
       properties: {
-        action: { type: 'string', enum: ['batch_actions', 'screenshot_and_focus', 'analyze_screenshot', 'click', 'type', 'key', 'screenshot', 'find_window', 'focus', 'list_windows', 'wait', 'verify_window_title', 'verify_file_exists', 'screenshot_region'] },
+        action: { type: 'string', enum: ['batch_actions', 'screenshot_and_focus', 'analyze_screenshot', 'click', 'type', 'key', 'screenshot', 'find_window', 'focus', 'list_windows', 'wait', 'verify_window_title', 'verify_file_exists', 'screenshot_region', 'launch_and_focus', 'open_menu_path', 'fill_dialog', 'confirm_dialog', 'export_file'] },
         window: { type: 'string', description: 'Window title. For batch_actions, set here to apply to all steps.' },
         x: { type: 'number' }, y: { type: 'number' },
         text: { type: 'string', description: 'Text to type, key combo, or filepath' },
         path: { type: 'string', description: 'Filepath for verify_file_exists' },
         delay: { type: 'number' }, ms: { type: 'number' },
+        app: { type: 'string', description: 'App binary name for launch_and_focus' },
+        fields: { type: 'array', description: 'For fill_dialog: [{value, label?}] in tab order', items: { type: 'object', properties: { value: { type: 'string' }, label: { type: 'string' } }, required: ['value'] } },
+        button: { type: 'string', description: 'For confirm_dialog: button label to click (default: Enter key)' },
+        shortcut: { type: 'string', description: 'For export_file: override keyboard shortcut' },
+        confirm: { type: 'boolean', description: 'For fill_dialog: press Enter after filling (default: true)' },
+        settle_ms: { type: 'number', description: 'For confirm_dialog: ms to wait before confirming (default: 300)' },
+        verify: { type: 'boolean', description: 'Force or skip post-action OCR verification' },
         rx: { type: 'number' }, ry: { type: 'number' }, rw: { type: 'number' }, rh: { type: 'number' },
         actions: { type: 'array', description: 'For batch_actions. Max 20 steps.', items: { type: 'object', properties: { action: { type: 'string', enum: ['click', 'type', 'key', 'focus', 'screenshot', 'wait', 'verify_window_title', 'verify_file_exists'] }, window: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' }, text: { type: 'string' }, path: { type: 'string' }, delay: { type: 'number' }, ms: { type: 'number' } }, required: ['action'] } },
       },
@@ -197,6 +216,7 @@ const DISPATCH: Record<string, ToolExecutor> = {
   browser_type: executeBrowserType,
   browser_extract: executeBrowserExtract,
   browser_screenshot: executeBrowserScreenshot,
+  browser_scroll: executeBrowserScroll,
   create_document: executeCreateDocument,
   memory_search: executeMemorySearch,
   memory_store: executeMemoryStore,
@@ -205,6 +225,15 @@ const DISPATCH: Record<string, ToolExecutor> = {
   gui_interact: executeGuiInteract,
   dbus_control: executeDbusControl,
 };
+
+/**
+ * Check whether a tool name exists in any dispatch table.
+ * Used by the agent loop to distinguish classifier under-routing
+ * (tool exists but wasn't included) from hallucinated tool names.
+ */
+export function isKnownTool(name: string): boolean {
+  return name in STREAMING_DISPATCH || name in DISPATCH;
+}
 
 export function executeTool(
   name: string,
