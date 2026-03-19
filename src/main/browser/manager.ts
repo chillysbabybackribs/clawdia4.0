@@ -12,6 +12,7 @@
 import { BrowserView, BrowserWindow } from 'electron';
 import { randomUUID } from 'crypto';
 import { IPC_EVENTS } from '../../shared/ipc-channels';
+import type { BrowserExecutionMode } from '../../shared/types';
 
 const MAX_TABS = 6;
 const MAX_HISTORY = 200;
@@ -29,6 +30,7 @@ let mainWindow: BrowserWindow | null = null;
 let tabs: Map<string, Tab> = new Map();
 let activeTabId: string | null = null;
 let currentBounds = { x: 0, y: 0, width: 0, height: 0 };
+let executionMode: BrowserExecutionMode = 'headed';
 
 // URL history for autocomplete — stores visited URLs, most recent first
 let urlHistory: string[] = [];
@@ -68,6 +70,7 @@ export function matchUrlHistory(prefix: string): string {
 export function initBrowser(win: BrowserWindow): void {
   mainWindow = win;
   createTab('https://www.google.com');
+  emitModeChanged('init');
   console.log('[Browser] Initialized with tabs');
 }
 
@@ -207,26 +210,51 @@ function watchAuthTab(authTabId: string, openerTabId: string): void {
   const authTab = tabs.get(authTabId);
   if (!authTab) return;
 
+  let completing = false;
+
   const onNavigate = (_event: any, url: string) => {
+    if (completing) return;
     // Still on the auth provider — user is going through sign-in steps, do nothing
     if (isAuthProviderHost(url)) return;
-    // Navigated away from the auth provider = handshake complete
-    console.log(`[Browser] OAuth complete, returned to: ${url.slice(0, 80)}`);
-    cleanup();
 
-    setTimeout(() => {
-      closeTab(authTabId);
-      const openerTab = tabs.get(openerTabId);
-      if (openerTab) {
-        switchTab(openerTabId);
-        openerTab.view.webContents.reload();
-      }
-    }, 500);
+    // Navigated away from the auth provider = handshake complete.
+    // Wait for the page to finish loading before closing the tab — closing
+    // mid-navigation tears the renderer widget and causes Mojo errors.
+    completing = true;
+    console.log(`[Browser] OAuth complete, returned to: ${url.slice(0, 80)}`);
+
+    const wc = authTab.view.webContents;
+
+    const finish = () => {
+      cleanup();
+      if (wc.isDestroyed()) return;
+      // Small delay to let the page settle before tearing down the BrowserView
+      setTimeout(() => {
+        if (tabs.has(authTabId)) closeTab(authTabId);
+        const openerTab = tabs.get(openerTabId);
+        if (openerTab && !openerTab.view.webContents.isDestroyed()) {
+          switchTab(openerTabId);
+          openerTab.view.webContents.reload();
+        }
+      }, 300);
+    };
+
+    // If already finished loading, go immediately; otherwise wait for it
+    if (!wc.isLoading()) {
+      finish();
+    } else {
+      wc.once('did-finish-load', finish);
+      wc.once('did-fail-load', finish);
+      // Safety timeout — don't wait more than 5s for the callback page to load
+      setTimeout(() => { if (completing) finish(); }, 5000);
+    }
   };
 
   const cleanup = () => {
-    authTab.view.webContents.removeListener('did-navigate', onNavigate);
-    authTab.view.webContents.removeListener('destroyed', cleanup);
+    if (!authTab.view.webContents.isDestroyed()) {
+      authTab.view.webContents.removeListener('did-navigate', onNavigate);
+      authTab.view.webContents.removeListener('destroyed', cleanup);
+    }
   };
 
   authTab.view.webContents.on('did-navigate', onNavigate);
@@ -315,13 +343,32 @@ function wireTabEvents(tab: Tab): void {
 export function setBounds(bounds: { x: number; y: number; width: number; height: number }): void {
   currentBounds = bounds;
   const view = getActiveView();
-  if (view && bounds.width > 0 && bounds.height > 0) {
+  if (executionMode !== 'headless' && view && bounds.width > 0 && bounds.height > 0) {
     view.setBounds({ x: Math.round(bounds.x), y: Math.round(bounds.y), width: Math.round(bounds.width), height: Math.round(bounds.height) });
   }
 }
 
 export function hideBrowser(): void { getActiveView()?.setBounds({ x: 0, y: 0, width: 0, height: 0 }); }
 export function showBrowser(): void { if (currentBounds.width > 0) setBounds(currentBounds); }
+
+export function getBrowserExecutionMode(): BrowserExecutionMode {
+  return executionMode;
+}
+
+export function setBrowserExecutionMode(mode: BrowserExecutionMode, reason = 'manual'): void {
+  if (executionMode === mode) return;
+  executionMode = mode;
+
+  if (mode === 'headless') hideBrowser();
+  else showBrowser();
+
+  emitModeChanged(reason);
+  console.log(`[Browser] Execution mode → ${mode} (${reason})`);
+}
+
+function emitModeChanged(reason: string): void {
+  mainWindow?.webContents.send(IPC_EVENTS.BROWSER_MODE_CHANGED, { mode: executionMode, reason });
+}
 
 // ═══════════════════════════════════
 // Navigation
