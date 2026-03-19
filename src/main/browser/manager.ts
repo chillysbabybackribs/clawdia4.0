@@ -177,46 +177,60 @@ export function closeTab(id: string): void {
  * to the opener's origin), close the auth tab and reload the opener tab
  * so it picks up the new authenticated session.
  */
+/** Known auth provider hostnames — navigations within these are part of the flow, not completion. */
+const AUTH_PROVIDER_HOSTS = new Set([
+  'accounts.google.com', 'google.com',
+  'login.microsoftonline.com', 'login.live.com', 'account.microsoft.com',
+  'appleid.apple.com',
+  'github.com',
+  'auth0.com',
+  'okta.com',
+]);
+
+function isAuthProviderHost(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, '');
+    // Match exact hosts and subdomains (e.g. foo.okta.com)
+    for (const provider of AUTH_PROVIDER_HOSTS) {
+      if (host === provider || host.endsWith('.' + provider)) return true;
+    }
+  } catch {}
+  return false;
+}
+
+/**
+ * Watch an auth/OAuth tab for completion. Completion = the tab leaves the
+ * auth provider's domain entirely (navigates back to the app's domain).
+ * At that point we close the auth tab and reload the opener.
+ */
 function watchAuthTab(authTabId: string, openerTabId: string): void {
   const authTab = tabs.get(authTabId);
   if (!authTab) return;
 
   const onNavigate = (_event: any, url: string) => {
-    const isCallback =
-      /[?&](code|token|access_token|id_token|state)=/.test(url) ||
-      url.includes('/callback') ||
-      url.includes('/oauth/callback') ||
-      url.includes('/auth/callback');
+    // Still on the auth provider — user is going through sign-in steps, do nothing
+    if (isAuthProviderHost(url)) return;
+    // Navigated away from the auth provider = handshake complete
+    console.log(`[Browser] OAuth complete, returned to: ${url.slice(0, 80)}`);
+    cleanup();
 
-    if (isCallback) {
-      console.log(`[Browser] OAuth callback detected: ${url.slice(0, 120)}`);
-      cleanup();
-
-      // Brief delay so the auth tab can finish any final redirects before we close it
-      setTimeout(() => {
-        // Close auth tab and return to opener
-        closeTab(authTabId);
-        const openerTab = tabs.get(openerTabId);
-        if (openerTab) {
-          switchTab(openerTabId);
-          // Reload so the opener page sees the new session cookies
-          openerTab.view.webContents.reload();
-        }
-      }, 800);
-    }
+    setTimeout(() => {
+      closeTab(authTabId);
+      const openerTab = tabs.get(openerTabId);
+      if (openerTab) {
+        switchTab(openerTabId);
+        openerTab.view.webContents.reload();
+      }
+    }, 500);
   };
-
-  const onClose = () => cleanup();
 
   const cleanup = () => {
     authTab.view.webContents.removeListener('did-navigate', onNavigate);
-    authTab.view.webContents.removeListener('did-navigate-in-page', onNavigate);
-    authTab.view.webContents.removeListener('destroyed', onClose);
+    authTab.view.webContents.removeListener('destroyed', cleanup);
   };
 
   authTab.view.webContents.on('did-navigate', onNavigate);
-  authTab.view.webContents.on('did-navigate-in-page', onNavigate);
-  authTab.view.webContents.on('destroyed', onClose);
+  authTab.view.webContents.on('destroyed', cleanup);
 }
 
 function wireTabEvents(tab: Tab): void {
