@@ -88,16 +88,16 @@ function AssistantMessage({ message, streamMap }: { message: Message; streamMap?
             if (!hasText && !hasTools) return null;
             return (
               <div key={i} className={!isLastIter ? 'mb-3' : ''}>
-                {hasText && (
-                  <div className={hasTools ? 'mb-2' : ''}>
-                    <MarkdownRenderer
-                      content={iter.text}
-                      isStreaming={message.isStreaming === true && isLastIter && !hasTools}
-                    />
+                {hasTools && (
+                  <div className={hasText ? 'mb-2' : ''}>
+                    <ToolActivity tools={iter.toolCalls} streamMap={activeStreamMap} />
                   </div>
                 )}
-                {hasTools && (
-                  <ToolActivity tools={iter.toolCalls} streamMap={activeStreamMap} />
+                {hasText && (
+                  <MarkdownRenderer
+                    content={iter.text}
+                    isStreaming={message.isStreaming === true && isLastIter && !hasTools}
+                  />
                 )}
               </div>
             );
@@ -230,7 +230,8 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
     cleanups.push(api.chat.onStreamText((chunk: string) => {
       if (chunk.includes('__RESET__')) {
         // Seal current text+tools as a completed iteration
-        iterationsRef.current.push({ text: currentTextRef.current, toolCalls: [] });
+        const sealed = { text: currentTextRef.current, toolCalls: [...currentToolsRef.current] };
+        iterationsRef.current.push(sealed);
         currentTextRef.current = '';
         currentToolsRef.current = [];
         routeToSealedRef.current = true; // next tool(s) belong to the just-sealed iteration
