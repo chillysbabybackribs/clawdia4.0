@@ -112,6 +112,7 @@ export default function App() {
             browserVisible={browserVisible}
             onToggleBrowser={handleToggleBrowser}
             onOpenSettings={() => setActiveView('settings')}
+            onOpenPendingApproval={handleOpenProcess}
             loadConversationId={loadConversationId}
           />
         )}

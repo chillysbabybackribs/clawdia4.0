@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import type { Message, ToolCall, FeedItem } from '../../shared/types';
+import type { Message, ToolCall, FeedItem, ProcessInfo, RunApproval } from '../../shared/types';
 import InputBar from './InputBar';
 import StatusLine from './StatusLine';
 import ToolActivity, { type ToolStreamMap } from './ToolActivity';
@@ -10,7 +10,54 @@ interface ChatPanelProps {
   browserVisible: boolean;
   onToggleBrowser: () => void;
   onOpenSettings: () => void;
+  onOpenPendingApproval?: (processId: string) => void;
   loadConversationId?: string | null;
+}
+
+function ApprovalBanner({
+  approval,
+  onApprove,
+  onDeny,
+  onOpenReview,
+}: {
+  approval: RunApproval;
+  onApprove: () => void;
+  onDeny: () => void;
+  onOpenReview: () => void;
+}) {
+  return (
+    <div className="mx-4 mb-3 rounded-xl border border-[#ff7a00]/25 bg-[#ff7a00]/8 px-4 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[13px] font-medium text-[#ff9a3d]">Approval required</div>
+          <div className="mt-1 text-[13px] text-text-primary">{approval.summary}</div>
+          <div className="mt-1 text-2xs text-text-muted break-all">
+            {approval.actionType} · {approval.target}
+          </div>
+        </div>
+        <button
+          onClick={onOpenReview}
+          className="text-2xs px-2.5 py-1 rounded-md text-text-secondary hover:text-text-primary hover:bg-white/[0.06] transition-colors cursor-pointer flex-shrink-0"
+        >
+          Open review
+        </button>
+      </div>
+      <div className="flex items-center gap-2 mt-3">
+        <button
+          onClick={onApprove}
+          className="text-2xs px-2.5 py-1 rounded-md bg-[#ff7a00]/16 text-[#ff9a3d] hover:bg-[#ff7a00]/24 transition-colors cursor-pointer"
+        >
+          Approve
+        </button>
+        <button
+          onClick={onDeny}
+          className="text-2xs px-2.5 py-1 rounded-md bg-red-400/10 text-red-300 hover:bg-red-400/18 transition-colors cursor-pointer"
+        >
+          Deny
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function Clock() {
@@ -151,12 +198,14 @@ function UserMessage({ message }: { message: Message }) {
   );
 }
 
-export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSettings, loadConversationId }: ChatPanelProps) {
+export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSettings, onOpenPendingApproval, loadConversationId }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [statusText, setStatusText] = useState('');
   const [streamMap, setStreamMap] = useState<ToolStreamMap>({});
+  const [pendingApprovalRunId, setPendingApprovalRunId] = useState<string | null>(null);
+  const [pendingApprovals, setPendingApprovals] = useState<RunApproval[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Flat append-only feed — each item appended once, never moved
   const feedRef = useRef<FeedItem[]>([]);
@@ -178,6 +227,30 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
       }
     }).catch(() => {});
   }, [loadConversationId]);
+
+  useEffect(() => {
+    const api = (window as any).clawdia;
+    if (!api?.process || !api?.run) return;
+
+    const syncPendingApproval = async (processes: ProcessInfo[]) => {
+      const attachedBlocked = processes.find((proc) => proc.isAttached && proc.status === 'awaiting_approval');
+      if (!attachedBlocked) {
+        setPendingApprovalRunId(null);
+        setPendingApprovals([]);
+        return;
+      }
+
+      setPendingApprovalRunId(attachedBlocked.id);
+      const approvals = await api.run.approvals(attachedBlocked.id);
+      setPendingApprovals((approvals || []).filter((approval: RunApproval) => approval.status === 'pending'));
+    };
+
+    api.process.list().then(syncPendingApproval).catch(() => {});
+    const cleanup = api.process.onListChanged((processes: ProcessInfo[]) => {
+      syncPendingApproval(processes).catch(() => {});
+    });
+    return cleanup;
+  }, []);
 
   const scrollToBottom = useCallback((behavior: 'auto' | 'smooth' = 'auto') => {
     if (scrollRef.current) scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior });
@@ -434,6 +507,20 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
     requestAnimationFrame(() => scrollToBottom('smooth'));
   }, [scrollToBottom]);
 
+  const handleApprovalDecision = useCallback(async (decision: 'approve' | 'deny') => {
+    const api = (window as any).clawdia;
+    const approval = pendingApprovals[0];
+    if (!api?.run || !approval) return;
+
+    if (decision === 'approve') await api.run.approve(approval.id);
+    else await api.run.deny(approval.id);
+
+    if (pendingApprovalRunId) {
+      const approvals = await api.run.approvals(pendingApprovalRunId);
+      setPendingApprovals((approvals || []).filter((item: RunApproval) => item.status === 'pending'));
+    }
+  }, [pendingApprovalRunId, pendingApprovals]);
+
   return (
     <div className="flex flex-col h-full">
       <header className="drag-region flex items-center gap-2 px-4 h-[44px] flex-shrink-0 bg-surface-1 border-b border-border-subtle shadow-[inset_0_-1px_6px_rgba(0,0,0,0.2),0_2px_8px_rgba(0,0,0,0.3)] relative z-10">
@@ -473,6 +560,15 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
           <TerminalLogStrip lines={terminalLines} isStreaming={isStreaming} />
         ) : null;
       })()}
+
+      {pendingApprovalRunId && pendingApprovals[0] && (
+        <ApprovalBanner
+          approval={pendingApprovals[0]}
+          onApprove={() => handleApprovalDecision('approve')}
+          onDeny={() => handleApprovalDecision('deny')}
+          onOpenReview={() => onOpenPendingApproval?.(pendingApprovalRunId)}
+        />
+      )}
 
       <InputBar
         onSend={handleSend}
