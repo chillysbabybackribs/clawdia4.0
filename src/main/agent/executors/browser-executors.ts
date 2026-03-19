@@ -1,32 +1,87 @@
 /**
- * Browser Tool Executors — Stubs for now. Will be backed by Playwright later.
- * Returns placeholder messages so the tool loop works without a browser.
+ * Browser Tool Executors — backed by the BrowserView manager.
+ * No Playwright — uses webContents.executeJavaScript() for everything.
  */
 
+import {
+  search,
+  navigate,
+  getVisibleText,
+  getInteractiveElements,
+  clickElement,
+  typeText,
+  extractData,
+  takeScreenshot,
+} from '../../browser/manager';
+
 export async function executeBrowserSearch(input: Record<string, any>): Promise<string> {
-  return `[browser_search] Search not yet connected. Query: "${input.query}". Wire Playwright or a search API to enable.`;
+  try {
+    return await search(input.query);
+  } catch (err: any) {
+    return `[Error: browser_search] ${err.message}`;
+  }
 }
 
 export async function executeBrowserNavigate(input: Record<string, any>): Promise<string> {
-  return `[browser_navigate] Browser not yet connected. URL: ${input.url}. Wire Playwright to enable.`;
+  try {
+    const result = await navigate(input.url);
+    const elements = await getInteractiveElements();
+    
+    let output = `Title: ${result.title}\nURL: ${result.url}\n\n${result.content}`;
+    if (elements) {
+      output += `\n\n--- Interactive Elements ---\n${elements}`;
+    }
+    return output;
+  } catch (err: any) {
+    return `[Error: browser_navigate] ${err.message}`;
+  }
 }
 
 export async function executeBrowserReadPage(_input: Record<string, any>): Promise<string> {
-  return `[browser_read_page] Browser not yet connected.`;
+  try {
+    const text = await getVisibleText();
+    const elements = await getInteractiveElements();
+    let output = text;
+    if (elements) {
+      output += `\n\n--- Interactive Elements ---\n${elements}`;
+    }
+    return output;
+  } catch (err: any) {
+    return `[Error: browser_read_page] ${err.message}`;
+  }
 }
 
 export async function executeBrowserClick(input: Record<string, any>): Promise<string> {
-  return `[browser_click] Browser not yet connected. Target: ${input.target}`;
+  try {
+    const result = await clickElement(input.target);
+    // After clicking, get updated page state
+    const text = await getVisibleText();
+    return `${result}\n\n--- Page after click ---\n${text.slice(0, 5000)}`;
+  } catch (err: any) {
+    return `[Error: browser_click] ${err.message}`;
+  }
 }
 
 export async function executeBrowserType(input: Record<string, any>): Promise<string> {
-  return `[browser_type] Browser not yet connected. Text: ${input.text}`;
+  try {
+    return await typeText(input.text, input.selector);
+  } catch (err: any) {
+    return `[Error: browser_type] ${err.message}`;
+  }
 }
 
 export async function executeBrowserExtract(input: Record<string, any>): Promise<string> {
-  return `[browser_extract] Browser not yet connected. Instruction: ${input.instruction}`;
+  try {
+    return await extractData(input.instruction);
+  } catch (err: any) {
+    return `[Error: browser_extract] ${err.message}`;
+  }
 }
 
 export async function executeBrowserScreenshot(_input: Record<string, any>): Promise<string> {
-  return `[browser_screenshot] Browser not yet connected.`;
+  try {
+    return await takeScreenshot();
+  } catch (err: any) {
+    return `[Error: browser_screenshot] ${err.message}`;
+  }
 }

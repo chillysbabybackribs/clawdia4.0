@@ -8,6 +8,7 @@ import MarkdownRenderer from './MarkdownRenderer';
 interface ChatPanelProps {
   browserVisible: boolean;
   onToggleBrowser: () => void;
+  loadConversationId?: string | null;
 }
 
 function Clock() {
@@ -30,9 +31,7 @@ function AssistantMessage({ message }: { message: Message }) {
     <div className="flex justify-start animate-slide-up">
       <div className="max-w-[92%] px-1 py-2 text-text-primary">
         {message.toolCalls && message.toolCalls.length > 0 && (
-          <div className="mb-2">
-            <ToolActivity tools={message.toolCalls} />
-          </div>
+          <div className="mb-2"><ToolActivity tools={message.toolCalls} /></div>
         )}
         <MarkdownRenderer content={message.content} isStreaming={message.isStreaming} />
         {!message.isStreaming && message.content && (
@@ -54,7 +53,7 @@ function UserMessage({ message }: { message: Message }) {
   );
 }
 
-export default function ChatPanel({ browserVisible, onToggleBrowser }: ChatPanelProps) {
+export default function ChatPanel({ browserVisible, onToggleBrowser, loadConversationId }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [thinking, setThinking] = useState('');
@@ -65,6 +64,27 @@ export default function ChatPanel({ browserVisible, onToggleBrowser }: ChatPanel
   const rafRef = useRef<number | null>(null);
   const pendingUpdateRef = useRef(false);
   const isUserScrolledUpRef = useRef(false);
+
+  // ── Load conversation on mount if ID provided ──
+  useEffect(() => {
+    if (!loadConversationId) return;
+    const api = (window as any).clawdia;
+    if (!api) return;
+
+    api.chat.load(loadConversationId).then((result: any) => {
+      if (result.messages && result.messages.length > 0) {
+        setMessages(result.messages);
+        // Scroll to bottom after loading
+        requestAnimationFrame(() => {
+          if (scrollRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+          }
+        });
+      }
+    }).catch((err: any) => {
+      console.error('Failed to load conversation:', err);
+    });
+  }, [loadConversationId]);
 
   const scrollToBottom = useCallback((behavior: 'auto' | 'smooth' = 'auto') => {
     if (scrollRef.current) {
@@ -113,8 +133,6 @@ export default function ChatPanel({ browserVisible, onToggleBrowser }: ChatPanel
     const cleanups: (() => void)[] = [];
 
     cleanups.push(api.chat.onStreamText((chunk: string) => {
-      // __RESET__ signal: the loop is discarding intermediate text
-      // (tool-use preamble) and will stream the real answer next
       if (chunk.includes('__RESET__')) {
         streamBufferRef.current = '';
         scheduleStreamUpdate();
@@ -143,14 +161,13 @@ export default function ChatPanel({ browserVisible, onToggleBrowser }: ChatPanel
 
     cleanups.push(api.chat.onStreamEnd(() => {
       if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-      // Don't finalize here — let handleSend do it with the full result
     }));
 
     return () => {
       cleanups.forEach(fn => fn());
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [scheduleStreamUpdate, autoScroll, scrollToBottom]);
+  }, [scheduleStreamUpdate, autoScroll]);
 
   const handleSend = useCallback(async (text: string) => {
     const api = (window as any).clawdia;
@@ -174,9 +191,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser }: ChatPanel
 
     setTimeout(() => {
       setMessages(prev => [...prev, {
-        id: assistantId,
-        role: 'assistant',
-        content: '',
+        id: assistantId, role: 'assistant', content: '',
         timestamp: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
         isStreaming: true,
       }]);
@@ -186,8 +201,6 @@ export default function ChatPanel({ browserVisible, onToggleBrowser }: ChatPanel
     try {
       const result = await api.chat.send(text);
 
-      // The IPC promise resolves AFTER onStreamEnd.
-      // Finalize the assistant message with the definitive response.
       const finalContent = result.response || streamBufferRef.current || '';
       const finalTools = result.toolCalls?.map((tc: any, i: number) => ({
         ...tc, id: tc.id || `tc-${i}`
@@ -203,25 +216,20 @@ export default function ChatPanel({ browserVisible, onToggleBrowser }: ChatPanel
         ));
       }
 
-      setIsStreaming(false);
-      setThinking('');
-      assistantMsgIdRef.current = null;
+      setIsStreaming(false); setThinking(''); assistantMsgIdRef.current = null;
       isUserScrolledUpRef.current = false;
       requestAnimationFrame(() => scrollToBottom('smooth'));
     } catch (err: any) {
       setMessages(prev => prev.map(m =>
         m.id === assistantId ? { ...m, content: `⚠️ ${err.message || 'Unknown error'}`, isStreaming: false } : m
       ));
-      setIsStreaming(false);
-      setThinking('');
-      assistantMsgIdRef.current = null;
+      setIsStreaming(false); setThinking(''); assistantMsgIdRef.current = null;
     }
   }, [scrollToBottom]);
 
   const handleStop = useCallback(() => {
     (window as any).clawdia?.chat.stop();
-    setIsStreaming(false);
-    setThinking('');
+    setIsStreaming(false); setThinking('');
   }, []);
 
   return (

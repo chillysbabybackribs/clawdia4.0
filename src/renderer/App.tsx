@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatPanel from './components/ChatPanel';
 import BrowserPanel from './components/BrowserPanel';
@@ -10,15 +10,21 @@ export type View = 'chat' | 'conversations' | 'settings';
 export default function App() {
   const [activeView, setActiveView] = useState<View>('chat');
   const [browserVisible, setBrowserVisible] = useState(true);
-  // Key used to force-remount ChatPanel on new chat or load
   const [chatKey, setChatKey] = useState(0);
   const [loadConversationId, setLoadConversationId] = useState<string | null>(null);
+
+  // When browser panel is hidden, send zero bounds to hide the native BrowserView
+  useEffect(() => {
+    if (!browserVisible) {
+      (window as any).clawdia?.browser.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    }
+  }, [browserVisible]);
 
   const handleNewChat = useCallback(async () => {
     const api = (window as any).clawdia;
     if (api) await api.chat.new();
     setLoadConversationId(null);
-    setChatKey(k => k + 1); // Force remount to clear messages
+    setChatKey(k => k + 1);
     setActiveView('chat');
   }, []);
 
@@ -26,6 +32,10 @@ export default function App() {
     setLoadConversationId(id);
     setChatKey(k => k + 1);
     setActiveView('chat');
+  }, []);
+
+  const handleToggleBrowser = useCallback(() => {
+    setBrowserVisible(v => !v);
   }, []);
 
   return (
@@ -44,7 +54,7 @@ export default function App() {
           <ChatPanel
             key={chatKey}
             browserVisible={browserVisible}
-            onToggleBrowser={() => setBrowserVisible(v => !v)}
+            onToggleBrowser={handleToggleBrowser}
             loadConversationId={loadConversationId}
           />
         )}
