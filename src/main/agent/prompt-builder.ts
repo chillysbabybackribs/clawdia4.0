@@ -35,8 +35,8 @@ export function buildStaticPrompt(toolGroup: ToolGroup, modules: Set<PromptModul
   parts.push(readPromptFile('tools', 'groups', toolGroup, 'CONTEXT.md'));
 
   const MODULE_FILES: Record<PromptModule, string> = {
-    coding: 'CODING.md', research: 'RESEARCH.md', document: 'DOCUMENT.md',
-    desktop_apps: 'DESKTOP_APPS.md', self_knowledge: 'SELF_KNOWLEDGE.md',
+    browser: 'BROWSER.md', coding: 'CODING.md', research: 'RESEARCH.md',
+    document: 'DOCUMENT.md', desktop_apps: 'DESKTOP_APPS.md', self_knowledge: 'SELF_KNOWLEDGE.md',
   };
 
   for (const mod of modules) {

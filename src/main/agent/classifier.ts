@@ -4,7 +4,7 @@
  */
 
 export type ToolGroup = 'core' | 'browser' | 'full';
-export type PromptModule = 'coding' | 'research' | 'document' | 'desktop_apps' | 'self_knowledge';
+export type PromptModule = 'coding' | 'research' | 'document' | 'desktop_apps' | 'self_knowledge' | 'browser';
 export type ModelTier = 'haiku' | 'sonnet' | 'opus';
 
 export interface TaskProfile {
@@ -49,6 +49,7 @@ export function classify(message: string): TaskProfile {
   const matchesSelf = SELF_RE.test(trimmed);
   const matchesResearch = RESEARCH_RE.test(trimmed);
 
+  if (matchesBrowser) modules.add('browser');
   if (matchesResearch) modules.add('research');
   if (matchesFilesystem) modules.add('coding');
   if (matchesDocument) modules.add('document');

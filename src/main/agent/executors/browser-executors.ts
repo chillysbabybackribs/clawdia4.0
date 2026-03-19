@@ -14,7 +14,7 @@ import {
   takeScreenshot,
   scrollPage,
 } from '../../browser/manager';
-import { recordVisit } from '../../db/site-profiles';
+import { recordVisit, getSiteProfile, extractDomain } from '../../db/site-profiles';
 
 export async function executeBrowserSearch(input: Record<string, any>): Promise<string> {
   try {
@@ -75,8 +75,16 @@ export async function executeBrowserNavigate(input: Record<string, any>): Promis
       output += `\n\n--- Interactive Elements ---\n${result.elements}`;
     }
 
-    // Check for login state and record the visit
-    const loginSignal = detectLoginState(result.url, result.title, result.content, result.elements);
+    // Skip login heuristic if the site is already known-authenticated in the profile DB.
+    // This prevents false positives on pages that have login language but are actually
+    // inside an authenticated session (e.g., account settings pages).
+    const domain = extractDomain(result.url);
+    const knownProfile = getSiteProfile(domain);
+    const skipHeuristic = knownProfile?.authStatus === 'authenticated';
+
+    const loginSignal = skipHeuristic
+      ? null
+      : detectLoginState(result.url, result.title, result.content, result.elements);
     const isAuthenticated = !loginSignal;
 
     // Record this visit in the site profile registry (fire-and-forget)
@@ -89,7 +97,6 @@ export async function executeBrowserNavigate(input: Record<string, any>): Promis
     } catch { /* non-fatal */ }
 
     if (loginSignal) {
-      const domain = result.url.replace(/^https?:\/\//, '').split('/')[0].replace(/^www\./, '');
       output += `\n\n⚠ [LOGIN REQUIRED] This page appears to be a ${loginSignal}. The user is not logged in to ${domain}. Tell the user to log in using the browser panel on the right side of the app. Once logged in, their session will persist and you can access their account automatically in the future. Do NOT attempt to fill in credentials.`;
     }
 

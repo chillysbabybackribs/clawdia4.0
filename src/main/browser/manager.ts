@@ -555,11 +555,18 @@ export async function extractData(instruction: string): Promise<string> {
         });
       }
 
-      // Generic fallback: if no pattern matched, return main content area text
+      // Generic fallback: if no pattern matched, return focused content area text.
+      // Prefer semantic containers over dumping the whole body — avoids nav/footer noise.
       if (out.length === 0) {
-        var main = document.querySelector('main, [role=main], article, .content, #content');
-        var text = (main || document.body).innerText.trim();
-        return '[Extraction] No structured pattern matched for: "' + instruction + '"\\n\\n' + text.slice(0, 8000);
+        var containers = ['main', '[role=main]', 'article', '#main', '#content', '.content', '.main', '.post', '.article', '.entry', '.body'];
+        var best = null;
+        for (var ci = 0; ci < containers.length; ci++) {
+          best = document.querySelector(containers[ci]);
+          if (best && best.textContent.trim().length > 200) break;
+          best = null;
+        }
+        var text = (best || document.body).innerText.trim();
+        return text.slice(0, 8000);
       }
 
       return out.join('\\n\\n').slice(0, 10000);
@@ -587,10 +594,42 @@ export async function search(query: string): Promise<string> {
   try {
     await view.webContents.loadURL(`https://www.google.com/search?q=${encodeURIComponent(query)}`);
     await wait(1500);
-    const results = await view.webContents.executeJavaScript(`(function(){const r=[];document.querySelectorAll('div.g,div[data-sokoban-container]').forEach((c,i)=>{if(i>=5)return;const a=c.querySelector('a[href]'),h=c.querySelector('h3'),s=c.querySelector('[data-sncf],.VwiC3b,[style*="-webkit-line-clamp"]');if(!a||!h)return;const u=a.getAttribute('href')||'';if(u.startsWith('/search')||u.startsWith('/url'))return;r.push({title:h.textContent.trim(),url:u.trim(),snippet:s?s.textContent.trim().slice(0,200):''})});if(r.length===0)document.querySelectorAll('a[href^="http"]').forEach((a,i)=>{if(i>=5)return;const t=(a.textContent||'').trim();if(t.length>5&&t.length<200)r.push({title:t.slice(0,100),url:a.href,snippet:''})});return JSON.stringify(r)})()`);
+    const results = await view.webContents.executeJavaScript(`(function(){
+      var r=[];
+      // Try multiple Google result container selectors — Google frequently changes DOM structure.
+      // Priority order: classic div.g, newer data-* containers, any block with an h3 + external link.
+      var containers = Array.from(document.querySelectorAll('div.g, div[data-sokoban-container], div[data-hveid], .tF2Cxc, .N54PNb'));
+      // Deduplicate by URL
+      var seen = new Set();
+      containers.forEach(function(c) {
+        if (r.length >= 6) return;
+        var a = c.querySelector('a[href^="http"], a[href^="https"]') || c.querySelector('a[href]');
+        var h = c.querySelector('h3');
+        var s = c.querySelector('[data-sncf], .VwiC3b, .lEBKkf, [style*="-webkit-line-clamp"], span[style]');
+        if (!a || !h) return;
+        var u = a.href || a.getAttribute('href') || '';
+        if (!u || u.startsWith('https://www.google') || seen.has(u)) return;
+        seen.add(u);
+        r.push({title:h.textContent.trim(), url:u.trim(), snippet:s?s.textContent.trim().slice(0,250):''});
+      });
+      // Fallback: scan all external links with meaningful anchor text
+      if (r.length === 0) {
+        var seen2 = new Set();
+        document.querySelectorAll('a[href^="http"]').forEach(function(a) {
+          if (r.length >= 6) return;
+          var t = (a.textContent||'').trim().replace(/\\s+/g,' ');
+          var u = a.href;
+          if (t.length > 10 && t.length < 200 && !u.includes('google.') && !seen2.has(u)) {
+            seen2.add(u);
+            r.push({title:t.slice(0,120), url:u, snippet:''});
+          }
+        });
+      }
+      return JSON.stringify(r);
+    })()`);
     const parsed = JSON.parse(results || '[]');
-    if (parsed.length === 0) return 'Search for "' + query + '":\\n\\n' + (await getVisibleText()).slice(0, 3000);
-    return 'Search results for "' + query + '":\\n\\n' + parsed.map((r: any, i: number) => '[' + (i+1) + '] ' + r.title + '\\n    ' + r.url + '\\n    ' + r.snippet).join('\\n\\n');
+    if (parsed.length === 0) return `Search for "${query}":\n\n` + (await getVisibleText()).slice(0, 4000);
+    return `Search results for "${query}":\n\n` + parsed.map((r: any, i: number) => `[${i+1}] ${r.title}\n    ${r.url}${r.snippet ? '\n    ' + r.snippet : ''}`).join('\n\n');
   } catch (err: any) { return '[Error searching]: ' + err.message; }
 }
 
