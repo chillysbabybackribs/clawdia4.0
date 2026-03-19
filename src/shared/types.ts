@@ -3,13 +3,19 @@ export interface MessageIteration {
   toolCalls: ToolCall[]; // tool calls dispatched after this text (may be [])
 }
 
+// Flat append-only feed item — renderer-only, NOT persisted to DB
+export type FeedItem =
+  | { kind: 'tool'; tool: ToolCall }
+  | { kind: 'text'; text: string; isStreaming?: boolean };
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
   toolCalls?: ToolCall[];
-  iterations?: MessageIteration[];   // renderer-only — NOT persisted to DB
+  iterations?: MessageIteration[];   // legacy, kept for DB-loaded messages
+  feed?: FeedItem[];                 // renderer-only — NOT persisted to DB
   isStreaming?: boolean;
 }
 
@@ -48,4 +54,51 @@ export interface ProcessInfo {
   error?: string;
   isAttached: boolean;
   wasDetached: boolean;
+}
+
+export type RunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface RunSummary {
+  id: string;
+  conversationId: string;
+  title: string;
+  goal: string;
+  status: RunStatus;
+  startedAt: number;
+  completedAt?: number;
+  toolCallCount: number;
+  error?: string;
+  wasDetached: boolean;
+}
+
+export interface RunEvent {
+  id: number;
+  runId: string;
+  seq: number;
+  timestamp: string;
+  kind: string;
+  phase?: string | null;
+  surface?: string | null;
+  toolName?: string | null;
+  payload: Record<string, any>;
+}
+
+export interface RunChange {
+  id: number;
+  runId: string;
+  eventId?: number;
+  changeType: string;
+  target: string;
+  summary: string;
+  diffText?: string;
+  createdAt: string;
+}
+
+export interface ChatSendResult {
+  ok?: boolean;
+  runId?: string;
+  response?: string;
+  toolCalls?: ToolCall[];
+  conversationId?: string | null;
+  error?: string;
 }

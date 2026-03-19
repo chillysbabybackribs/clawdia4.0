@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import type { Message, ToolCall, MessageIteration } from '../../shared/types';
+import type { Message, ToolCall, FeedItem } from '../../shared/types';
 import InputBar from './InputBar';
 import StatusLine from './StatusLine';
 import ToolActivity, { type ToolStreamMap } from './ToolActivity';
@@ -76,32 +76,20 @@ function CopyButton({ text }: { text: string }) {
 function AssistantMessage({ message, streamMap }: { message: Message; streamMap?: ToolStreamMap }) {
   const activeStreamMap = message.isStreaming ? (streamMap ?? {}) : {};
 
-  if (message.iterations && message.iterations.length > 0) {
-    const iters = message.iterations;
+  // Live path: flat append-only feed
+  if (message.feed && message.feed.length > 0) {
     return (
       <div className="flex justify-start animate-slide-up group">
-        <div className="max-w-[92%] px-1 py-2 text-text-primary">
-          {iters.map((iter, i) => {
-            const isLastIter = i === iters.length - 1;
-            const hasText = !!iter.text;
-            const hasTools = iter.toolCalls.length > 0;
-            if (!hasText && !hasTools) return null;
-            return (
-              <div key={i} className={!isLastIter ? 'mb-3' : ''}>
-                {hasText && (
-                  <MarkdownRenderer
-                    content={iter.text}
-                    isStreaming={message.isStreaming === true && isLastIter && !hasTools}
-                  />
-                )}
-                {hasTools && (
-                  <ToolActivity tools={iter.toolCalls} streamMap={activeStreamMap} />
-                )}
-              </div>
-            );
-          })}
+        <div className="max-w-[92%] px-1 py-2 text-text-primary flex flex-col gap-3">
+          {message.feed.map((item, i) =>
+            item.kind === 'tool' ? (
+              <ToolActivity key={i} tools={[item.tool]} streamMap={activeStreamMap} />
+            ) : (
+              <MarkdownRenderer key={i} content={item.text} isStreaming={item.isStreaming === true} />
+            )
+          )}
           {!message.isStreaming && message.content && (
-            <div className="flex items-center gap-2 mt-2">
+            <div className="flex items-center gap-2">
               <span className="text-[10px] text-text-secondary/70">{message.timestamp}</span>
               <CopyButton text={message.content} />
             </div>
@@ -111,15 +99,15 @@ function AssistantMessage({ message, streamMap }: { message: Message; streamMap?
     );
   }
 
-  // Fallback: DB-loaded historical messages (no iterations field)
+  // Fallback: DB-loaded historical messages
   const hasContent = !!message.content?.trim();
   const hasTools = !!message.toolCalls?.length;
   if (!hasContent && !hasTools) return null;
   return (
     <div className="flex justify-start animate-slide-up group">
       <div className="max-w-[92%] px-1 py-2 text-text-primary">
+        {hasTools && <div className={hasContent ? 'mb-3' : ''}><ToolActivity tools={message.toolCalls!} streamMap={{}} /></div>}
         {hasContent && <MarkdownRenderer content={message.content} isStreaming={false} />}
-        {hasTools && <ToolActivity tools={message.toolCalls!} streamMap={{}} />}
         {hasContent && (
           <div className="flex items-center gap-2 mt-2">
             <span className="text-[10px] text-text-secondary/70">{message.timestamp}</span>
@@ -142,23 +130,15 @@ function UserMessage({ message }: { message: Message }) {
   );
 }
 
-interface LiveIteration {
-  text: string;
-  toolCalls: ToolCall[];
-}
-
 export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSettings, loadConversationId }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [statusText, setStatusText] = useState('');
-  // toolId → accumulated stdout/stderr lines for the live stream panel
   const [streamMap, setStreamMap] = useState<ToolStreamMap>({});
   const scrollRef = useRef<HTMLDivElement>(null);
-  const iterationsRef = useRef<LiveIteration[]>([]);   // sealed iterations
-  const currentTextRef = useRef('');                    // text for current (unsealed) iteration
-  const currentToolsRef = useRef<ToolCall[]>([]);      // tools for current iteration
-  const routeToSealedRef = useRef(false);               // true = next tool(s) go into iterationsRef[last]
+  // Flat append-only feed — each item appended once, never moved
+  const feedRef = useRef<FeedItem[]>([]);
   const assistantMsgIdRef = useRef<string | null>(null);
   const rafRef = useRef<number | null>(null);
   const pendingUpdateRef = useRef(false);
@@ -194,16 +174,12 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
 
   const flushStreamUpdate = useCallback(() => {
     if (!assistantMsgIdRef.current) return;
-    const inFlight: LiveIteration = { text: currentTextRef.current, toolCalls: [...currentToolsRef.current] };
-    const liveIterations: LiveIteration[] = [...iterationsRef.current];
-    if (inFlight.text || inFlight.toolCalls.length > 0) {
-      liveIterations.push(inFlight);
-    }
+    const feed = [...feedRef.current];
     setMessages(prev => {
       const idx = prev.findIndex(m => m.id === assistantMsgIdRef.current);
       if (idx === -1) return prev;
       const updated = [...prev];
-      updated[idx] = { ...updated[idx], iterations: liveIterations as MessageIteration[], isStreaming: true };
+      updated[idx] = { ...updated[idx], feed, isStreaming: true };
       return updated;
     });
     pendingUpdateRef.current = false;
@@ -227,20 +203,22 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
 
     cleanups.push(api.chat.onStreamText((chunk: string) => {
       if (chunk.includes('__RESET__')) {
-        // Seal text as its own iteration, then open a new empty iteration for incoming tools.
-        // This keeps tools BELOW the text that preceded them so content never jumps up.
-        if (currentTextRef.current) {
-          iterationsRef.current.push({ text: currentTextRef.current, toolCalls: [] });
+        // Finalize the current streaming text item (seal it as non-streaming)
+        const lastIdx = feedRef.current.length - 1;
+        if (lastIdx >= 0 && feedRef.current[lastIdx].kind === 'text') {
+          feedRef.current[lastIdx] = { ...feedRef.current[lastIdx], isStreaming: false } as FeedItem;
         }
-        currentTextRef.current = '';
-        currentToolsRef.current = [];
-        // Push an empty tool-target iteration; tools will append here
-        iterationsRef.current.push({ text: '', toolCalls: [] });
-        routeToSealedRef.current = true; // next tool(s) go into the empty tool-target iteration
         scheduleStreamUpdate();
         return;
       }
-      currentTextRef.current += chunk;
+      // Append to existing streaming text item, or create one
+      const lastIdx = feedRef.current.length - 1;
+      if (lastIdx >= 0 && feedRef.current[lastIdx].kind === 'text') {
+        const last = feedRef.current[lastIdx] as { kind: 'text'; text: string; isStreaming?: boolean };
+        feedRef.current[lastIdx] = { kind: 'text', text: last.text + chunk, isStreaming: true };
+      } else {
+        feedRef.current.push({ kind: 'text', text: chunk, isStreaming: true });
+      }
       setStatusText('');
       scheduleStreamUpdate();
     }));
@@ -257,57 +235,34 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
           status: 'running',
           detail: activity.detail,
         };
-
-        // If no iterations sealed yet, LLM emitted tools with zero text — create empty target
-        if (iterationsRef.current.length === 0) {
-          iterationsRef.current.push({ text: '', toolCalls: [] });
+        // Finalize any open text item above, then append tool
+        const lastIdx = feedRef.current.length - 1;
+        if (lastIdx >= 0 && feedRef.current[lastIdx].kind === 'text') {
+          feedRef.current[lastIdx] = { ...feedRef.current[lastIdx], isStreaming: false } as FeedItem;
         }
-
-        if (routeToSealedRef.current) {
-          // Belongs to the just-sealed iteration (post-__RESET__)
-          iterationsRef.current[iterationsRef.current.length - 1].toolCalls.push(newTool);
-          routeToSealedRef.current = false; // cleared after first tool placed — rest go to current
-        } else {
-          currentToolsRef.current.push(newTool);
-        }
-
+        feedRef.current.push({ kind: 'tool', tool: newTool });
         scheduleStreamUpdate();
-
         const detail = activity.detail ? ` — ${activity.detail.slice(0, 50)}` : '';
         setStatusText(`Running ${activity.name}${detail}`);
       } else {
-        // Tool completed (success or error) — find and update by name match
-        const updatedTool: ToolCall = {
-          id: `tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          name: activity.name,
-          status: activity.status as ToolCall['status'],
-          detail: activity.detail,
-        };
-
-        let found = false;
-        for (let i = iterationsRef.current.length - 1; i >= 0; i--) {
-          const iter = iterationsRef.current[i];
-          const idx = iter.toolCalls.map((t, j) => ({ t, j })).reverse()
-            .find(({ t }) => t.name === activity.name && t.status === 'running')?.j ?? -1;
-          if (idx >= 0) {
-            iter.toolCalls[idx] = updatedTool;
-            found = true;
-            break;
-          }
+        // Tool completed — find the matching running tool item and update it in place
+        const toolId = feedRef.current
+          .slice().reverse()
+          .find(item => item.kind === 'tool' && item.tool.name === activity.name && item.tool.status === 'running');
+        if (toolId && toolId.kind === 'tool') {
+          const idx = feedRef.current.lastIndexOf(toolId);
+          feedRef.current[idx] = {
+            kind: 'tool',
+            tool: {
+              ...toolId.tool,
+              status: activity.status as ToolCall['status'],
+              detail: activity.detail,
+            },
+          };
         }
-        if (!found) {
-          const idx = currentToolsRef.current.map((t, j) => ({ t, j })).reverse()
-            .find(({ t }) => t.name === activity.name && t.status === 'running')?.j ?? -1;
-          if (idx >= 0) currentToolsRef.current[idx] = updatedTool;
-        }
-
         scheduleStreamUpdate();
-
-        if (activity.status === 'success') {
-          setStatusText(`Completed ${activity.name}`);
-        } else if (activity.status === 'error') {
-          setStatusText(`Failed: ${activity.name}`);
-        }
+        if (activity.status === 'success') setStatusText(`Completed ${activity.name}`);
+        else if (activity.status === 'error') setStatusText(`Failed: ${activity.name}`);
       }
       autoScroll();
     }));
@@ -351,10 +306,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
 
     const assistantId = `assistant-${Date.now()}`;
     assistantMsgIdRef.current = assistantId;
-    iterationsRef.current = [];
-    currentTextRef.current = '';
-    currentToolsRef.current = [];
-    routeToSealedRef.current = false;
+    feedRef.current = [];
     setStreamMap({});
 
     setTimeout(() => {
@@ -369,23 +321,21 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
     try {
       const result = await api.chat.send(text);
 
-      const allText = [...iterationsRef.current, { text: currentTextRef.current }]
-        .map(it => it.text).filter(Boolean).join('\n\n');
-      const finalContent = result.response || allText || '';
-      const finalTools = iterationsRef.current.flatMap(it => it.toolCalls)
-        .concat(currentToolsRef.current);
-      const finalInFlight = { text: currentTextRef.current, toolCalls: [...currentToolsRef.current] };
-      const finalIterations = [...iterationsRef.current];
-      if (finalInFlight.text || finalInFlight.toolCalls.length > 0) finalIterations.push(finalInFlight);
+      const finalFeed = [...feedRef.current].map(item =>
+        item.kind === 'text' ? { ...item, isStreaming: false } : item
+      ) as FeedItem[];
+      const finalContent = result.response ||
+        finalFeed.filter(i => i.kind === 'text').map(i => (i as any).text).join('\n\n') || '';
+      const finalTools = finalFeed.filter(i => i.kind === 'tool').map(i => (i as any).tool) as ToolCall[];
 
       if (result.error) {
         setMessages(prev => prev.map(m =>
-          m.id === assistantId ? { ...m, content: `⚠️ ${result.error}`, isStreaming: false, toolCalls: [], iterations: [] } : m
+          m.id === assistantId ? { ...m, content: `⚠️ ${result.error}`, isStreaming: false, feed: [], toolCalls: [] } : m
         ));
       } else {
         setMessages(prev => prev.map(m =>
           m.id === assistantId
-            ? { ...m, content: finalContent, toolCalls: finalTools, iterations: finalIterations as MessageIteration[], isStreaming: false }
+            ? { ...m, content: finalContent, toolCalls: finalTools, feed: finalFeed, isStreaming: false }
             : m
         ));
       }
@@ -440,10 +390,9 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
       if (m.id !== messageId) return m;
       const updates: Partial<Message> = {};
       if (m.toolCalls) updates.toolCalls = m.toolCalls.map(applyRating);
-      if (m.iterations) updates.iterations = m.iterations.map(iter => ({
-        ...iter,
-        toolCalls: iter.toolCalls.map(applyRating),
-      }));
+      if (m.feed) updates.feed = m.feed.map(item =>
+        item.kind === 'tool' ? { kind: 'tool', tool: applyRating(item.tool) } : item
+      ) as FeedItem[];
       return { ...m, ...updates };
     }));
     // Persist to database
