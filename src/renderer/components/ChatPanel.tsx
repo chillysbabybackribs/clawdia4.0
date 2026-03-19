@@ -94,6 +94,7 @@ function AssistantMessage({ message, streamMap }: { message: Message; streamMap?
           groups.push({ kind: 'tools', tools: [item.tool], startIdx: i });
         }
       } else {
+        if (!item.text.trim()) continue; // skip empty text — don't break tool grouping
         groups.push({ kind: 'text', text: item.text, isStreaming: item.isStreaming, idx: i });
       }
     }
