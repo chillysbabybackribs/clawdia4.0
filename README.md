@@ -1,11 +1,27 @@
 # Clawdia 4.0
 
-**AI desktop workspace — browser, code, and task automation.**
+**AI desktop agent that controls your entire machine — any app, any window, any interface.**
 
-Clawdia is an Electron desktop agent that gives Claude direct access to your filesystem, terminal, and a real browser. Ask it to code, research, manage files, browse the web, or control desktop applications — and watch it work in real-time.
+Clawdia is an Electron desktop agent that gives Claude direct access to your filesystem, terminal, browser, and — uniquely — every desktop application running on your system. Ask it to edit an image in GIMP, pause Spotify, click a button in LibreOffice, or take a screenshot of any window. It figures out the best way to do it.
+
+## What makes Clawdia different: 3-tier desktop application control
+
+Most AI desktop agents can run shell commands and browse the web. Clawdia goes further with a three-tier fallback system for controlling any desktop application:
+
+### Tier 1 — CLI-Anything harnesses (`app_control`)
+For supported open-source apps (GIMP, Blender, Inkscape, LibreOffice, OBS, Audacity, Kdenlive), Clawdia uses structured CLI harnesses that return JSON. Deterministic, reliable, no guessing.
+
+### Tier 2 — GUI automation (`gui_interact`)
+For any app with a visible window — open-source or proprietary — Clawdia uses `xdotool`, `wmctrl`, and `scrot` to click, type, send keystrokes, focus windows, and take screenshots. Works on literally anything running on X11. Multi-step GUI sequences are batched into a single tool call to minimize round-trips.
+
+### Tier 3 — DBus / programmatic control (`dbus_control`)
+For apps that expose DBus interfaces (Spotify, media players, GNOME apps, Electron apps), Clawdia discovers available services and methods at runtime and calls them directly. No window needed.
+
+The agent tries these in order, falling back automatically based on what's installed and what's running.
 
 ## Features
 
+- **3-tier desktop control** — Control any app: CLI harness → GUI automation → DBus, tried in order
 - **Full system access** — Execute shell commands, read/write files, control native applications
 - **Live browser** — Built-in Chromium browser panel where you watch Clawdia browse, search, click, and extract data
 - **Persistent memory** — SQLite-backed conversations and user memory with full-text search (FTS5)
@@ -22,7 +38,7 @@ cd clawdia4.0
 npm run dev
 ```
 
-That's it. The setup script checks prerequisites, installs dependencies, builds TypeScript, and detects GPU issues. On first launch, a welcome screen walks you through adding your Anthropic API key.
+That's it. The setup script checks prerequisites, installs dependencies (including `xdotool`, `wmctrl`, `scrot` for desktop control), builds TypeScript, and detects GPU issues. On first launch, a welcome screen walks you through adding your Anthropic API key.
 
 ### Manual setup (if you prefer)
 
@@ -38,7 +54,7 @@ npm install
 npm run dev
 ```
 
-The setup script is bash-only. On Windows, `npm install` and `npm run dev` are all you need — the `predev` hook auto-builds TypeScript.
+The setup script is bash-only. On Windows, `npm install` and `npm run dev` are all you need — the `predev` hook auto-builds TypeScript. Note: GUI automation (Tier 2) requires X11 and is Linux-only.
 
 ## GPU Issues
 
@@ -68,19 +84,23 @@ src/
 │   │   ├── prompt-builder.ts   # Reads .md files, assembles system prompt
 │   │   ├── tool-builder.ts     # Tool schemas + dispatch map
 │   │   ├── executors/          # Tool implementations
+│   │   │   ├── core-executors.ts      # shell_exec, file_read/write/edit, directory_tree
+│   │   │   ├── browser-executors.ts   # browser_search, navigate, click, type, extract
+│   │   │   ├── extra-executors.ts     # create_document, memory_search/store
+│   │   │   └── desktop-executors.ts   # app_control, gui_interact, dbus_control
 │   │   └── prompt/             # CORE.md, modules/, INJECTIONS.md
 │   ├── browser/            # BrowserView manager
 │   └── db/                 # SQLite persistence
 ├── renderer/               # React + Tailwind UI
 │   ├── App.tsx             # Layout + first-run detection
-│   └── components/         # ChatPanel, BrowserPanel, Settings, etc.
+│   └── components/         # ChatPanel, BrowserPanel, WelcomeScreen, Settings
 └── shared/                 # IPC channels, types
 ```
 
 ### How the agent loop works
 
 1. **Classify** — Regex matches user message → tool group + prompt modules (zero LLM cost)
-2. **Build prompt** — Static .md files (cached) + dynamic context (date, OS, memory)
+2. **Build prompt** — Static .md files (cached) + dynamic context (date, OS, memory, desktop capabilities)
 3. **Call LLM** — Streaming with 3 cache breakpoints, model-aware max_tokens
 4. **Dispatch tools** — Execute tool calls, loop back to step 3
 5. **Respond** — Final text streams with live markdown rendering
@@ -91,7 +111,20 @@ src/
 |-------|-------|-----------|
 | Core | shell_exec, file_read, file_write, file_edit, directory_tree | Filesystem/code tasks |
 | Browser | browser_search, browser_navigate, browser_click, browser_type, browser_extract, browser_read_page, browser_screenshot | Web research |
-| Full | All above + create_document, memory_search, memory_store | Complex tasks |
+| Full | All above + create_document, memory_search, memory_store, **app_control, gui_interact, dbus_control** | Complex tasks, desktop control |
+
+### Desktop control decision tree
+
+```
+User asks to interact with a desktop app
+  └─ Try app_control (CLI-Anything harness installed?)
+       ├─ Yes → structured JSON, done
+       └─ No → Try dbus_control (does app expose DBus?)
+                 ├─ Yes → call methods directly, done
+                 └─ No → gui_interact (any visible window)
+                           ├─ screenshot_and_focus to orient
+                           └─ batch_actions to execute steps
+```
 
 ## Keyboard Shortcuts
 
