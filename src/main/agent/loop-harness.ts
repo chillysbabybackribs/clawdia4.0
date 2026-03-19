@@ -79,6 +79,14 @@ export async function runHarnessPipeline(
   options: HarnessPipelineOptions,
 ): Promise<boolean> {
   const { apiKey, onProgress, onRegisterCancel } = options;
+
+  // Sanitise appId before any path/shell use
+  const safeAppId = appId.toLowerCase().replace(/[^a-z0-9-]/g, '');
+  if (!safeAppId) {
+    onProgress('[Harness] Invalid app identifier — cannot generate harness.');
+    return false;
+  }
+
   const homedir = os.homedir();
 
   // Pre-flight: verify plugin files exist
@@ -90,11 +98,11 @@ export async function runHarnessPipeline(
     return false;
   }
 
-  const outputDir = path.join(homedir, 'CLI-Anything', appId, 'agent-harness');
+  const outputDir = path.join(homedir, 'CLI-Anything', safeAppId, 'agent-harness');
   fs.mkdirSync(outputDir, { recursive: true });
 
   // Copy repl_skin.py to output utils dir
-  const utilsDir = path.join(outputDir, 'cli_anything', appId, 'utils');
+  const utilsDir = path.join(outputDir, 'cli_anything', safeAppId, 'utils');
   fs.mkdirSync(utilsDir, { recursive: true });
   fs.copyFileSync(replSkinPath, path.join(utilsDir, 'repl_skin.py'));
 
@@ -107,7 +115,6 @@ export async function runHarnessPipeline(
 
   // Get app version for context
   let versionInfo = '';
-  const safeAppId = appId.replace(/[^a-z0-9-]/gi, '');
   if (safeAppId) {
     try {
       const { stdout } = await execAsync(`${safeAppId} --version 2>&1`, { timeout: 5000 });
@@ -222,7 +229,7 @@ Start with Phase 1: run \`${appId} --help\` and \`man ${appId}\` (if available) 
       let commands: string[] | undefined;
       try {
         const { stdout } = await execAsync(
-          `cli-anything-${appId} --help 2>/dev/null | grep -E '^  [a-z]' | awk '{print $1}'`,
+          `cli-anything-${safeAppId} --help 2>/dev/null | grep -E '^  [a-z]' | awk '{print $1}'`,
           { timeout: 5000 },
         );
         const parsed = stdout.trim().split('\n').filter(Boolean);
@@ -231,7 +238,7 @@ Start with Phase 1: run \`${appId} --help\` and \`man ${appId}\` (if available) 
 
       // Find SKILL.md
       let skillContent: string | undefined;
-      const skillPath = path.join(outputDir, 'cli_anything', appId, 'skills', 'SKILL.md');
+      const skillPath = path.join(outputDir, 'cli_anything', safeAppId, 'skills', 'SKILL.md');
       if (fs.existsSync(skillPath)) {
         skillContent = fs.readFileSync(skillPath, 'utf-8');
       }
@@ -239,7 +246,7 @@ Start with Phase 1: run \`${appId} --help\` and \`man ${appId}\` (if available) 
       const existingProfile = getAppProfile(appId);
       if (existingProfile) {
         existingProfile.cliAnything = {
-          command: `cli-anything-${appId}`,
+          command: `cli-anything-${safeAppId}`,
           installed: true,
           commands,
           skillPath: fs.existsSync(skillPath) ? skillPath : undefined,
@@ -257,7 +264,7 @@ Start with Phase 1: run \`${appId} --help\` and \`man ${appId}\` (if available) 
           binaryPath: appId,
           availableSurfaces: ['cli_anything'],
           cliAnything: {
-            command: `cli-anything-${appId}`,
+            command: `cli-anything-${safeAppId}`,
             installed: true,
             commands,
             skillPath: fs.existsSync(skillPath) ? skillPath : undefined,

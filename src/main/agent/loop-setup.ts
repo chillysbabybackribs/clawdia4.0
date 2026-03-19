@@ -124,7 +124,12 @@ export async function runPreLLMSetup(
         const binaryMissing = !(await cmdExists(targetApp));
         let appAvailable = !binaryMissing;
         if (binaryMissing) {
-          appAvailable = await installApp(targetApp, onProgress ?? (() => {}));
+          try {
+            appAvailable = await installApp(targetApp, onProgress ?? (() => {}));
+          } catch (e: any) {
+            console.warn(`[Install] installApp threw unexpectedly: ${e.message}`);
+            appAvailable = false;
+          }
         }
 
         // ── NEW: Generate harness if none exists (only when app is available) ──
@@ -148,6 +153,8 @@ export async function runPreLLMSetup(
             }
           }
         }
+        // Note: clearNestedCancel() not needed here — registerNestedCancel was never called
+        // because we skipped the harness pipeline due to install failure.
 
         // ── EXISTING: Route (now reads updated profile from SQLite) ──
         result.executionPlan = routeTask(userMessage, targetApp);
