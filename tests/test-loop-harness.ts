@@ -24,6 +24,9 @@ async function testPreflightPass() {
   fs.rmSync(tmpDir, { recursive: true });
 
   if (!result.ok) throw new Error(`Expected preflight to pass: ${result.reason}`);
+  if (!result.harnessContent || !result.harnessContent.includes('HARNESS')) {
+    throw new Error(`Expected harnessContent to contain file text, got: ${result.harnessContent}`);
+  }
   console.log('✓ preflight passes when both files exist');
 }
 

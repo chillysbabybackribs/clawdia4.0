@@ -107,10 +107,13 @@ export async function runHarnessPipeline(
 
   // Get app version for context
   let versionInfo = '';
-  try {
-    const { stdout } = await execAsync(`${appId} --version 2>&1`, { timeout: 5000 });
-    versionInfo = stdout.trim().split('\n')[0];
-  } catch { /* non-fatal */ }
+  const safeAppId = appId.replace(/[^a-z0-9-]/gi, '');
+  if (safeAppId) {
+    try {
+      const { stdout } = await execAsync(`${safeAppId} --version 2>&1`, { timeout: 5000 });
+      versionInfo = stdout.trim().split('\n')[0];
+    } catch { /* non-fatal */ }
+  }
 
   const initialMessage = `Build a complete CLI-Anything harness for "${appId}"${versionInfo ? ` (${versionInfo})` : ''}.
 
@@ -122,8 +125,8 @@ Start with Phase 1: run \`${appId} --help\` and \`man ${appId}\` (if available) 
     { role: 'user', content: initialMessage },
   ];
 
-  // Get tool schemas for CORE tools only (static import at top of file)
-  const allTools = getToolsForGroup('full');
+  // Get tool schemas for CORE tools only — 'core' group contains exactly the 5 HARNESS_TOOLS
+  const allTools = getToolsForGroup('core');
   const harnessToolSchemas = allTools.filter(t => HARNESS_TOOLS.includes(t.name));
 
   let installed = false;
@@ -168,16 +171,14 @@ Start with Phase 1: run \`${appId} --help\` and \`man ${appId}\` (if available) 
     );
     const responseText = textBlocks.map(b => b.text).join('');
 
-    // Check for success signal
-    if (responseText.includes('[HARNESS_INSTALLED_SUCCESS]')) {
-      installed = true;
-      onProgress(`✓ CLI harness for ${appId} installed successfully!`);
-      break;
-    }
-
-    // No tools = final answer
+    // No tools = final answer; check for success signal then stop
     if (toolUseBlocks.length === 0) {
-      console.log(`[Harness] No tool calls at iteration ${iteration} — stopping.`);
+      if (responseText.includes('[HARNESS_INSTALLED_SUCCESS]')) {
+        installed = true;
+        onProgress(`✓ CLI harness for ${appId} installed successfully!`);
+      } else {
+        console.log(`[Harness] No tool calls at iteration ${iteration} — stopping.`);
+      }
       break;
     }
 
@@ -205,6 +206,13 @@ Start with Phase 1: run \`${appId} --help\` and \`man ${appId}\` (if available) 
     }
 
     messages.push({ role: 'user', content: toolResults as any });
+
+    // Check for success signal AFTER tools ran (sentinel may accompany tool calls)
+    if (responseText.includes('[HARNESS_INSTALLED_SUCCESS]')) {
+      installed = true;
+      onProgress(`✓ CLI harness for ${appId} installed successfully!`);
+      break;
+    }
   }
 
   // Update registry if installed
