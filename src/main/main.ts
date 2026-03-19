@@ -6,6 +6,11 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
 import { IPC, IPC_EVENTS } from '../shared/ipc-channels';
 import { runAgentLoop, cancelLoop, pauseLoop, resumeLoop, addContext } from './agent/loop';
+import {
+  initProcessManager, registerProcess, completeProcess, routeEvent,
+  detachCurrent, attachTo, cancelProcess as cancelProc, dismissProcess,
+  listProcesses, getAttachedId, recordToolCall,
+} from './agent/process-manager';
 import { resetGuiStateForNewConversation } from './agent/executors/desktop-executors';
 import { destroyShell } from './agent/executors/core-executors';
 import { extractMemoryInBackground } from './agent/memory-extractor';
@@ -50,7 +55,10 @@ function createWindow(): void {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
-    if (mainWindow) initBrowser(mainWindow);
+    if (mainWindow) {
+      initBrowser(mainWindow);
+      initProcessManager(mainWindow);
+    }
   });
 
   if (isDev) {
@@ -87,6 +95,12 @@ function setupIpcHandlers(): void {
       activeConversationId = conv.id;
     }
 
+    // Process registration — only creates trackable processes when
+    // detach/background is wired. For now, still register so the
+    // infrastructure works, but mark as attached (won't show in sidebar
+    // as "completed" since it's the foreground task).
+    const processId = registerProcess(activeConversationId, message);
+
     addMessage(activeConversationId, 'user', message);
     const history = getAnthropicHistory(activeConversationId);
     history.pop();
@@ -95,12 +109,20 @@ function setupIpcHandlers(): void {
       const result = await runAgentLoop(message, history, {
         apiKey,
         model: getSelectedModel(),
-        onStreamText: (chunk) => mainWindow?.webContents.send(IPC_EVENTS.CHAT_STREAM_TEXT, chunk),
-        onThinking: (thought) => mainWindow?.webContents.send(IPC_EVENTS.CHAT_THINKING, thought),
-        onToolActivity: (activity) => mainWindow?.webContents.send(IPC_EVENTS.CHAT_TOOL_ACTIVITY, activity),
-        onToolStream: (payload) => mainWindow?.webContents.send(IPC_EVENTS.CHAT_TOOL_STREAM, payload),
-        onStreamEnd: () => mainWindow?.webContents.send(IPC_EVENTS.CHAT_STREAM_END, {}),
+        onStreamText: (chunk) => routeEvent(processId, IPC_EVENTS.CHAT_STREAM_TEXT, chunk),
+        onProgress: (text) => routeEvent(processId, IPC_EVENTS.CHAT_STREAM_TEXT, text),
+        onThinking: (thought) => routeEvent(processId, IPC_EVENTS.CHAT_THINKING, thought),
+        onToolActivity: (activity) => {
+          recordToolCall(processId);
+          routeEvent(processId, IPC_EVENTS.CHAT_TOOL_ACTIVITY, activity);
+        },
+        onToolStream: (payload) => routeEvent(processId, IPC_EVENTS.CHAT_TOOL_STREAM, payload),
+        onStreamEnd: () => routeEvent(processId, IPC_EVENTS.CHAT_STREAM_END, {}),
       });
+
+      // Complete silently — attached foreground processes don't
+      // show in "Recently Completed" (only detached ones will)
+      completeProcess(processId, 'completed');
 
       if (result.response) {
         addMessage(activeConversationId!, 'assistant', result.response, result.toolCalls);
@@ -109,6 +131,7 @@ function setupIpcHandlers(): void {
 
       return { ok: true, response: result.response, toolCalls: result.toolCalls, conversationId: activeConversationId };
     } catch (err: any) {
+      completeProcess(processId, 'failed', err.message);
       console.error('[Main] Agent loop error:', err);
       return { error: err.message || 'Unknown error' };
     }
@@ -203,6 +226,28 @@ function setupIpcHandlers(): void {
       console.warn(`[Rating] Failed: ${err.message}`);
       return { ok: false };
     }
+  });
+
+  // ── Process management ──
+  ipcMain.handle(IPC.PROCESS_LIST, async () => listProcesses());
+  ipcMain.handle(IPC.PROCESS_DETACH, async () => {
+    const id = detachCurrent();
+    return { ok: !!id, detachedId: id };
+  });
+  ipcMain.handle(IPC.PROCESS_ATTACH, async (_e, processId: string) => {
+    const result = attachTo(processId);
+    if (!result) return { error: 'Process not found' };
+    // Switch active conversation to the process's conversation
+    activeConversationId = result.process.conversationId;
+    return { ok: true, ...result };
+  });
+  ipcMain.handle(IPC.PROCESS_CANCEL, async (_e, processId: string) => {
+    cancelLoop(); // Cancel the running loop (module-level)
+    cancelProc(processId);
+    return { ok: true };
+  });
+  ipcMain.handle(IPC.PROCESS_DISMISS, async (_e, processId: string) => {
+    return { ok: dismissProcess(processId) };
   });
 
   // ── Browser URL autocomplete ──
