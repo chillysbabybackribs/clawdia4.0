@@ -391,6 +391,32 @@ export function verify(rule: VerificationRule, result: string): VerificationResu
   try {
     const check = runCheck(rule, result);
 
+    // If passed or no retry policy, return immediately
+    if (check.passed || !rule.retryPolicy || rule.retryPolicy === 'none') {
+      return {
+        rule,
+        passed: check.passed,
+        actual: check.actual,
+        retried: false,
+        durationMs: Date.now() - start,
+      };
+    }
+
+    // RetryPolicy: 'once' or 'refocus_then_retry' — re-check the same result
+    // This closes the declared type contract. Full live re-execution (re-calling
+    // the tool) is a Phase 2 enhancement handled in loop-dispatch.ts.
+    if (rule.retryPolicy === 'once' || rule.retryPolicy === 'refocus_then_retry') {
+      const retryCheck = runCheck(rule, result);
+      return {
+        rule,
+        passed: retryCheck.passed,
+        actual: retryCheck.actual,
+        retried: true,
+        retryPassed: retryCheck.passed,
+        durationMs: Date.now() - start,
+      };
+    }
+
     return {
       rule,
       passed: check.passed,

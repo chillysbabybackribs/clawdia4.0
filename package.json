@@ -25,7 +25,9 @@
     "postinstall": "electron-rebuild -f -w better-sqlite3",
     "start": "cross-env NODE_ENV=production electron --no-sandbox .",
     "start:nogpu": "cross-env NODE_ENV=production electron --no-sandbox --disable-gpu --disable-software-rasterizer --disable-gpu-sandbox --disable-dev-shader-cache --disable-accelerated-2d-canvas --use-gl=swiftshader .",
-    "package": "npm run build && electron-builder"
+    "package": "npm run build && electron-builder",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
@@ -54,6 +56,7 @@
     "tsx": "^4.21.0",
     "typescript": "^5.5.0",
     "vite": "^6.3.5",
+    "vitest": "^4.1.0",
     "wait-on": "^9.0.3"
   }
 }
