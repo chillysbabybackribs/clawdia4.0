@@ -69,6 +69,7 @@ export function applyAgentProfileOverride(
       agentProfile: 'ytdlp',
       toolGroup: 'browser',
       promptModules,
+      model: 'sonnet',
       isGreeting: false,
     };
   }
