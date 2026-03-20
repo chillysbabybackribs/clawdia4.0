@@ -46,7 +46,10 @@ function stringifyContent(content: NormalizedToolResultBlock['content'] | string
   if (!Array.isArray(content)) return '';
   return content.map((block) => {
     if (block.type === 'text') return block.text;
-    if (block.type === 'image') return `[image:${block.source.media_type}]`;
+    if (block.type === 'image') {
+      console.warn('[Gemini] Image content in tool result degraded to placeholder — Gemini does not support image tool results. Visual reasoning is unavailable for this provider.');
+      return `[image:${block.source.media_type}]`;
+    }
     return '';
   }).join('\n');
 }
