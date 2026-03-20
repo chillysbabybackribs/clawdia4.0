@@ -112,7 +112,7 @@ async function execSingleAction(input, batchWindow?) {
 }
 ```
 
-Each handler returns `string | null` — `null` means "this action is not mine, try the next handler." The final fallthrough produces the unknown-action error that currently lives in the `default` case.
+Each handler has return type `Promise<string | null>` — TypeScript-enforced. `null` (not `undefined`) means "this action is not mine, try the next handler." Every `switch` in each handler must have a `default: return null` arm. The final fallthrough produces the unknown-action error that currently lives in the `default` case.
 
 **`guiState` singleton:** Lives exclusively in `gui-state.ts`. All other desktop modules that read or write GUI state import it from there. This is the most critical coupling point — all imports must flow through `gui-state.ts` to prevent multiple instances.
 
@@ -155,6 +155,8 @@ After implementation:
 3. **Import integrity:** Verify `core-executors.ts` and `desktop-executors.ts` export all previously-exported symbols
 4. **Shell behavior:** Confirm `destroyShell` and `executeShellExec` are importable from the original path
 5. **Desktop behavior:** Confirm `executeGuiInteract`, `getGuiState`, `getCapabilityStatus` are importable from the original path
+6. **`loop-setup.ts` consumers:** Confirm `getDesktopCapabilities`, `getGuiState`, and `warmCoordinatesForApp` resolve correctly via the wrapper — these are imported in `loop-setup.ts` which is not modified
+7. **Symbol collision audit:** Before writing `core/index.ts` and `desktop/index.ts`, verify no two submodules export the same name — required for `export *` to compile cleanly
 
 ---
 
