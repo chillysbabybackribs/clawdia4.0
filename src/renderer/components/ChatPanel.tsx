@@ -1,14 +1,20 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import type { Message, ToolCall, FeedItem, ProcessInfo, RunApproval, RunHumanIntervention, AgentProfile } from '../../shared/types';
+import type { Message, ToolCall, FeedItem, ProcessInfo, RunApproval, RunHumanIntervention, AgentProfile, WorkflowStage } from '../../shared/types';
+import { DEFAULT_PROVIDER, getModelById, PROVIDERS, type ProviderId } from '../../shared/model-registry';
 import InputBar from './InputBar';
 import StatusLine from './StatusLine';
 import ToolActivity, { type ToolStreamMap } from './ToolActivity';
 import MarkdownRenderer from './MarkdownRenderer';
 import TerminalLogStrip from './TerminalLogStrip';
 
+
 interface ChatPanelProps {
   browserVisible: boolean;
   onToggleBrowser: () => void;
+  onHideBrowser: () => void;
+  onShowBrowser: () => void;
+  calendarOpen: boolean;
+  onToggleCalendar: () => void;
   onOpenSettings: () => void;
   onOpenPendingApproval?: (processId: string) => void;
   loadConversationId?: string | null;
@@ -26,15 +32,22 @@ function ApprovalBanner({
   onDeny: () => void;
   onOpenReview: () => void;
 }) {
+  const isWorkflowPlan = approval.actionType === 'workflow_plan';
+  const planText = typeof approval.request?.plan === 'string' ? approval.request.plan : '';
   return (
-    <div className="mx-4 mb-3 rounded-xl border border-white/[0.08] bg-white/[0.025] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+    <div className="rounded-2xl border border-white/[0.08] bg-white/[0.025] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-[13px] font-medium text-text-primary">Approval required</div>
+          <div className="text-[13px] font-medium text-text-primary">{isWorkflowPlan ? 'Plan approval required' : 'Approval required'}</div>
           <div className="mt-1 text-[13px] text-text-primary">{approval.summary}</div>
           <div className="mt-1 text-2xs text-text-muted break-all">
             {approval.actionType} · {approval.target}
           </div>
+          {isWorkflowPlan && planText && (
+            <div className="mt-3 rounded-xl border border-white/[0.04] bg-[#0f0f13] px-4 py-3">
+              <MarkdownRenderer content={planText} />
+            </div>
+          )}
         </div>
         <button
           onClick={onOpenReview}
@@ -61,6 +74,80 @@ function ApprovalBanner({
   );
 }
 
+function WorkflowPlanCard({
+  planText,
+  isStreaming,
+  approval,
+  onApprove,
+  onRevise,
+  onDeny,
+  onOpenReview,
+}: {
+  planText: string;
+  isStreaming: boolean;
+  approval?: RunApproval | null;
+  onApprove?: () => void;
+  onRevise?: () => void;
+  onDeny?: () => void;
+  onOpenReview?: () => void;
+}) {
+  if (!planText && !isStreaming) return null;
+
+  return (
+    <div className="flex justify-start animate-slide-up">
+      <div className="max-w-[92%] px-1 py-1 text-text-primary">
+        <div className="rounded-2xl border border-white/[0.08] bg-white/[0.025] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+          <div className="flex items-center gap-2">
+            <div className="status-shimmer-dot" />
+            <div className="text-[13px] font-medium text-text-primary">
+              {isStreaming ? 'Drafting execution plan' : 'Execution plan ready'}
+            </div>
+            {isStreaming && (
+              <span className="status-shimmer-text text-[12px] tracking-wide text-text-secondary">
+                Streaming
+              </span>
+            )}
+          </div>
+          <div className="mt-1 text-2xs text-text-muted">
+            {isStreaming ? 'Clawdia is planning before execution starts.' : 'Review the plan before approving execution.'}
+          </div>
+          <div className="mt-3 rounded-xl border border-white/[0.04] bg-[#0f0f13] px-4 py-3">
+            <MarkdownRenderer content={planText || '## Objective\nDrafting execution plan...'} isStreaming={isStreaming} />
+          </div>
+          {approval && !isStreaming && (
+            <div className="mt-3 flex items-center gap-2">
+              <button
+                onClick={onApprove}
+                className="text-2xs px-2.5 py-1 rounded-md bg-white/[0.07] text-text-primary hover:bg-white/[0.1] transition-colors cursor-pointer"
+              >
+                Approve
+              </button>
+              <button
+                onClick={onRevise}
+                className="text-2xs px-2.5 py-1 rounded-md bg-white/[0.04] text-text-secondary hover:bg-white/[0.08] hover:text-text-primary transition-colors cursor-pointer"
+              >
+                Regenerate
+              </button>
+              <button
+                onClick={onDeny}
+                className="text-2xs px-2.5 py-1 rounded-md bg-white/[0.04] text-text-secondary hover:bg-white/[0.08] hover:text-text-primary transition-colors cursor-pointer"
+              >
+                Deny
+              </button>
+              <button
+                onClick={onOpenReview}
+                className="text-2xs px-2.5 py-1 rounded-md text-text-secondary hover:text-text-primary hover:bg-white/[0.06] transition-colors cursor-pointer"
+              >
+                Open review
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function HumanInterventionBanner({
   intervention,
   onResume,
@@ -73,7 +160,7 @@ function HumanInterventionBanner({
   onOpenReview: () => void;
 }) {
   return (
-    <div className="mx-4 mb-3 rounded-xl border border-white/[0.14] bg-white/[0.04] px-4 py-3 shadow-[0_0_0_1px_rgba(255,255,255,0.03),0_0_18px_rgba(255,255,255,0.08)] animate-pulse">
+    <div className="rounded-2xl border border-white/[0.14] bg-white/[0.04] px-4 py-3 shadow-[0_0_0_1px_rgba(255,255,255,0.03),0_0_18px_rgba(255,255,255,0.08)] animate-pulse">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-[13px] font-medium text-text-primary">Needs human intervention</div>
@@ -112,14 +199,50 @@ function HumanInterventionBanner({
   );
 }
 
-function Clock() {
-  const fmt = () => new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  const [time, setTime] = useState(fmt);
+function CalendarTrigger({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  const fmt = () => {
+    const d = new Date();
+    return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  };
+  const [label, setLabel] = useState(fmt);
   useEffect(() => {
-    const interval = setInterval(() => setTime(fmt()), 30_000);
+    const interval = setInterval(() => setLabel(fmt()), 60_000);
     return () => clearInterval(interval);
   }, []);
-  return <span className="text-[13px] text-text-secondary tabular-nums">{time}</span>;
+  return (
+    <button
+      onClick={onToggle}
+      className="no-drag"
+      title={open ? 'Close calendar' : 'Open calendar'}
+      style={{
+        background: open ? 'rgba(255,255,255,0.06)' : 'transparent',
+        border: open ? '1px solid rgba(255,255,255,0.35)' : '1px solid transparent',
+        borderRadius: 6,
+        padding: '3px 8px',
+        cursor: 'pointer',
+        transition: 'background 0.15s, border-color 0.15s, color 0.15s',
+        color: open ? '#fff' : 'rgba(255,255,255,0.55)',
+        fontSize: 13,
+        fontWeight: 400,
+        letterSpacing: '0.01em',
+        lineHeight: 1,
+      }}
+      onMouseEnter={(e) => {
+        if (!open) {
+          (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.05)';
+          (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.85)';
+        }
+      }}
+      onMouseLeave={(e) => {
+        if (!open) {
+          (e.currentTarget as HTMLElement).style.background = 'transparent';
+          (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.55)';
+        }
+      }}
+    >
+      {label}
+    </button>
+  );
 }
 
 function AgentBadge({ profile }: { profile: AgentProfile }) {
@@ -139,6 +262,32 @@ function ToolBadge({ toolName }: { toolName: string }) {
   return (
     <span className="px-2 py-1 rounded-md border border-white/[0.06] bg-white/[0.025] text-[11px] text-text-secondary">
       {toolName}
+    </span>
+  );
+}
+
+function ProviderBadge({ provider, model }: { provider: ProviderId; model: string }) {
+  const providerLabel = PROVIDERS.find((item) => item.id === provider)?.label || provider;
+  const modelLabel = getModelById(model)?.label || model;
+  return (
+    <span className="px-2.5 py-1 rounded-md border border-white/[0.08] bg-white/[0.03] text-[11px] text-text-secondary">
+      {providerLabel} · {modelLabel}
+    </span>
+  );
+}
+
+function WorkflowBadge({ stage }: { stage: WorkflowStage }) {
+  const label = {
+    starting: 'Starting',
+    planning: 'Planning',
+    executing: 'Executing',
+    reviewing: 'Reviewing',
+    completed: 'Completed',
+  }[stage];
+
+  return (
+    <span className="px-2.5 py-1 rounded-md border border-white/[0.08] bg-white/[0.03] text-[11px] text-text-secondary">
+      Workflow · {label}
     </span>
   );
 }
@@ -263,7 +412,7 @@ function AssistantMessage({ message, streamMap }: { message: Message; streamMap?
 function UserMessage({ message }: { message: Message }) {
   return (
     <div className="flex flex-col items-end gap-1 animate-slide-up">
-      <div className="max-w-[85%] rounded-2xl rounded-br-md px-4 py-2.5 bg-accent/90 text-white">
+      <div className="max-w-[85%] rounded-2xl rounded-br-md px-4 py-2.5 bg-neutral-700/60 text-white backdrop-blur-sm">
         <div className="text-[1rem] leading-relaxed whitespace-pre-wrap">{message.content}</div>
       </div>
       <span className="text-[11px] text-text-secondary/70 mr-1">{message.timestamp}</span>
@@ -271,7 +420,7 @@ function UserMessage({ message }: { message: Message }) {
   );
 }
 
-export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSettings, onOpenPendingApproval, loadConversationId, replayBuffer }: ChatPanelProps) {
+export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrowser, onShowBrowser, calendarOpen, onToggleCalendar, onOpenSettings, onOpenPendingApproval, loadConversationId, replayBuffer }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -281,9 +430,14 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
   const [pendingApprovals, setPendingApprovals] = useState<RunApproval[]>([]);
   const [pendingHumanRunId, setPendingHumanRunId] = useState<string | null>(null);
   const [pendingHumanInterventions, setPendingHumanInterventions] = useState<RunHumanIntervention[]>([]);
+  const [workflowPlanDraft, setWorkflowPlanDraft] = useState('');
+  const [isWorkflowPlanStreaming, setIsWorkflowPlanStreaming] = useState(false);
   const [loadedConversationId, setLoadedConversationId] = useState<string | null>(null);
   const [attachedAgentProfile, setAttachedAgentProfile] = useState<AgentProfile | null>(null);
   const [attachedSpecializedTool, setAttachedSpecializedTool] = useState<string | null>(null);
+  const [attachedWorkflowStage, setAttachedWorkflowStage] = useState<WorkflowStage | null>(null);
+  const [activeProvider, setActiveProvider] = useState<ProviderId>(DEFAULT_PROVIDER);
+  const [activeModel, setActiveModel] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   // Flat append-only feed — each item appended once, never moved
   const feedRef = useRef<FeedItem[]>([]);
@@ -373,6 +527,23 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
     if (thought) autoScroll();
   }, [autoScroll]);
 
+  const handleWorkflowPlanTextEvent = useCallback((chunk: string) => {
+    setWorkflowPlanDraft(prev => prev + chunk);
+    setIsWorkflowPlanStreaming(true);
+    setStatusText('');
+    requestAnimationFrame(() => autoScroll());
+  }, [autoScroll]);
+
+  const handleWorkflowPlanResetEvent = useCallback(() => {
+    setWorkflowPlanDraft('');
+    setIsWorkflowPlanStreaming(true);
+    setStatusText('');
+  }, []);
+
+  const handleWorkflowPlanEndEvent = useCallback(() => {
+    setIsWorkflowPlanStreaming(false);
+  }, []);
+
   const handleToolActivityEvent = useCallback((activity: { name: string; status: string; detail?: string }) => {
     ensureAssistantReplayMessage();
     if (activity.status === 'running' || activity.status === 'awaiting_approval' || activity.status === 'needs_human') {
@@ -453,14 +624,47 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
   }, [flushStreamUpdate]);
 
   useEffect(() => {
+    const api = (window as any).clawdia;
+    if (!api) return;
+    Promise.all([
+      api.settings.getProvider(),
+      api.settings.getModel(),
+    ]).then(([provider, model]: [ProviderId, string]) => {
+      setActiveProvider(provider || DEFAULT_PROVIDER);
+      setActiveModel(model || '');
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     if (!loadConversationId) return;
     const api = (window as any).clawdia;
     if (!api) return;
+
+    // If a replay buffer is provided we're attaching to a live/recently-live
+    // process. The buffer is the authoritative source of truth for what happened
+    // in the current run — skip loading DB messages (which are incomplete
+    // mid-stream) and let the replay effect reconstruct the view.
+    if (replayBuffer && replayBuffer.length > 0) {
+      replayedBufferRef.current = null;
+      assistantMsgIdRef.current = null;
+      feedRef.current = [];
+      setStreamMap({});
+      setWorkflowPlanDraft('');
+      setIsWorkflowPlanStreaming(false);
+      setIsStreaming(false);
+      setStatusText('');
+      setMessages([]);
+      setLoadedConversationId(loadConversationId);
+      return;
+    }
+
     api.chat.load(loadConversationId).then((result: any) => {
       replayedBufferRef.current = null;
       assistantMsgIdRef.current = null;
       feedRef.current = [];
       setStreamMap({});
+      setWorkflowPlanDraft('');
+      setIsWorkflowPlanStreaming(false);
       setIsStreaming(false);
       setStatusText('');
       setMessages(result.messages || []);
@@ -469,7 +673,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
         if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
       });
     }).catch(() => {});
-  }, [loadConversationId]);
+  }, [loadConversationId, replayBuffer]);
 
   useEffect(() => {
     if (!replayBuffer || replayBuffer.length === 0 || !loadConversationId || loadedConversationId !== loadConversationId) return;
@@ -483,15 +687,23 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
     setIsStreaming(true);
 
     const replay = async () => {
+      let sawStreamEnd = false;
       for (const item of replayBuffer) {
         if (item.type === 'chat:stream:text') handleStreamTextChunk(item.data);
+        if (item.type === 'chat:workflow-plan:text') handleWorkflowPlanTextEvent(item.data);
+        if (item.type === 'chat:workflow-plan:end') handleWorkflowPlanEndEvent();
         if (item.type === 'chat:thinking') handleThinkingEvent(item.data);
         if (item.type === 'chat:tool-activity') handleToolActivityEvent(item.data);
         if (item.type === 'chat:tool-stream') handleToolStreamEvent(item.data);
-        if (item.type === 'chat:stream:end') handleStreamEndEvent();
+        if (item.type === 'chat:stream:end') { handleStreamEndEvent(); sawStreamEnd = true; }
       }
       if (assistantMsgIdRef.current) {
         flushStreamUpdate();
+      }
+      // If the process is still running (no stream:end in buffer), stay in
+      // streaming mode so live events continue to render correctly.
+      if (!sawStreamEnd && assistantMsgIdRef.current) {
+        setIsStreaming(true);
       }
     };
 
@@ -501,6 +713,8 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
     loadConversationId,
     loadedConversationId,
     handleStreamTextChunk,
+    handleWorkflowPlanTextEvent,
+    handleWorkflowPlanEndEvent,
     handleThinkingEvent,
     handleToolActivityEvent,
     handleToolStreamEvent,
@@ -516,15 +730,23 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
       const attachedProcess = processes.find((proc) => proc.isAttached);
       setAttachedAgentProfile(attachedProcess?.agentProfile || null);
       setAttachedSpecializedTool(attachedProcess?.lastSpecializedTool || null);
+      setAttachedWorkflowStage(attachedProcess?.workflowStage || null);
 
       const attachedBlocked = processes.find((proc) => proc.isAttached && proc.status === 'awaiting_approval');
       if (!attachedBlocked) {
         setPendingApprovalRunId(null);
         setPendingApprovals([]);
+        if (!isWorkflowPlanStreaming) setWorkflowPlanDraft('');
       } else {
         setPendingApprovalRunId(attachedBlocked.id);
         const approvals = await api.run.approvals(attachedBlocked.id);
-        setPendingApprovals((approvals || []).filter((approval: RunApproval) => approval.status === 'pending'));
+        const pending = (approvals || []).filter((approval: RunApproval) => approval.status === 'pending');
+        setPendingApprovals(pending);
+        const workflowApproval = pending.find((approval: RunApproval) => approval.actionType === 'workflow_plan');
+        if (workflowApproval?.request?.plan) {
+          setWorkflowPlanDraft(String(workflowApproval.request.plan));
+          setIsWorkflowPlanStreaming(false);
+        }
       }
 
       const attachedNeedsHuman = processes.find((proc) => proc.isAttached && proc.status === 'needs_human');
@@ -543,7 +765,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
       syncPendingApproval(processes).catch(() => {});
     });
     return cleanup;
-  }, []);
+  }, [isWorkflowPlanStreaming]);
 
   useEffect(() => {
     const api = (window as any).clawdia;
@@ -553,6 +775,15 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
     cleanups.push(api.chat.onStreamText(handleStreamTextChunk));
 
     cleanups.push(api.chat.onThinking(handleThinkingEvent));
+    if (api.chat.onWorkflowPlanText) {
+      cleanups.push(api.chat.onWorkflowPlanText(handleWorkflowPlanTextEvent));
+    }
+    if (api.chat.onWorkflowPlanReset) {
+      cleanups.push(api.chat.onWorkflowPlanReset(handleWorkflowPlanResetEvent));
+    }
+    if (api.chat.onWorkflowPlanEnd) {
+      cleanups.push(api.chat.onWorkflowPlanEnd(handleWorkflowPlanEndEvent));
+    }
 
     cleanups.push(api.chat.onToolActivity(handleToolActivityEvent));
 
@@ -566,7 +797,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
       cleanups.forEach(fn => fn());
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [handleStreamEndEvent, handleStreamTextChunk, handleThinkingEvent, handleToolActivityEvent, handleToolStreamEvent]);
+  }, [handleStreamEndEvent, handleStreamTextChunk, handleThinkingEvent, handleWorkflowPlanResetEvent, handleWorkflowPlanTextEvent, handleWorkflowPlanEndEvent, handleToolActivityEvent, handleToolStreamEvent]);
 
   const handleSend = useCallback(async (text: string) => {
     const api = (window as any).clawdia;
@@ -585,6 +816,8 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
     assistantMsgIdRef.current = assistantId;
     feedRef.current = [];
     setStreamMap({});
+    setWorkflowPlanDraft('');
+    setIsWorkflowPlanStreaming(false);
 
     setTimeout(() => {
       setMessages(prev => [...prev, {
@@ -619,6 +852,8 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
 
       setIsStreaming(false);
       setStatusText('');
+      setWorkflowPlanDraft('');
+      setIsWorkflowPlanStreaming(false);
       assistantMsgIdRef.current = null;
       isUserScrolledUpRef.current = false;
       requestAnimationFrame(() => scrollToBottom('smooth'));
@@ -628,6 +863,8 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
       ));
       setIsStreaming(false);
       setStatusText('');
+      setWorkflowPlanDraft('');
+      setIsWorkflowPlanStreaming(false);
       assistantMsgIdRef.current = null;
     }
   }, [scrollToBottom]);
@@ -690,17 +927,24 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
     requestAnimationFrame(() => scrollToBottom('smooth'));
   }, [scrollToBottom]);
 
-  const handleApprovalDecision = useCallback(async (decision: 'approve' | 'deny') => {
+  const handleApprovalDecision = useCallback(async (decision: 'approve' | 'revise' | 'deny') => {
     const api = (window as any).clawdia;
     const approval = pendingApprovals[0];
     if (!api?.run || !approval) return;
 
     if (decision === 'approve') await api.run.approve(approval.id);
+    else if (decision === 'revise') await api.run.revise(approval.id);
     else await api.run.deny(approval.id);
 
     if (pendingApprovalRunId) {
       const approvals = await api.run.approvals(pendingApprovalRunId);
-      setPendingApprovals((approvals || []).filter((item: RunApproval) => item.status === 'pending'));
+      const pending = (approvals || []).filter((item: RunApproval) => item.status === 'pending');
+      setPendingApprovals(pending);
+      const workflowApproval = pending.find((item: RunApproval) => item.actionType === 'workflow_plan');
+      if (!workflowApproval) {
+        setWorkflowPlanDraft('');
+        setIsWorkflowPlanStreaming(false);
+      }
     }
   }, [pendingApprovalRunId, pendingApprovals]);
 
@@ -723,12 +967,25 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
     setPendingHumanInterventions([]);
   }, []);
 
+  const handleModelContextChange = useCallback((provider: ProviderId, model: string) => {
+    setActiveProvider(provider);
+    setActiveModel(model);
+  }, []);
+
+  const workflowPlanApproval = pendingApprovals.find((approval) => approval.actionType === 'workflow_plan');
+  const visiblePlanText = workflowPlanApproval?.request?.plan
+    ? String(workflowPlanApproval.request.plan)
+    : workflowPlanDraft;
+  const nonWorkflowApproval = pendingApprovals.find((approval) => approval.actionType !== 'workflow_plan');
+
   return (
     <div className="flex flex-col h-full">
       <header className="drag-region flex items-center gap-2 px-4 h-[44px] flex-shrink-0 bg-surface-1 border-b border-border-subtle shadow-[inset_0_-1px_6px_rgba(0,0,0,0.2),0_2px_8px_rgba(0,0,0,0.3)] relative z-10">
-        <Clock />
+        <CalendarTrigger open={calendarOpen} onToggle={onToggleCalendar} />
         {attachedAgentProfile && <AgentBadge profile={attachedAgentProfile} />}
         {attachedSpecializedTool && <ToolBadge toolName={attachedSpecializedTool} />}
+        {attachedWorkflowStage && <WorkflowBadge stage={attachedWorkflowStage} />}
+        {activeModel && <ProviderBadge provider={activeProvider} model={activeModel} />}
         <div className="flex-1 drag-region" />
         <button onClick={onOpenSettings} title="Settings" className="no-drag flex items-center justify-center w-8 h-8 rounded-lg text-text-secondary hover:text-text-primary hover:bg-white/[0.06] transition-all cursor-pointer">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -740,18 +997,45 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
 
       <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto overflow-x-hidden scroll-smooth">
         <div className="flex flex-col gap-4 px-4 pt-5 pb-8 max-w-[720px]">
-          {messages.length === 0 && (
-            <div className="flex items-center justify-center h-[60vh] text-text-muted">
-              <div className="flex flex-col items-center gap-3">
-                <div className="opacity-[0.12]"><svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="0.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg></div>
-                <span className="text-[14px] text-text-secondary/50">Ask Clawdia anything</span>
-              </div>
-            </div>
-          )}
           {messages.map(msg =>
             msg.role === 'assistant'
               ? <AssistantMessage key={msg.id} message={msg} streamMap={msg.isStreaming ? streamMap : undefined} />
               : <UserMessage key={msg.id} message={msg} />
+          )}
+          {(visiblePlanText || isWorkflowPlanStreaming) && (
+            <WorkflowPlanCard
+              planText={visiblePlanText}
+              isStreaming={isWorkflowPlanStreaming}
+              approval={workflowPlanApproval || null}
+              onApprove={() => handleApprovalDecision('approve')}
+              onRevise={() => handleApprovalDecision('revise')}
+              onDeny={() => handleApprovalDecision('deny')}
+              onOpenReview={() => pendingApprovalRunId && onOpenPendingApproval?.(pendingApprovalRunId)}
+            />
+          )}
+          {pendingHumanRunId && pendingHumanInterventions[0] && (
+            <div className="flex justify-start animate-slide-up">
+              <div className="max-w-[92%] px-1 py-1 text-text-primary">
+                <HumanInterventionBanner
+                  intervention={pendingHumanInterventions[0]}
+                  onResume={handleHumanResume}
+                  onCancelRun={handleCancelRun}
+                  onOpenReview={() => onOpenPendingApproval?.(pendingHumanRunId)}
+                />
+              </div>
+            </div>
+          )}
+          {pendingApprovalRunId && nonWorkflowApproval && (
+            <div className="flex justify-start animate-slide-up">
+              <div className="max-w-[92%] px-1 py-1 text-text-primary">
+                <ApprovalBanner
+                  approval={nonWorkflowApproval}
+                  onApprove={() => handleApprovalDecision('approve')}
+                  onDeny={() => handleApprovalDecision('deny')}
+                  onOpenReview={() => onOpenPendingApproval?.(pendingApprovalRunId)}
+                />
+              </div>
+            </div>
           )}
           {isStreaming && <StatusLine text={statusText} />}
           <div className="h-2" />
@@ -765,24 +1049,6 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
         ) : null;
       })()}
 
-      {pendingHumanRunId && pendingHumanInterventions[0] && (
-        <HumanInterventionBanner
-          intervention={pendingHumanInterventions[0]}
-          onResume={handleHumanResume}
-          onCancelRun={handleCancelRun}
-          onOpenReview={() => onOpenPendingApproval?.(pendingHumanRunId)}
-        />
-      )}
-
-      {pendingApprovalRunId && pendingApprovals[0] && (
-        <ApprovalBanner
-          approval={pendingApprovals[0]}
-          onApprove={() => handleApprovalDecision('approve')}
-          onDeny={() => handleApprovalDecision('deny')}
-          onOpenReview={() => onOpenPendingApproval?.(pendingApprovalRunId)}
-        />
-      )}
-
       <InputBar
         onSend={handleSend}
         isStreaming={isStreaming}
@@ -791,7 +1057,9 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
         onPause={handlePause}
         onResume={handleResume}
         onAddContext={handleAddContext}
+        onModelContextChange={handleModelContextChange}
       />
+
     </div>
   );
 }
