@@ -20,7 +20,8 @@ import { createProviderClient, resolveModelForProvider, type LLMResponse, type N
 import { seedRegistry, type ExecutionPlan } from '../db/app-registry';
 import { savePlaybook, validatePlaybookCandidate, writeBloodhoundExecutorArtifacts, executeSavedBloodhoundPlaybook } from '../db/browser-playbooks';
 import { type VerificationResult } from './verification';
-import { fireNestedCancel } from './loop-cancel';
+import { fireNestedCancel, registerNestedCancel, clearNestedCancel } from './loop-cancel';
+import { runYtdlpPipeline, type YtdlpResult } from './loop-ytdlp';
 import { runPreLLMSetup } from './loop-setup';
 import { dispatchTools, type DispatchContext } from './loop-dispatch';
 import { verifyFileOutcomes, runRecoveryIteration, logVerificationSummary } from './loop-recovery';
@@ -33,6 +34,7 @@ import type { AgentProfile, PerformanceStance, ProviderId } from '../../shared/t
 import { setProcessAgentProfile, setProcessExecutionInfo, setProcessWorkflowStage } from './process-manager';
 import { getCurrentUrl } from '../browser/manager';
 import { calendarList } from '../db/calendar';
+import type { NormalizedMessageContentBlock } from './provider/types';
 
 const MAX_ITERATIONS = 50;
 const MAX_WALL_MS = 10 * 60 * 1000;
@@ -158,6 +160,7 @@ export interface LoopOptions {
   onResumed?: () => void;
   onProgress?: (text: string) => void;  // narration during pre-LLM setup
   window?: BrowserWindow;
+  initialUserContent?: string | NormalizedMessageContentBlock[];
 }
 
 function pickModel(provider: ProviderId, classifierModel: string, storedModel?: string, isGreeting?: boolean): string {
@@ -333,6 +336,34 @@ export async function runAgentLoop(
     });
   }
 
+  // ── Extractor agent short-circuit ──
+  if (profile.agentProfile === 'ytdlp') {
+    if (!client.supportsHarnessGeneration) {
+      options.onStreamText?.('Extractor requires a provider that supports nested agent loops (Anthropic). Switch providers to use it.');
+      options.onStreamEnd?.();
+      cleanupRunControl(runKey);
+      return { response: '', toolCalls: [] };
+    }
+    let ytdlpResult: YtdlpResult;
+    try {
+      ytdlpResult = await runYtdlpPipeline(userMessage, {
+        client,
+        apiKey: options.apiKey,
+        onProgress: (text) => options.onStreamText?.(text),
+        onRegisterCancel: registerNestedCancel,
+      });
+    } finally {
+      clearNestedCancel();
+    }
+    const summary = ytdlpResult.success
+      ? `Downloaded ${ytdlpResult.files.length} file(s):\n${ytdlpResult.files.join('\n')}`
+      : `Extractor failed: ${ytdlpResult.reason}`;
+    options.onStreamText?.(summary);
+    options.onStreamEnd?.();
+    cleanupRunControl(runKey);
+    return { response: summary, toolCalls: [] };
+  }
+
   if (profile.toolGroup === 'browser') {
     const executorRun = await executeSavedBloodhoundPlaybook(userMessage, getCurrentUrl() || undefined);
     if (executorRun?.ok) {
@@ -485,7 +516,7 @@ export async function runAgentLoop(
 
   // ── Prepare message history ──
   const trimmedHistory = trimHistory(history);
-  const messages: NormalizedMessage[] = [...trimmedHistory, { role: 'user', content: userMessage }];
+  const messages: NormalizedMessage[] = [...trimmedHistory, { role: 'user', content: options.initialUserContent ?? userMessage }];
 
   // ── Dispatch context (mutable, shared with loop-dispatch) ──
   const dispatchCtx: DispatchContext = {
@@ -504,6 +535,8 @@ export async function runAgentLoop(
     onToolStream,
   };
 
+  const YTDLP_SUGGEST_RE = /\b(video|youtube|download|clip|watch|stream|vimeo|twitch)\b/i;
+  let ytdlpSuggested = false;
   let guiBatchNudgeSent = false;
   const guiBatchNudgeAt = control.performanceStance === 'aggressive'
     ? 1
@@ -729,6 +762,13 @@ export async function runAgentLoop(
     }
   }
 
+  if (!ytdlpSuggested && YTDLP_SUGGEST_RE.test(finalText) && profile.agentProfile !== 'ytdlp') {
+    ytdlpSuggested = true;
+    const hint = '\n\nI have an Extractor agent that can find and download videos automatically — type `/extractor` or ask me to use it.';
+    options.onStreamText?.(hint);
+    finalText += hint;
+  }
+
   onStreamEnd?.();
 
   // ── Post-loop verification + recovery (extracted to loop-recovery.ts) ──
@@ -897,6 +937,7 @@ export async function runAgentLoop(
 
   // Clean up
   cleanupRunControl(runKey);
+  clearNestedCancel();  // guard: clears any registered nested cancel fn on all exit paths
 
   return { response: finalText, toolCalls: dispatchCtx.allToolCalls };
 }
