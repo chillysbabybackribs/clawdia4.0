@@ -1,0 +1,184 @@
+#!/usr/bin/env node
+/**
+ * clawdia-cal — CLI for managing Clawdia calendar events.
+ * Used by the AI via shell_exec. All output is JSON.
+ *
+ * Commands:
+ *   add "Title" --date YYYY-MM-DD [--time HH:MM] [--duration N] [--notes "..."]
+ *   list [--date YYYY-MM-DD] [--from YYYY-MM-DD] [--to YYYY-MM-DD]
+ *   update <id> [--title "..."] [--date ...] [--time ...] [--duration N] [--notes "..."]
+ *   delete <id>
+ *   get <id>
+ */
+
+'use strict';
+
+const path = require('path');
+const os = require('os');
+const fs = require('fs');
+
+// Resolve better-sqlite3 from the project root regardless of CWD
+const Database = require(path.join(__dirname, '..', 'node_modules', 'better-sqlite3'));
+const { randomUUID } = require('crypto');
+
+// ── DB setup ──────────────────────────────────────────────────────────────────
+
+function getDbPath() {
+  if (process.env.CLAWDIA_CAL_DB_PATH) return process.env.CLAWDIA_CAL_DB_PATH;
+  const dir = path.join(os.homedir(), '.config', 'Clawdia');
+  fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, 'calendar.sqlite');
+}
+
+function getDb() {
+  const db = new Database(getDbPath());
+  db.pragma('journal_mode = WAL');
+  db.pragma('synchronous = NORMAL');
+  db.pragma('foreign_keys = ON');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS calendar_events (
+      id         TEXT PRIMARY KEY,
+      title      TEXT NOT NULL,
+      date       TEXT NOT NULL,
+      start_time TEXT,
+      duration   INTEGER,
+      notes      TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_cal_events_date ON calendar_events(date)`);
+  return db;
+}
+
+// ── Arg parser ────────────────────────────────────────────────────────────────
+
+function parseArgs(argv) {
+  const positional = [];
+  const flags = {};
+  let i = 0;
+  while (i < argv.length) {
+    if (argv[i].startsWith('--')) {
+      const key = argv[i].slice(2);
+      const val = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : true;
+      flags[key] = val;
+    } else {
+      positional.push(argv[i]);
+    }
+    i++;
+  }
+  return { positional, flags };
+}
+
+// ── Commands ──────────────────────────────────────────────────────────────────
+
+function cmdAdd(positional, flags) {
+  const title = positional[0];
+  if (!title) die('add requires a title as the first argument');
+  if (!flags.date) die('add requires --date YYYY-MM-DD');
+  const db = getDb();
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO calendar_events (id, title, date, start_time, duration, notes, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id, title, flags.date,
+    flags.time || null,
+    flags.duration ? parseInt(flags.duration, 10) : null,
+    flags.notes || null,
+    now, now
+  );
+  const event = db.prepare('SELECT * FROM calendar_events WHERE id = ?').get(id);
+  out(event);
+}
+
+function cmdList(flags) {
+  const db = getDb();
+  let rows;
+  if (flags.date) {
+    rows = db.prepare('SELECT * FROM calendar_events WHERE date = ? ORDER BY start_time ASC NULLS LAST').all(flags.date);
+  } else if (flags.from || flags.to) {
+    const from = flags.from || '0000-01-01';
+    const to = flags.to || '9999-12-31';
+    rows = db.prepare('SELECT * FROM calendar_events WHERE date >= ? AND date <= ? ORDER BY date ASC, start_time ASC NULLS LAST').all(from, to);
+  } else {
+    const today = new Date().toISOString().slice(0, 10);
+    rows = db.prepare('SELECT * FROM calendar_events WHERE date = ? ORDER BY start_time ASC NULLS LAST').all(today);
+  }
+  out(rows);
+}
+
+function cmdUpdate(positional, flags) {
+  const id = positional[0];
+  if (!id) die('update requires an event id');
+  const db = getDb();
+  const existing = db.prepare('SELECT * FROM calendar_events WHERE id = ?').get(id);
+  if (!existing) die(`No event found with id: ${id}`);
+  const now = new Date().toISOString();
+  db.prepare(`
+    UPDATE calendar_events
+    SET title = ?, date = ?, start_time = ?, duration = ?, notes = ?, updated_at = ?
+    WHERE id = ?
+  `).run(
+    flags.title !== undefined ? flags.title : existing.title,
+    flags.date !== undefined ? flags.date : existing.date,
+    flags.time !== undefined ? flags.time : existing.start_time,
+    flags.duration !== undefined ? parseInt(flags.duration, 10) : existing.duration,
+    flags.notes !== undefined ? flags.notes : existing.notes,
+    now, id
+  );
+  out(db.prepare('SELECT * FROM calendar_events WHERE id = ?').get(id));
+}
+
+function cmdDelete(positional) {
+  const id = positional[0];
+  if (!id) die('delete requires an event id');
+  const db = getDb();
+  const result = db.prepare('DELETE FROM calendar_events WHERE id = ?').run(id);
+  if (result.changes === 0) die(`No event found with id: ${id}`);
+  out({ deleted: true, id });
+}
+
+function cmdGet(positional) {
+  const id = positional[0];
+  if (!id) die('get requires an event id');
+  const event = getDb().prepare('SELECT * FROM calendar_events WHERE id = ?').get(id);
+  if (!event) die(`No event found with id: ${id}`);
+  out(event);
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function out(data) {
+  process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+}
+
+function die(msg) {
+  process.stderr.write(JSON.stringify({ error: msg }) + '\n');
+  process.exit(1);
+}
+
+// ── Dispatch ──────────────────────────────────────────────────────────────────
+
+const argv = process.argv.slice(2);
+if (!argv.length) {
+  out({ usage: 'clawdia-cal <add|list|update|delete|get> [args]' });
+  process.exit(0);
+}
+
+const command = argv[0];
+const { positional, flags } = parseArgs(argv.slice(1));
+
+try {
+  switch (command) {
+    case 'add':    cmdAdd(positional, flags); break;
+    case 'list':   cmdList(flags); break;
+    case 'update': cmdUpdate(positional, flags); break;
+    case 'delete': cmdDelete(positional); break;
+    case 'get':    cmdGet(positional); break;
+    default:       die(`Unknown command: ${command}`);
+  }
+} catch (err) {
+  die(err.message);
+}
