@@ -11,8 +11,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import type Anthropic from '@anthropic-ai/sdk';
-import { AnthropicClient, resolveModelId } from './client';
+import { AnthropicProviderClient as AnthropicClient, resolveAnthropicModelId as resolveModelId } from './provider/anthropic-adapter';
+import type { NormalizedMessage, NormalizedTextBlock, NormalizedToolResultBlock, NormalizedToolUseBlock } from './client';
 import { executeTool, getToolsForGroup } from './tool-builder';
 import { getAppProfile, updateAppProfile, type AppProfile } from '../db/app-registry';
 import { exec } from 'child_process';
@@ -128,7 +128,7 @@ Follow all 7 phases from HARNESS.md. The output goes to: ${outputDir}
 
 Start with Phase 1: run \`${appId} --help\` and \`man ${appId}\` (if available) to understand the app.`;
 
-  const messages: Anthropic.MessageParam[] = [
+  const messages: NormalizedMessage[] = [
     { role: 'user', content: initialMessage },
   ];
 
@@ -171,10 +171,10 @@ Start with Phase 1: run \`${appId} --help\` and \`man ${appId}\` (if available) 
     }
 
     const textBlocks = response.content.filter(
-      (b): b is Anthropic.TextBlock => b.type === 'text',
+      (b): b is NormalizedTextBlock => b.type === 'text',
     );
     const toolUseBlocks = response.content.filter(
-      (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
+      (b): b is NormalizedToolUseBlock => b.type === 'tool_use',
     );
     const responseText = textBlocks.map(b => b.text).join('');
 
@@ -192,7 +192,7 @@ Start with Phase 1: run \`${appId} --help\` and \`man ${appId}\` (if available) 
     messages.push({ role: 'assistant', content: response.content as any });
 
     // Execute tools sequentially (order matters for file creation)
-    const toolResults: Anthropic.ToolResultBlockParam[] = [];
+    const toolResults: NormalizedToolResultBlock[] = [];
     for (const toolUse of toolUseBlocks) {
       if (!HARNESS_TOOLS.includes(toolUse.name)) {
         toolResults.push({
