@@ -1,0 +1,18 @@
+{
+  "name": "bloodhound-tools",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Bulk training tools for Clawdia's Bloodhound executor system",
+  "scripts": {
+    "seed": "node seeder.mjs",
+    "seed:dry": "node seeder.mjs --dry-run",
+    "audit": "node auditor.mjs",
+    "audit:promote": "node auditor.mjs --promote",
+    "audit:auto": "node auditor.mjs --promote-all",
+    "audit:json": "node auditor.mjs --json"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0"
+  }
+}
