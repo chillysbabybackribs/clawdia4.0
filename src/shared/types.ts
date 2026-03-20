@@ -10,11 +10,23 @@ export type FeedItem =
   | { kind: 'tool'; tool: ToolCall }
   | { kind: 'text'; text: string; isStreaming?: boolean };
 
+export interface MessageAttachment {
+  id: string;
+  kind: 'image' | 'file';
+  name: string;
+  size: number;
+  mimeType: string;
+  path?: string;
+  dataUrl?: string;
+  textContent?: string;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
+  attachments?: MessageAttachment[];
   toolCalls?: ToolCall[];
   iterations?: MessageIteration[];   // legacy, kept for DB-loaded messages
   feed?: FeedItem[];                 // renderer-only — NOT persisted to DB
@@ -45,7 +57,7 @@ export interface BrowserTab {
   active: boolean;
 }
 
-export type AgentProfile = 'general' | 'filesystem' | 'bloodhound';
+export type AgentProfile = 'general' | 'filesystem' | 'bloodhound' | 'ytdlp';
 export type WorkflowStage = 'starting' | 'planning' | 'executing' | 'reviewing' | 'completed';
 
 export interface ProcessInfo {
