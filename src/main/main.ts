@@ -2,7 +2,7 @@
  * Clawdia 4.0 — Main Process
  */
 
-import { app, BrowserWindow, ipcMain, Menu, clipboard } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu } from 'electron';
 import * as path from 'path';
 import { IPC, IPC_EVENTS } from '../shared/ipc-channels';
 import { runAgentLoop, cancelLoop, pauseLoop, resumeLoop, addContext } from './agent/loop';
