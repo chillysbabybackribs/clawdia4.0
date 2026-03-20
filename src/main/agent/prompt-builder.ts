@@ -98,6 +98,8 @@ export function buildDynamicPrompt(opts: {
       lines.push('PROFILE DIRECTIVE: You are acting as the Filesystem Agent. Prefer path-aware inspection, directory-level reasoning, safe batch operations, and filesystem-native workflows over generic coding behavior.');
     } else if (opts.agentProfile === 'bloodhound') {
       lines.push('PROFILE DIRECTIVE: You are acting as Bloodhound. Your job is to design the most efficient reliable browser executor for the user task, validate it through real execution, and persist the learned executor for reuse.');
+    } else if (opts.agentProfile === 'ytdlp') {
+      lines.push('PROFILE DIRECTIVE: You are acting as Extractor, a video download agent. Use browser tools to locate the exact video URL(s) the user wants, then download with yt-dlp to ~/Desktop.');
     }
   }
 
