@@ -15,6 +15,7 @@ import type {
   NormalizedToolResultBlock,
   NormalizedToolUseBlock,
 } from './client';
+import { createProviderClient, resolveModelForProvider } from './provider/factory';
 import { executeTool, getToolsForGroup } from './tool-builder';
 
 const EXTRACTOR_MAX_ITERATIONS = 30;
@@ -84,7 +85,11 @@ export async function runYtdlpPipeline(
   query: string,
   options: YtdlpPipelineOptions,
 ): Promise<YtdlpResult> {
-  const { client, onProgress, onRegisterCancel } = options;
+  const { client, apiKey, onProgress, onRegisterCancel } = options;
+
+  // Create a fresh client using the same provider — never mutate the passed-in client
+  const modelId = resolveModelForProvider(client.provider, 'sonnet');
+  const ytdlpClient = createProviderClient(client.provider, apiKey, modelId);
 
   // Private abort controller — never touches loop.ts module state
   const abortController = new AbortController();
@@ -119,9 +124,9 @@ export async function runYtdlpPipeline(
       return { success: files.length > 0, files, reason: 'timeout' };
     }
 
-    let response: Awaited<ReturnType<typeof client.chat>>;
+    let response: Awaited<ReturnType<typeof ytdlpClient.chat>>;
     try {
-      response = await client.chat(
+      response = await ytdlpClient.chat(
         messages,
         extractorToolSchemas,
         EXTRACTOR_SYSTEM_PROMPT,

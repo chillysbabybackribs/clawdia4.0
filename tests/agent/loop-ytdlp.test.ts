@@ -5,7 +5,7 @@ describe('loop-ytdlp helpers', () => {
     const re = new RegExp(EXTRACTOR_SENTINEL_RE.source, 'g');
     const m = re.exec('[EXTRACTOR_SUCCESS:/home/dp/Desktop/my video.mp4]');
     expect(m).not.toBeNull();
-    expect(m![1]).toBe('/home/dp/Desktop/my video.mp4');
+    expect(m && m[1]).toBe('/home/dp/Desktop/my video.mp4');
   });
 
   test('EXTRACTOR_SENTINEL_RE does not match partial text', () => {
