@@ -7,6 +7,7 @@ import Database from 'better-sqlite3';
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
+import { app } from 'electron';
 
 export interface CalendarEvent {
   id: string;
@@ -24,7 +25,6 @@ let calDb: Database.Database | null = null;
 function getCalDbPath(): string {
   if (process.env.CLAWDIA_CAL_DB_PATH) return process.env.CLAWDIA_CAL_DB_PATH;
   // Reuse same userData dir as main DB
-  const { app } = require('electron');
   const dir = app.getPath('userData');
   fs.mkdirSync(dir, { recursive: true });
   return path.join(dir, 'calendar.sqlite');
@@ -35,6 +35,8 @@ export function getCalDb(): Database.Database {
   const dbPath = getCalDbPath();
   calDb = new Database(dbPath);
   calDb.pragma('journal_mode = WAL');
+  calDb.pragma('synchronous = NORMAL');
+  calDb.pragma('foreign_keys = ON');
   calDb.exec(`
     CREATE TABLE IF NOT EXISTS calendar_events (
       id         TEXT PRIMARY KEY,
@@ -46,6 +48,9 @@ export function getCalDb(): Database.Database {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
+  `);
+  calDb.exec(`
+    CREATE INDEX IF NOT EXISTS idx_cal_events_date ON calendar_events(date)
   `);
   return calDb;
 }
