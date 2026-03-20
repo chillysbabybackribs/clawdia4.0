@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import type { ProcessInfo, RunApproval, RunChange, RunEvent, RunSummary } from '../../shared/types';
+import type { ProcessInfo, RunApproval, RunChange, RunEvent, RunHumanIntervention, RunSummary } from '../../shared/types';
 
 interface ProcessesPanelProps {
   onBack: () => void;
-  onAttach: (conversationId: string) => void;
+  onAttach: (conversationId: string, buffer?: Array<{ type: string; data: any }> | null) => void;
   initialRunId?: string | null;
 }
 
 function StatusBadge({ status }: { status: ProcessInfo['status'] }) {
   const config = {
     running: { color: 'text-blue-400', bg: 'bg-blue-400/10', label: 'Running', pulse: true },
-    awaiting_approval: { color: 'text-[#ff7a00]', bg: 'bg-[#ff7a00]/12', label: 'Awaiting Approval', pulse: false },
+    awaiting_approval: { color: 'text-text-primary', bg: 'bg-white/[0.06]', label: 'Awaiting Approval', pulse: false },
+    needs_human: { color: 'text-text-primary', bg: 'bg-white/[0.08]', label: 'Needs Human', pulse: true },
     completed: { color: 'text-[#ff7a00]', bg: 'bg-[#ff7a00]/12', label: 'Done', pulse: false },
     failed: { color: 'text-red-400', bg: 'bg-red-400/10', label: 'Failed', pulse: false },
     cancelled: { color: 'text-text-muted', bg: 'bg-white/[0.04]', label: 'Cancelled', pulse: false },
@@ -20,8 +21,8 @@ function StatusBadge({ status }: { status: ProcessInfo['status'] }) {
     <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-2xs font-medium ${config.color} ${config.bg}`}>
       {config.pulse && (
         <span className="relative flex h-1.5 w-1.5">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-          <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-400" />
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-current opacity-75" />
+          <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-current" />
         </span>
       )}
       {config.label}
@@ -70,6 +71,12 @@ function formatEventLabel(event: RunEvent): string {
     case 'run_resumed': return 'Run resumed';
     case 'approval_requested': return 'Approval requested';
     case 'approval_resolved': return 'Approval resolved';
+    case 'human_intervention_requested': return 'Human intervention requested';
+    case 'human_intervention_resolved': return 'Human intervention resolved';
+    case 'file_lock_acquired': return 'File lock acquired';
+    case 'file_lock_conflict': return 'File conflict detected';
+    case 'file_lock_released': return 'File lock released';
+    case 'browser_mode_changed': return 'Browser mode changed';
     case 'assistant_response': return 'Assistant response produced';
     case 'recovery_started': return 'Recovery started';
     case 'recovery_completed': return 'Recovery completed';
@@ -104,6 +111,20 @@ function formatEventDetail(event: RunEvent): string {
   if (event.kind === 'approval_requested' || event.kind === 'approval_resolved') {
     return String(event.payload.summary || event.payload.reason || '').slice(0, 180);
   }
+  if (event.kind === 'human_intervention_requested' || event.kind === 'human_intervention_resolved') {
+    return String(event.payload.summary || event.payload.instructions || '').slice(0, 180);
+  }
+  if (event.kind === 'file_lock_conflict') {
+    return String(event.payload.summary || event.payload.path || '').slice(0, 180);
+  }
+  if (event.kind === 'file_lock_acquired' || event.kind === 'file_lock_released') {
+    return String(event.payload.path || '').slice(0, 180);
+  }
+  if (event.kind === 'browser_mode_changed') {
+    const mode = String(event.payload.mode || event.payload.to || '').trim();
+    const reason = String(event.payload.reason || '').trim();
+    return `${mode}${reason ? ` · ${reason}` : ''}`.trim();
+  }
   return '';
 }
 
@@ -120,7 +141,7 @@ function ProcessCard({
   onCancel: () => void;
   onDismiss: () => void;
 }) {
-  const isActive = process.status === 'running' || process.status === 'awaiting_approval';
+  const isActive = process.status === 'running' || process.status === 'awaiting_approval' || process.status === 'needs_human';
   const isDone = !isActive;
 
   return (
@@ -200,6 +221,7 @@ function RunDetail({
   events,
   changes,
   approvals,
+  humanInterventions,
   onBack,
   onOpenConversation,
   onApprove,
@@ -209,6 +231,7 @@ function RunDetail({
   events: RunEvent[];
   changes: RunChange[];
   approvals: RunApproval[];
+  humanInterventions: RunHumanIntervention[];
   onBack: () => void;
   onOpenConversation: () => void;
   onApprove: (approvalId: number) => Promise<void>;
@@ -255,8 +278,52 @@ function RunDetail({
             <span className="px-2 py-1 rounded-md bg-white/[0.04]">{events.length} events</span>
             <span className="px-2 py-1 rounded-md bg-white/[0.04]">{changes.length} changes</span>
             <span className="px-2 py-1 rounded-md bg-white/[0.04]">{approvals.length} approvals</span>
+            <span className="px-2 py-1 rounded-md bg-white/[0.04]">{humanInterventions.length} human steps</span>
             {run.wasDetached && <span className="px-2 py-1 rounded-md bg-white/[0.04]">Detached</span>}
             {run.error && <span className="px-2 py-1 rounded-md bg-red-400/10 text-red-300">{run.error}</span>}
+          </div>
+        </div>
+
+        <div className="mb-5">
+          <h3 className="text-2xs font-medium text-text-muted uppercase tracking-wider mb-2">Human Intervention</h3>
+          <div className="flex flex-col gap-2">
+            {humanInterventions.length === 0 && (
+              <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-4 text-sm text-text-muted">
+                No human intervention checkpoints recorded for this run.
+              </div>
+            )}
+
+            {humanInterventions.map(intervention => (
+              <div key={intervention.id} className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3.5 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[13px] text-text-primary">{intervention.summary}</div>
+                    <div className="mt-1 text-2xs text-text-muted">
+                      {intervention.interventionType}{intervention.target ? ` · ${intervention.target}` : ''}
+                    </div>
+                    {intervention.instructions && (
+                      <div className="mt-2 text-[12px] text-text-secondary whitespace-pre-wrap break-words">
+                        {intervention.instructions}
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <div className={`text-2xs ${
+                      intervention.status === 'pending'
+                        ? 'text-text-primary'
+                        : intervention.status === 'resolved'
+                          ? 'text-text-secondary'
+                          : 'text-text-muted'
+                    }`}>
+                      {intervention.status === 'pending' ? 'Pending' : intervention.status === 'resolved' ? 'Resolved' : 'Dismissed'}
+                    </div>
+                    <div className="mt-1 text-2xs text-text-muted">
+                      {new Date(intervention.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -279,10 +346,10 @@ function RunDetail({
                   <div className="text-right flex-shrink-0">
                     <div className={`text-2xs ${
                       approval.status === 'pending'
-                        ? 'text-[#ff7a00]'
+                        ? 'text-text-primary'
                         : approval.status === 'approved'
-                          ? 'text-blue-300'
-                          : 'text-red-300'
+                          ? 'text-text-secondary'
+                          : 'text-text-muted'
                     }`}>
                       {approval.status === 'pending' ? 'Pending' : approval.status === 'approved' ? 'Approved' : 'Denied'}
                     </div>
@@ -296,13 +363,13 @@ function RunDetail({
                   <div className="flex items-center gap-2 mt-3">
                     <button
                       onClick={() => onApprove(approval.id)}
-                      className="text-2xs px-2.5 py-1 rounded-md bg-[#ff7a00]/14 text-[#ff7a00] hover:bg-[#ff7a00]/22 transition-colors cursor-pointer"
+                      className="text-2xs px-2.5 py-1 rounded-md bg-white/[0.07] text-text-primary hover:bg-white/[0.1] transition-colors cursor-pointer"
                     >
                       Approve
                     </button>
                     <button
                       onClick={() => onDeny(approval.id)}
-                      className="text-2xs px-2.5 py-1 rounded-md bg-red-400/10 text-red-300 hover:bg-red-400/18 transition-colors cursor-pointer"
+                      className="text-2xs px-2.5 py-1 rounded-md bg-white/[0.04] text-text-secondary hover:bg-white/[0.08] hover:text-text-primary transition-colors cursor-pointer"
                     >
                       Deny
                     </button>
@@ -391,6 +458,7 @@ export default function ProcessesPanel({ onBack, onAttach, initialRunId }: Proce
   const [selectedEvents, setSelectedEvents] = useState<RunEvent[]>([]);
   const [selectedChanges, setSelectedChanges] = useState<RunChange[]>([]);
   const [selectedApprovals, setSelectedApprovals] = useState<RunApproval[]>([]);
+  const [selectedHumanInterventions, setSelectedHumanInterventions] = useState<RunHumanIntervention[]>([]);
 
   useEffect(() => {
     const api = (window as any).clawdia;
@@ -421,11 +489,12 @@ export default function ProcessesPanel({ onBack, onAttach, initialRunId }: Proce
     const api = (window as any).clawdia;
     if (!api?.run) return;
 
-    const [run, events, changes, approvals] = await Promise.all([
+    const [run, events, changes, approvals, humanInterventions] = await Promise.all([
       api.run.get(runId),
       api.run.events(runId),
       api.run.changes(runId),
       api.run.approvals(runId),
+      api.run.humanInterventions(runId),
     ]);
 
     if (run) {
@@ -433,6 +502,7 @@ export default function ProcessesPanel({ onBack, onAttach, initialRunId }: Proce
       setSelectedEvents(events || []);
       setSelectedChanges(changes || []);
       setSelectedApprovals(approvals || []);
+      setSelectedHumanInterventions(humanInterventions || []);
     }
   }, []);
 
@@ -446,9 +516,9 @@ export default function ProcessesPanel({ onBack, onAttach, initialRunId }: Proce
     const api = (window as any).clawdia;
     if (!api) return;
 
-    if (proc.status === 'running') {
+    if (proc.status === 'running' || proc.status === 'awaiting_approval' || proc.status === 'needs_human') {
       const result = await api.process.attach(proc.id);
-      if (result.ok) onAttach(proc.conversationId);
+      if (result.ok) onAttach(proc.conversationId, result.buffer || null);
       return;
     }
 
@@ -470,6 +540,7 @@ export default function ProcessesPanel({ onBack, onAttach, initialRunId }: Proce
       setSelectedEvents([]);
       setSelectedChanges([]);
       setSelectedApprovals([]);
+      setSelectedHumanInterventions([]);
     }
   }, [selectedRun]);
 
@@ -483,8 +554,8 @@ export default function ProcessesPanel({ onBack, onAttach, initialRunId }: Proce
     await loadRunDetail(selectedRun.id);
   }, [loadRunDetail, selectedRun]);
 
-  const running = processes.filter(p => p.status === 'running' || p.status === 'awaiting_approval');
-  const completed = processes.filter(p => p.status !== 'running' && p.status !== 'awaiting_approval');
+  const running = processes.filter(p => p.status === 'running' || p.status === 'awaiting_approval' || p.status === 'needs_human');
+  const completed = processes.filter(p => p.status !== 'running' && p.status !== 'awaiting_approval' && p.status !== 'needs_human');
 
   if (selectedRun) {
     return (
@@ -497,10 +568,12 @@ export default function ProcessesPanel({ onBack, onAttach, initialRunId }: Proce
             setSelectedEvents([]);
             setSelectedChanges([]);
             setSelectedApprovals([]);
+            setSelectedHumanInterventions([]);
           }}
           onOpenConversation={() => onAttach(selectedRun.conversationId)}
           changes={selectedChanges}
           approvals={selectedApprovals}
+          humanInterventions={selectedHumanInterventions}
           onApprove={(approvalId) => handleApprovalDecision(approvalId, 'approve')}
           onDeny={(approvalId) => handleApprovalDecision(approvalId, 'deny')}
         />

@@ -32,9 +32,14 @@ section('getToolsForGroup — core');
   assert(names.includes('file_write'), 'Core has file_write');
   assert(names.includes('file_edit'), 'Core has file_edit');
   assert(names.includes('directory_tree'), 'Core has directory_tree');
+  assert(names.includes('fs_quote_lookup'), 'Core has fs_quote_lookup');
+  assert(names.includes('fs_folder_summary'), 'Core has fs_folder_summary');
+  assert(names.includes('fs_reorg_plan'), 'Core has fs_reorg_plan');
+  assert(names.includes('fs_duplicate_scan'), 'Core has fs_duplicate_scan');
+  assert(names.includes('fs_apply_plan'), 'Core has fs_apply_plan');
   assert(!names.includes('browser_search'), 'Core does NOT have browser_search');
   assert(!names.includes('gui_interact'), 'Core does NOT have gui_interact');
-  assertEq(tools.length, 5, 'Core has exactly 5 tools');
+  assertEq(tools.length, 10, 'Core has exactly 10 tools');
 }
 
 section('getToolsForGroup — browser');
@@ -125,6 +130,11 @@ section('isKnownTool');
   assert(isKnownTool('app_control'), 'app_control is known');
   assert(isKnownTool('dbus_control'), 'dbus_control is known');
   assert(isKnownTool('memory_search'), 'memory_search is known');
+  assert(isKnownTool('fs_quote_lookup'), 'fs_quote_lookup is known');
+  assert(isKnownTool('fs_folder_summary'), 'fs_folder_summary is known');
+  assert(isKnownTool('fs_reorg_plan'), 'fs_reorg_plan is known');
+  assert(isKnownTool('fs_duplicate_scan'), 'fs_duplicate_scan is known');
+  assert(isKnownTool('fs_apply_plan'), 'fs_apply_plan is known');
   assert(!isKnownTool('hallucinated_tool'), 'hallucinated_tool is NOT known');
   assert(!isKnownTool(''), 'empty string is NOT known');
 }

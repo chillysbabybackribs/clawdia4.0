@@ -5,6 +5,7 @@
 import Store from 'electron-store';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import type { PerformanceStance } from '../shared/types';
 
 // Generate a machine-specific encryption key from hostname + username.
 // Not bulletproof security, but prevents trivial key extraction from source.
@@ -16,6 +17,8 @@ interface StoreSchema {
   selectedModel: string;
   hasCompletedSetup: boolean;
   unrestrictedMode: boolean;
+  selectedPolicyProfile: string;
+  selectedPerformanceStance: PerformanceStance;
 }
 
 export const store = new Store<StoreSchema>({
@@ -25,6 +28,8 @@ export const store = new Store<StoreSchema>({
     selectedModel: 'claude-sonnet-4-6',
     hasCompletedSetup: false,
     unrestrictedMode: false,
+    selectedPolicyProfile: 'standard',
+    selectedPerformanceStance: 'standard',
   },
   encryptionKey,
 });
@@ -52,4 +57,20 @@ export function getUnrestrictedMode(): boolean {
 
 export function setUnrestrictedMode(enabled: boolean): void {
   store.set('unrestrictedMode', enabled);
+}
+
+export function getSelectedPolicyProfile(): string {
+  return store.get('selectedPolicyProfile', 'standard');
+}
+
+export function setSelectedPolicyProfile(profileId: string): void {
+  store.set('selectedPolicyProfile', profileId || 'standard');
+}
+
+export function getSelectedPerformanceStance(): PerformanceStance {
+  return store.get('selectedPerformanceStance', 'standard');
+}
+
+export function setSelectedPerformanceStance(stance: PerformanceStance): void {
+  store.set('selectedPerformanceStance', stance || 'standard');
 }

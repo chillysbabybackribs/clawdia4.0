@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('clawdia', {
     forward: () => invoke('browser:forward'),
     refresh: () => invoke('browser:refresh'),
     setBounds: (bounds: any) => invoke('browser:set-bounds', bounds),
+    getExecutionMode: () => invoke('browser:get-execution-mode'),
     newTab: (url?: string) => invoke('browser:tab:new', url),
     listTabs: () => invoke('browser:tab:list'),
     switchTab: (id: string) => invoke('browser:tab:switch', id),
@@ -43,6 +44,7 @@ contextBridge.exposeInMainWorld('clawdia', {
     onTitleChanged: (cb: (title: string) => void) => on('browser:title-changed', cb),
     onLoading: (cb: (loading: boolean) => void) => on('browser:loading', cb),
     onTabsChanged: (cb: (tabs: any[]) => void) => on('browser:tabs-changed', cb),
+    onModeChanged: (cb: (payload: { mode: string; reason: string }) => void) => on('browser:mode-changed', cb),
   },
   settings: {
     get: (key: string) => invoke('settings:get', key),
@@ -53,6 +55,10 @@ contextBridge.exposeInMainWorld('clawdia', {
     setModel: (model: string) => invoke('model:set', model),
     getUnrestrictedMode: () => invoke('settings:get', 'unrestrictedMode'),
     setUnrestrictedMode: (enabled: boolean) => invoke('settings:set', 'unrestrictedMode', enabled),
+    getPolicyProfile: () => invoke('settings:get', 'policyProfile'),
+    setPolicyProfile: (profileId: string) => invoke('settings:set', 'policyProfile', profileId),
+    getPerformanceStance: () => invoke('settings:get', 'performanceStance'),
+    setPerformanceStance: (stance: string) => invoke('settings:set', 'performanceStance', stance),
   },
   process: {
     list: () => invoke('process:list'),
@@ -68,8 +74,13 @@ contextBridge.exposeInMainWorld('clawdia', {
     events: (runId: string) => invoke('run:events', runId),
     changes: (runId: string) => invoke('run:changes', runId),
     approvals: (runId: string) => invoke('run:approvals', runId),
+    humanInterventions: (runId: string) => invoke('run:human-interventions', runId),
     approve: (approvalId: number) => invoke('run:approve', approvalId),
     deny: (approvalId: number) => invoke('run:deny', approvalId),
+    resolveHumanIntervention: (interventionId: number) => invoke('run:human-intervention:resolve', interventionId),
+  },
+  policy: {
+    list: () => invoke('policy:list'),
   },
   window: {
     minimize: () => invoke('window:minimize'),

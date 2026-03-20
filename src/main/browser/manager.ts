@@ -9,13 +9,16 @@
  * on the ACTIVE tab. The agent doesn't need to know about tabs.
  */
 
-import { BrowserView, BrowserWindow } from 'electron';
+import { app, BrowserView, BrowserWindow, session } from 'electron';
 import { randomUUID } from 'crypto';
 import { IPC_EVENTS } from '../../shared/ipc-channels';
 import type { BrowserExecutionMode } from '../../shared/types';
 
 const MAX_TABS = 6;
 const MAX_HISTORY = 200;
+const BROWSER_PARTITION = 'persist:browser';
+const CHROME_FALLBACK_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36';
+const AUTH_POPUP_PATH_RE = /\/oauth|\/authorize|\/login|\/signin|\/sign-in|\/auth|\/sso|\/saml/i;
 
 interface Tab {
   id: string;
@@ -31,6 +34,7 @@ let tabs: Map<string, Tab> = new Map();
 let activeTabId: string | null = null;
 let currentBounds = { x: 0, y: 0, width: 0, height: 0 };
 let executionMode: BrowserExecutionMode = 'headed';
+let browserSessionInitialized = false;
 
 // URL history for autocomplete — stores visited URLs, most recent first
 let urlHistory: string[] = [];
@@ -69,9 +73,36 @@ export function matchUrlHistory(prefix: string): string {
 
 export function initBrowser(win: BrowserWindow): void {
   mainWindow = win;
+  initBrowserSession();
   createTab('https://www.google.com');
   emitModeChanged('init');
   console.log('[Browser] Initialized with tabs');
+}
+
+function getChromeLikeUserAgent(): string {
+  const base = (app.userAgentFallback || '').trim();
+  if (!base) return CHROME_FALLBACK_UA;
+
+  const withoutElectron = base
+    .replace(/\sElectron\/[^\s]+/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+  return /Chrome\/\d+/i.test(withoutElectron) ? withoutElectron : CHROME_FALLBACK_UA;
+}
+
+function initBrowserSession(): void {
+  if (browserSessionInitialized) return;
+  browserSessionInitialized = true;
+
+  const sess = session.fromPartition(BROWSER_PARTITION);
+  sess.webRequest.onBeforeSendHeaders((details, callback) => {
+    const requestHeaders = {
+      ...details.requestHeaders,
+      'Accept-Language': 'en-US,en;q=0.9',
+    };
+    callback({ requestHeaders });
+  });
 }
 
 function getActiveView(): BrowserView | null {
@@ -107,9 +138,10 @@ export function createTab(url?: string): string {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      partition: 'persist:browser',
+      partition: BROWSER_PARTITION,
     },
   });
+  view.webContents.setUserAgent(getChromeLikeUserAgent());
 
   mainWindow.addBrowserView(view);
   view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
@@ -174,21 +206,41 @@ export function closeTab(id: string): void {
   emitTabsChanged();
 }
 
-/**
- * Watch an auth/OAuth tab for completion. When the tab navigates to an
- * OAuth callback URL (contains code=, token=, access_token, or returns
- * to the opener's origin), close the auth tab and reload the opener tab
- * so it picks up the new authenticated session.
- */
 /** Known auth provider hostnames — navigations within these are part of the flow, not completion. */
 const AUTH_PROVIDER_HOSTS = new Set([
   'accounts.google.com', 'google.com',
   'login.microsoftonline.com', 'login.live.com', 'account.microsoft.com',
   'appleid.apple.com',
   'github.com',
+  'accounts.reddit.com',
   'auth0.com',
   'okta.com',
 ]);
+
+function isSameOriginUrl(currentUrl: string, targetUrl: string): boolean {
+  try {
+    return new URL(currentUrl).origin === new URL(targetUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
+function looksLikeAuthPopup(url: string, features?: string): boolean {
+  const popupFeatures = (features || '').toLowerCase();
+  return isAuthProviderHost(url) ||
+    AUTH_POPUP_PATH_RE.test(url) ||
+    /(?:^|,)(?:popup|width|height|left|top)=/i.test(popupFeatures);
+}
+
+function isDevToolsShortcut(input: Electron.Input): boolean {
+  return input.type === 'keyDown' &&
+    (input.key === 'F12' || ((input.control || input.meta) && input.shift && input.key.toUpperCase() === 'I'));
+}
+
+function toggleDevTools(wc: Electron.WebContents): void {
+  if (wc.isDevToolsOpened()) wc.closeDevTools();
+  else wc.openDevTools({ mode: 'detach' });
+}
 
 function isAuthProviderHost(url: string): boolean {
   try {
@@ -264,6 +316,12 @@ function watchAuthTab(authTabId: string, openerTabId: string): void {
 function wireTabEvents(tab: Tab): void {
   const wc = tab.view.webContents;
 
+  wc.on('before-input-event', (event, input) => {
+    if (!isDevToolsShortcut(input)) return;
+    event.preventDefault();
+    toggleDevTools(wc);
+  });
+
   wc.on('did-navigate', (_event, url) => {
     tab.url = url;
     tab.title = wc.getTitle();
@@ -317,26 +375,21 @@ function wireTabEvents(tab: Tab): void {
 
   wc.on('did-finish-load', scheduleStop);
   wc.on('did-stop-loading', scheduleStop);
-  wc.on('did-fail-load', (_event, errorCode, errorDescription, _url, isMainFrame) => {
+  wc.on('did-fail-load', (_event, errorCode, _errorDescription, _url, isMainFrame) => {
     if (isMainFrame) { console.warn(`[Browser] Tab ${tab.id} load failed: ${errorCode}`); scheduleStop(); }
   });
 
-  wc.setWindowOpenHandler(({ url }) => {
+  wc.setWindowOpenHandler(({ url, features }) => {
     try {
-      const currentHost = new URL(wc.getURL()).hostname;
-      const targetHost = new URL(url).hostname;
-      const isSameOrigin = currentHost === targetHost || targetHost.endsWith('.' + currentHost) || currentHost.endsWith('.' + targetHost);
+      const isSameOrigin = isSameOriginUrl(wc.getURL(), url);
+      const isAuthPopup = looksLikeAuthPopup(url, features);
 
-      if (isSameOrigin) {
-        // Same-site popup (e.g. Reddit login, in-app modal) — navigate the current tab.
+      if (isSameOrigin && !isAuthPopup) {
+        // Same-origin popup/in-app modal — navigate the current tab.
         // Opening a new tab breaks modal/overlay flows.
         wc.loadURL(url);
         return { action: 'deny' };
       }
-
-      // Cross-origin: check if it's a known auth provider popup
-      const isAuthPopup = isAuthProviderHost(url) ||
-        /\/oauth|\/authorize|\/sso|\/saml/i.test(url);
 
       if (isAuthPopup) {
         // Auth provider popup — open in controlled tab and watch for callback

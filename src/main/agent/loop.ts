@@ -13,18 +13,25 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import type { BrowserWindow } from 'electron';
 import { classify, type TaskProfile, type ToolGroup } from './classifier';
+import { applyAgentProfileOverride } from './agent-profile-override';
+import { isFilesystemQuoteLookupTask } from './filesystem-agent-routing';
 import { buildStaticPrompt, buildDynamicPrompt } from './prompt-builder';
 import { getToolsForGroup, filterTools } from './tool-builder';
 import { AnthropicClient, resolveModelId, type LLMResponse } from './client';
 import { seedRegistry, type ExecutionPlan } from '../db/app-registry';
-import { savePlaybook } from '../db/browser-playbooks';
+import { savePlaybook, validatePlaybookCandidate, writeBloodhoundExecutorArtifacts, executeSavedBloodhoundPlaybook } from '../db/browser-playbooks';
 import { type VerificationResult } from './verification';
 import { fireNestedCancel } from './loop-cancel';
 import { runPreLLMSetup } from './loop-setup';
 import { dispatchTools, type DispatchContext } from './loop-dispatch';
 import { verifyFileOutcomes, runRecoveryIteration, logVerificationSummary } from './loop-recovery';
 import { cancelPendingApprovals } from './approval-manager';
+import { cancelPendingHumanInterventions } from './human-intervention-manager';
 import { appendRunEvent } from '../db/run-events';
+import { getSelectedPerformanceStance, getUnrestrictedMode } from '../store';
+import type { AgentProfile, PerformanceStance } from '../../shared/types';
+import { setProcessAgentProfile } from './process-manager';
+import { getCurrentUrl } from '../browser/manager';
 
 const MAX_ITERATIONS = 50;
 const MAX_WALL_MS = 10 * 60 * 1000;
@@ -47,45 +54,84 @@ function ensureRegistry(): void {
 // Loop Control — Cancel, Pause, Add Context
 // ═══════════════════════════════════
 
-let activeAbortController: AbortController | null = null;
-let isPaused = false;
-let pauseResolve: (() => void) | null = null;
-let pendingContext: string | null = null;
+interface RunLoopControl {
+  abortController: AbortController;
+  isPaused: boolean;
+  pauseResolve: (() => void) | null;
+  pendingContext: string | null;
+  performanceStance: PerformanceStance;
+}
 
-export function cancelLoop(): void {
-  if (activeAbortController) {
-    activeAbortController.abort();
-    console.log('[Loop] Cancel requested');
-  }
-  cancelPendingApprovals();
+const runControls = new Map<string, RunLoopControl>();
+const DEFAULT_RUN_KEY = '__default__';
+
+export function cancelLoop(runId?: string): boolean {
+  const state = getRunControl(runId);
+  if (!state) return false;
+
+  state.abortController.abort();
+  console.log(`[Loop] Cancel requested${runId ? ` for ${runId}` : ''}`);
+  cancelPendingApprovals(getRunKey(runId));
+  cancelPendingHumanInterventions(getRunKey(runId));
   fireNestedCancel();   // abort harness generation if running
-  if (pauseResolve) { pauseResolve(); pauseResolve = null; }
-  isPaused = false;
+  if (state.pauseResolve) { state.pauseResolve(); state.pauseResolve = null; }
+  state.isPaused = false;
+  return true;
 }
 
-export function pauseLoop(): void {
-  isPaused = true;
-  console.log('[Loop] Pause requested — will hold after current iteration');
+export function pauseLoop(runId?: string): boolean {
+  const state = getRunControl(runId);
+  if (!state) return false;
+
+  state.isPaused = true;
+  console.log(`[Loop] Pause requested${runId ? ` for ${runId}` : ''} — will hold after current iteration`);
+  return true;
 }
 
-export function resumeLoop(): void {
-  isPaused = false;
-  if (pauseResolve) { pauseResolve(); pauseResolve = null; console.log('[Loop] Resumed'); }
+export function resumeLoop(runId?: string): boolean {
+  const state = getRunControl(runId);
+  if (!state) return false;
+
+  state.isPaused = false;
+  if (state.pauseResolve) {
+    state.pauseResolve();
+    state.pauseResolve = null;
+    console.log(`[Loop] Resumed${runId ? ` for ${runId}` : ''}`);
+  }
+  return true;
 }
 
-export function addContext(text: string): void {
-  pendingContext = text;
-  console.log(`[Loop] Context queued (${text.length} chars) — will inject on next iteration`);
-  if (isPaused) resumeLoop();
+export function addContext(runId: string | undefined, text: string): boolean {
+  const state = getRunControl(runId);
+  if (!state) return false;
+
+  state.pendingContext = text;
+  console.log(`[Loop] Context queued for ${getRunKey(runId)} (${text.length} chars) — will inject on next iteration`);
+  if (state.isPaused) resumeLoop(runId);
+  return true;
 }
 
-function waitIfPaused(): Promise<void> {
-  if (!isPaused) return Promise.resolve();
-  return new Promise<void>((resolve) => { pauseResolve = resolve; });
+function waitIfPaused(state: RunLoopControl): Promise<void> {
+  if (!state.isPaused) return Promise.resolve();
+  return new Promise<void>((resolve) => { state.pauseResolve = resolve; });
 }
 
-function isCancelled(): boolean {
-  return activeAbortController?.signal.aborted ?? false;
+function isCancelled(state: RunLoopControl): boolean {
+  return state.abortController.signal.aborted;
+}
+
+function detectPerformanceStanceDirective(text: string): PerformanceStance | null {
+  if (!text) return null;
+  if (/\b(be more aggressive|go hard|take a bigger swing|max(?:imize)? performance|be more autonomous|push harder|up my performance dramatically)\b/i.test(text)) {
+    return 'aggressive';
+  }
+  if (/\b(be conservative|be careful|slow down|be safer|smaller changes)\b/i.test(text)) {
+    return 'conservative';
+  }
+  if (/\b(back to normal|standard mode|balanced mode)\b/i.test(text)) {
+    return 'standard';
+  }
+  return null;
 }
 
 // ═══════════════════════════════════
@@ -94,6 +140,7 @@ function isCancelled(): boolean {
 
 export interface LoopOptions {
   runId?: string;
+  forcedAgentProfile?: AgentProfile;
   apiKey: string;
   model?: string;
   onStreamText?: (text: string) => void;
@@ -156,34 +203,46 @@ export async function runAgentLoop(
 ): Promise<{ response: string; toolCalls: { name: string; status: string; detail?: string }[] }> {
   const { apiKey, onStreamText, onThinking, onToolActivity, onToolStream, onStreamEnd, runId } = options;
 
-  activeAbortController = new AbortController();
-  isPaused = false;
-  pendingContext = null;
+  const runKey = getRunKey(runId);
+  const control = createRunControl(runKey);
   ensureRegistry();
 
   // ── Classify ──
-  const profile = classify(userMessage);
-  console.log(`[Agent] Classified: group=${profile.toolGroup} modules=[${[...profile.promptModules]}] model=${profile.model} greeting=${profile.isGreeting}`);
+  const profile = applyAgentProfileOverride(classify(userMessage), options.forcedAgentProfile);
+  console.log(`[Agent] Classified: profile=${profile.agentProfile} group=${profile.toolGroup} modules=[${[...profile.promptModules]}] model=${profile.model} greeting=${profile.isGreeting}`);
   if (runId) {
     appendRunEvent(runId, {
       kind: 'run_classified',
       phase: 'classification',
       payload: {
+        agentProfile: profile.agentProfile,
         toolGroup: profile.toolGroup,
         promptModules: [...profile.promptModules],
         modelTier: profile.model,
         isGreeting: profile.isGreeting,
       },
     });
+    setProcessAgentProfile(runId, profile.agentProfile);
   }
 
   const modelId = pickModel(profile.model, options.model, profile.isGreeting);
+  const defaultPerformanceStance = getSelectedPerformanceStance();
+  const initialPerformanceDirective = detectPerformanceStanceDirective(userMessage);
+  control.performanceStance = initialPerformanceDirective || defaultPerformanceStance;
   console.log(`[Agent] Using model: ${modelId}`);
   if (runId) {
     appendRunEvent(runId, {
       kind: 'model_selected',
       phase: 'classification',
       payload: { modelId },
+    });
+    appendRunEvent(runId, {
+      kind: 'performance_stance_selected',
+      phase: 'classification',
+      payload: {
+        performanceStance: control.performanceStance,
+        source: initialPerformanceDirective ? 'user_message' : 'settings_default',
+      },
     });
   }
 
@@ -205,8 +264,41 @@ export async function runAgentLoop(
     });
   }
 
+  if (profile.toolGroup === 'browser') {
+    const executorRun = await executeSavedBloodhoundPlaybook(userMessage, getCurrentUrl() || undefined);
+    if (executorRun?.ok) {
+      if (runId) {
+        appendRunEvent(runId, {
+          kind: 'bloodhound_executor_ran',
+          phase: 'setup',
+          payload: {
+            domain: executorRun.playbook.domain,
+            taskPattern: executorRun.playbook.taskPattern,
+            successRate: executorRun.playbook.successRate,
+            validationRuns: executorRun.playbook.validationRuns,
+          },
+        });
+      }
+      cleanupRunControl(runKey);
+      return { response: executorRun.response, toolCalls: [] };
+    }
+
+    if (executorRun && runId) {
+      appendRunEvent(runId, {
+        kind: 'bloodhound_executor_failed',
+        phase: 'setup',
+        payload: {
+          domain: executorRun.playbook.domain,
+          taskPattern: executorRun.playbook.taskPattern,
+          reason: executorRun.response,
+        },
+      });
+    }
+  }
+
   // ── Build dynamic prompt ──
   const dynamicPrompt = buildDynamicPrompt({
+    agentProfile: profile.agentProfile,
     model: modelId,
     toolGroup: profile.toolGroup,
     memoryContext: setup.memoryContext,
@@ -218,12 +310,17 @@ export async function runAgentLoop(
     shortcutContext: setup.shortcutContext,
     guiStateContext: setup.guiStateContext,
     isGreeting: profile.isGreeting,
+    performanceStance: control.performanceStance,
   });
 
   // ── Prepare tools ──
   let tools = getToolsForGroup(profile.toolGroup);
   if (executionPlan && executionPlan.disallowedTools.length > 0) {
     tools = filterTools(tools, executionPlan.disallowedTools);
+  }
+  const filesystemQuoteLookupMode = profile.agentProfile === 'filesystem' && isFilesystemQuoteLookupTask(userMessage);
+  if (filesystemQuoteLookupMode) {
+    tools = filterTools(tools, ['shell_exec']);
   }
 
   // ── Prepare message history ──
@@ -233,10 +330,12 @@ export async function runAgentLoop(
   // ── Dispatch context (mutable, shared with loop-dispatch) ──
   const dispatchCtx: DispatchContext = {
     runId,
-    signal: activeAbortController.signal,
+    signal: control.abortController.signal,
     tools,
     executionPlan,
     toolGroup: profile.toolGroup,
+    filesystemQuoteLookupMode,
+    strongFilesystemQuoteMatch: false,
     escalatedToFull: false,
     toolCallCount: 0,
     allToolCalls: [],
@@ -246,6 +345,16 @@ export async function runAgentLoop(
   };
 
   let guiBatchNudgeSent = false;
+  const guiBatchNudgeAt = control.performanceStance === 'aggressive'
+    ? 1
+    : control.performanceStance === 'conservative'
+      ? 3
+      : GUI_BATCH_NUDGE_AT;
+  const wrapUpThreshold = control.performanceStance === 'aggressive'
+    ? 35
+    : control.performanceStance === 'conservative'
+      ? 18
+      : WRAP_UP_THRESHOLD;
   const startTime = Date.now();
   let finalText = '';
 
@@ -260,7 +369,7 @@ export async function runAgentLoop(
     }
 
     // ── Loop control gate ──
-    if (isCancelled()) {
+    if (isCancelled(control)) {
       console.log(`[Agent] Cancelled at iteration ${iteration}`);
       if (runId) {
         appendRunEvent(runId, {
@@ -273,7 +382,7 @@ export async function runAgentLoop(
       break;
     }
 
-    if (isPaused) {
+    if (control.isPaused) {
       options.onPaused?.();
       onThinking?.('Paused — waiting to resume...');
       if (runId) {
@@ -283,8 +392,8 @@ export async function runAgentLoop(
           payload: { iteration },
         });
       }
-      await waitIfPaused();
-      if (isCancelled()) { finalText = '[Cancelled by user]'; break; }
+      await waitIfPaused(control);
+      if (isCancelled(control)) { finalText = '[Cancelled by user]'; break; }
       options.onResumed?.();
       if (runId) {
         appendRunEvent(runId, {
@@ -296,9 +405,33 @@ export async function runAgentLoop(
     }
 
     // Inject pending user context
-    if (pendingContext !== null) {
-      const ctx: string = pendingContext;
-      pendingContext = null;
+    if (control.pendingContext !== null) {
+      const ctx: string = control.pendingContext;
+      control.pendingContext = null;
+      const nextStance = detectPerformanceStanceDirective(ctx);
+      if (nextStance && nextStance !== control.performanceStance) {
+        control.performanceStance = nextStance;
+        messages.push({
+          role: 'user',
+          content: `[SYSTEM] PERFORMANCE STANCE changed to ${nextStance}. Adjust your behavior immediately. ${
+            nextStance === 'aggressive'
+              ? 'Widen search, take larger execution steps, and reduce hand-holding.'
+              : nextStance === 'conservative'
+                ? 'Take smaller steps, verify before larger changes, and prioritize safety.'
+                : 'Return to balanced execution.'
+          }`,
+        });
+        if (runId) {
+          appendRunEvent(runId, {
+            kind: 'performance_stance_changed',
+            phase: 'control',
+            payload: {
+              performanceStance: nextStance,
+              source: 'user_context',
+            },
+          });
+        }
+      }
       messages.push({ role: 'user', content: `[USER CONTEXT] ${ctx}` });
       console.log(`[Agent] Injected user context: ${ctx.slice(0, 80)}`);
       if (runId) {
@@ -322,7 +455,7 @@ export async function runAgentLoop(
     // ── Mid-loop injections ──
     if (!guiBatchNudgeSent && profile.promptModules.has('desktop_apps')
         && (!executionPlan || executionPlan.selectedSurface === 'gui')
-        && dispatchCtx.toolCallCount >= GUI_BATCH_NUDGE_AT) {
+        && dispatchCtx.toolCallCount >= guiBatchNudgeAt) {
       messages.push({
         role: 'user',
         content: '[SYSTEM] IMPORTANT: For remaining GUI steps, use gui_interact batch_actions. Do NOT make single-action gui_interact calls.',
@@ -330,7 +463,7 @@ export async function runAgentLoop(
       guiBatchNudgeSent = true;
     }
 
-    if (dispatchCtx.toolCallCount >= WRAP_UP_THRESHOLD && !profile.isGreeting) {
+    if (dispatchCtx.toolCallCount >= wrapUpThreshold && !profile.isGreeting) {
       messages.push({ role: 'user', content: `[SYSTEM] ${dispatchCtx.toolCallCount} tool calls used (limit: ${MAX_ITERATIONS}). Wrap up.` });
     }
 
@@ -342,9 +475,9 @@ export async function runAgentLoop(
       response = await client.chat(messages, profile.isGreeting ? [] : dispatchCtx.tools, staticPrompt, dynamicPrompt, (chunk) => {
         iterationText += chunk;
         onStreamText?.(chunk);
-      }, { signal: activeAbortController?.signal });
+      }, { signal: control.abortController.signal });
     } catch (err: any) {
-      if (err.name === 'AbortError' || isCancelled()) {
+      if (err.name === 'AbortError' || isCancelled(control)) {
         console.log('[Agent] LLM call aborted by user');
         finalText = finalText || iterationText || '[Cancelled by user]';
         break;
@@ -437,7 +570,7 @@ export async function runAgentLoop(
         tools: dispatchCtx.tools,
         staticPrompt,
         dynamicPrompt,
-        signal: activeAbortController?.signal,
+        signal: control.abortController.signal,
         onStreamText,
         onToolActivity,
         allToolCalls: dispatchCtx.allToolCalls,
@@ -468,14 +601,89 @@ export async function runAgentLoop(
   );
   if (browserToolCalls.length >= 2 && finalText && !finalText.startsWith('[Cancelled')) {
     try {
-      savePlaybook(
-        userMessage,
-        browserToolCalls.map(tc => ({
-          name: tc.name,
-          input: tc.input || {},
-          summary: tc.detail || tc.name,
-        })),
-      );
+      const browserRuntimeMs = browserToolCalls.reduce((sum, tc) => sum + (tc.durationMs || 0), 0);
+      const browserStepCount = browserToolCalls.length;
+      const serializableBrowserCalls = browserToolCalls.map(tc => ({
+        name: tc.name,
+        input: tc.input || {},
+        summary: tc.detail || tc.name,
+      }));
+      const currentBrowserUrl = getCurrentUrl();
+
+      if (profile.agentProfile === 'bloodhound' && !getUnrestrictedMode()) {
+        const validation = await validatePlaybookCandidate(userMessage, serializableBrowserCalls, {
+          expectedUrl: currentBrowserUrl,
+        });
+        if (validation.metThreshold) {
+          const saved = savePlaybook(
+            userMessage,
+            serializableBrowserCalls,
+            currentBrowserUrl,
+            {
+              agentProfile: profile.agentProfile,
+              validationRuns: validation.attemptedRuns,
+              successRate: validation.successRate,
+              runtimeMs: validation.avgRuntimeMs || browserRuntimeMs,
+              notes: [
+                `Observed ${browserStepCount} successful browser step(s) in ${Math.round(browserRuntimeMs / 1000)}s during design run.`,
+                ...validation.notes,
+              ],
+              stepsOverride: validation.selectedSteps,
+            },
+          );
+          let artifactNote = '';
+          if (saved) {
+            const artifacts = writeBloodhoundExecutorArtifacts(userMessage, saved, {
+              finalUrl: currentBrowserUrl,
+              successMessage: finalText,
+            });
+            artifactNote = `\nArtifacts:\n- ${artifacts.markdownPath}\n- ${artifacts.jsonPath}`;
+          }
+          finalText += `\n\n[Bloodhound] Executor validated at ${Math.round(validation.successRate * 100)}% over ${validation.attemptedRuns} run(s) and saved for reuse.`;
+          if (artifactNote) finalText += artifactNote;
+        } else {
+          finalText += `\n\n[Bloodhound] Executor replay validation reached ${Math.round(validation.successRate * 100)}% over ${validation.attemptedRuns} run(s), below threshold. It was not saved as validated memory.`;
+        }
+      } else if (profile.agentProfile === 'bloodhound') {
+        const saved = savePlaybook(
+          userMessage,
+          serializableBrowserCalls,
+          currentBrowserUrl,
+          {
+            agentProfile: profile.agentProfile,
+            validationRuns: 1,
+            successRate: 1,
+            runtimeMs: browserRuntimeMs,
+            notes: [
+              `Unrestricted mode was enabled; Bloodhound replay validation was skipped.`,
+              `Observed ${browserStepCount} successful browser step(s) in ${Math.round(browserRuntimeMs / 1000)}s during design run.`,
+            ],
+          },
+        );
+        let artifactNote = '';
+        if (saved) {
+          const artifacts = writeBloodhoundExecutorArtifacts(userMessage, saved, {
+            finalUrl: currentBrowserUrl,
+            successMessage: finalText,
+          });
+          artifactNote = `\nArtifacts:\n- ${artifacts.markdownPath}\n- ${artifacts.jsonPath}`;
+        }
+        finalText += `\n\n[Bloodhound] Unrestricted mode is enabled, so replay validation was skipped and the executor was saved directly.`;
+        if (artifactNote) finalText += artifactNote;
+      } else {
+        savePlaybook(
+          userMessage,
+          serializableBrowserCalls,
+          currentBrowserUrl,
+          {
+            agentProfile: profile.agentProfile,
+            validationRuns: 1,
+            successRate: 1,
+            runtimeMs: browserRuntimeMs,
+            notes: [],
+          },
+        );
+      }
     } catch { /* non-fatal */ }
   }
 
@@ -493,10 +701,37 @@ export async function runAgentLoop(
   }
 
   // Clean up
-  activeAbortController = null;
-  isPaused = false;
-  pendingContext = null;
-  pauseResolve = null;
+  cleanupRunControl(runKey);
 
   return { response: finalText, toolCalls: dispatchCtx.allToolCalls };
+}
+
+function getRunKey(runId?: string): string {
+  return runId || DEFAULT_RUN_KEY;
+}
+
+function createRunControl(runKey: string): RunLoopControl {
+  const state: RunLoopControl = {
+    abortController: new AbortController(),
+    isPaused: false,
+    pauseResolve: null,
+    pendingContext: null,
+    performanceStance: 'standard',
+  };
+  runControls.set(runKey, state);
+  return state;
+}
+
+function getRunControl(runId?: string): RunLoopControl | null {
+  return runControls.get(getRunKey(runId)) || null;
+}
+
+function cleanupRunControl(runKey: string): void {
+  const state = runControls.get(runKey);
+  if (!state) return;
+  if (state.pauseResolve) {
+    state.pauseResolve();
+    state.pauseResolve = null;
+  }
+  runControls.delete(runKey);
 }

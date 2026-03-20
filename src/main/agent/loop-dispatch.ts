@@ -16,7 +16,10 @@ import { appendRunEvent } from '../db/run-events';
 import { buildTextDiff, createRunChange } from '../db/run-changes';
 import { maybeRequireApproval, recordPolicyBlocked, requestApproval, waitForApproval } from './approval-manager';
 import { requestHumanIntervention, waitForHumanIntervention } from './human-intervention-manager';
+import { guardFileMutation, noteFileMutationSuccess, noteFileRead } from './file-lock-manager';
 import { SCREENSHOT_PREFIX } from './executors/browser-executors';
+import { noteProcessSpecializedTool } from './process-manager';
+import { getUnrestrictedMode } from '../store';
 import * as fs from 'fs';
 
 // ═══════════════════════════════════
@@ -65,7 +68,7 @@ export function partitionIntoBatches(
 
 const TOOL_RESULT_CAPS: Record<string, number> = {
   shell_exec: 10_000, file_read: 20_000, file_write: 500, file_edit: 500,
-  directory_tree: 5_000, browser_search: 5_000, browser_navigate: 10_000,
+  directory_tree: 5_000, fs_quote_lookup: 8_000, fs_folder_summary: 8_000, fs_reorg_plan: 12_000, fs_duplicate_scan: 12_000, fs_apply_plan: 12_000, browser_search: 5_000, browser_navigate: 10_000,
   browser_read_page: 10_000, browser_click: 5_000, browser_type: 500,
   browser_extract: 10_000, browser_screenshot: 1_000, browser_scroll: 10_000,
   create_document: 500,
@@ -84,9 +87,11 @@ export interface DispatchContext {
   tools: Anthropic.Tool[];
   executionPlan: ExecutionPlan | null;
   toolGroup: string;
+  filesystemQuoteLookupMode?: boolean;
+  strongFilesystemQuoteMatch?: boolean;
   escalatedToFull: boolean;
   toolCallCount: number;
-  allToolCalls: { name: string; status: string; detail?: string; input?: Record<string, any> }[];
+  allToolCalls: { name: string; status: string; detail?: string; input?: Record<string, any>; durationMs?: number }[];
   allVerifications: VerificationResult[];
   onToolActivity?: (activity: { name: string; status: string; detail?: string }) => void;
   onToolStream?: (payload: { toolId: string; toolName: string; chunk: string }) => void;
@@ -170,10 +175,10 @@ export async function dispatchTools(
           if (decision === 'denied') {
             result = `[Approval denied] ${approval.summary}`;
           } else {
-            result = await executeApprovedTool(toolUse, ctx, surface);
+            result = await executeGuardedTool(toolUse, ctx, surface);
           }
         } else {
-          result = await executeApprovedTool(toolUse, ctx, surface);
+          result = await executeGuardedTool(toolUse, ctx, surface);
         }
       } catch (err: any) {
         result = `[Error] ${err.message}`;
@@ -232,7 +237,7 @@ export async function dispatchTools(
           });
         }
         try {
-          result = await executeApprovedTool(toolUse, ctx, surface);
+          result = await executeGuardedTool(toolUse, ctx, surface);
         } catch (err: any) {
           result = `[Error] ${err.message}`;
         }
@@ -241,8 +246,12 @@ export async function dispatchTools(
       const durationMs = Date.now() - startMs;
       const status = result.startsWith('[Error') || result.startsWith('[Approval denied]') ? 'error' : 'success';
 
+      if (ctx.filesystemQuoteLookupMode && toolUse.name === 'fs_quote_lookup' && inferStrongFilesystemQuoteMatch(result)) {
+        ctx.strongFilesystemQuoteMatch = true;
+      }
+
       ctx.onToolActivity?.({ name: toolUse.name, status, detail });
-      ctx.allToolCalls.push({ name: toolUse.name, status, detail, input: toolUse.input as Record<string, any> });
+      ctx.allToolCalls.push({ name: toolUse.name, status, detail, input: toolUse.input as Record<string, any>, durationMs });
       let completionEventId: number | undefined;
       if (ctx.runId) {
         completionEventId = appendRunEvent(ctx.runId, {
@@ -263,10 +272,13 @@ export async function dispatchTools(
 
       if (ctx.runId && status === 'success') {
         persistStructuredChange(ctx.runId, completionEventId, toolUse.name, toolUse.input as Record<string, any>, fileBefore);
+        if (toolUse.name.startsWith('fs_')) {
+          noteProcessSpecializedTool(ctx.runId, toolUse.name);
+        }
       }
 
       // Post-action verification
-      if (status === 'success') {
+      if (status === 'success' && !getUnrestrictedMode()) {
         const vRule = resolveVerificationRule(toolUse.name, toolUse.input as Record<string, any>);
         if (vRule) {
           const vResult = verify(vRule, result);
@@ -345,6 +357,120 @@ async function executeApprovedTool(
     : undefined;
 
   return executeTool(toolUse.name, toolUse.input as any, chunkCb);
+}
+
+async function executeGuardedTool(
+  toolUse: Anthropic.ToolUseBlock,
+  ctx: DispatchContext,
+  surface: string,
+): Promise<string> {
+  const input = toolUse.input as Record<string, any>;
+  if (shouldBlockFilesystemQuoteFollowup(ctx, toolUse.name)) {
+    return `[Blocked] Strong filesystem quote match already found. Return the best match instead of running ${toolUse.name}.`;
+  }
+  const isFileRead = !!ctx.runId && toolUse.name === 'file_read' && typeof input.path === 'string';
+  const isFileMutation = !!ctx.runId && (toolUse.name === 'file_write' || toolUse.name === 'file_edit') && typeof input.path === 'string';
+
+  if (!isFileMutation) {
+    const result = await executeApprovedTool(toolUse, ctx, surface);
+    if (isFileRead && !result.startsWith('[Error')) {
+      noteFileRead(ctx.runId!, input.path);
+    }
+    return result;
+  }
+
+  let guard = guardFileMutation(ctx.runId!, input.path);
+  if (!guard.ok) {
+    appendRunEvent(ctx.runId!, {
+      kind: 'file_lock_conflict',
+      phase: 'dispatch',
+      surface,
+      toolName: toolUse.name,
+      payload: {
+        path: guard.path,
+        ownerRunId: guard.ownerRunId,
+        expectedRevision: guard.expectedRevision,
+        currentRevision: guard.currentRevision,
+        summary: guard.summary,
+      },
+    });
+
+    const intervention = requestHumanIntervention(ctx.runId!, {
+      interventionType: 'conflict_resolution',
+      target: guard.path,
+      summary: guard.summary,
+      instructions: guard.instructions,
+      request: {
+        toolName: toolUse.name,
+        toolUseId: toolUse.id,
+        path: guard.path,
+        ownerRunId: guard.ownerRunId,
+        expectedRevision: guard.expectedRevision,
+        currentRevision: guard.currentRevision,
+        reason: guard.kind,
+      },
+    });
+
+    ctx.onToolActivity?.({
+      name: toolUse.name,
+      status: 'needs_human',
+      detail: intervention.summary,
+    });
+
+    const decision = await waitForHumanIntervention(intervention.id);
+    if (decision !== 'resolved') {
+      return `[Human intervention dismissed] ${intervention.summary}`;
+    }
+
+    guard = guardFileMutation(ctx.runId!, input.path);
+    if (!guard.ok) {
+      return `[File conflict unresolved] ${guard.summary}`;
+    }
+  }
+
+  appendRunEvent(ctx.runId!, {
+    kind: 'file_lock_acquired',
+    phase: 'dispatch',
+    surface,
+    toolName: toolUse.name,
+    payload: {
+      path: guard.path,
+      sourceRevision: guard.sourceRevision,
+    },
+  });
+
+  try {
+    const result = await executeApprovedTool(toolUse, ctx, surface);
+    if (!result.startsWith('[Error')) {
+      noteFileMutationSuccess(ctx.runId!, input.path);
+    }
+    return result;
+  } finally {
+    guard.release();
+    appendRunEvent(ctx.runId!, {
+      kind: 'file_lock_released',
+      phase: 'dispatch',
+      surface,
+      toolName: toolUse.name,
+      payload: {
+        path: guard.path,
+      },
+    });
+  }
+}
+
+export function inferStrongFilesystemQuoteMatch(result: string): boolean {
+  const confidenceMatch = result.match(/BEST MATCH CONFIDENCE:\s*([0-9.]+)/i);
+  const confidence = confidenceMatch ? Number(confidenceMatch[1]) : 0;
+  return Number.isFinite(confidence) && confidence >= 0.8;
+}
+
+export function shouldBlockFilesystemQuoteFollowup(
+  ctx: Pick<DispatchContext, 'filesystemQuoteLookupMode' | 'strongFilesystemQuoteMatch'>,
+  toolName: string,
+): boolean {
+  if (!ctx.filesystemQuoteLookupMode || !ctx.strongFilesystemQuoteMatch) return false;
+  return toolName === 'fs_quote_lookup' || toolName === 'file_read';
 }
 
 interface HumanInterventionRequirement {
@@ -428,6 +554,11 @@ export function summarizeInput(toolName: string, input: Record<string, any>): st
     case 'file_write': return input.path || '';
     case 'file_edit': return input.path || '';
     case 'directory_tree': return input.path || '';
+    case 'fs_quote_lookup': return `${input.rootPath || input.path || ''} :: "${input.query?.slice(0, 50) || ''}"`;
+    case 'fs_folder_summary': return input.path || input.rootPath || '';
+    case 'fs_reorg_plan': return input.path || input.rootPath || '';
+    case 'fs_duplicate_scan': return input.path || input.rootPath || '';
+    case 'fs_apply_plan': return `${input.moves?.length || 0} move(s)`;
     case 'browser_search': return `"${input.query}"` || '';
     case 'browser_navigate': return input.url || '';
     case 'browser_click': return input.target || '';
@@ -451,7 +582,7 @@ function inferSurface(toolName: string): string {
   if (toolName.startsWith('browser_')) return 'browser';
   if (toolName === 'gui_interact' || toolName === 'app_control' || toolName === 'dbus_control') return 'desktop';
   if (toolName === 'shell_exec') return 'shell';
-  if (toolName.startsWith('file_') || toolName === 'directory_tree') return 'filesystem';
+  if (toolName.startsWith('file_') || toolName.startsWith('fs_') || toolName === 'directory_tree') return 'filesystem';
   if (toolName.startsWith('memory_') || toolName === 'recall_context') return 'memory';
   if (toolName === 'create_document') return 'document';
   return 'agent';

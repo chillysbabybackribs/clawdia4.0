@@ -3,6 +3,7 @@
  */
 
 import { getDb } from './database';
+import type { AgentProfile } from '../../shared/types';
 
 export interface RunEventRow {
   id: number;
@@ -82,6 +83,42 @@ export function getRunEventRecords(runId: string): RunEventRecord[] {
 
 export function deleteRunEvents(runId: string): void {
   getDb().prepare('DELETE FROM run_events WHERE run_id = ?').run(runId);
+}
+
+export function getRunAgentProfile(runId: string): AgentProfile | undefined {
+  const row = getDb()
+    .prepare(`
+      SELECT payload_json
+      FROM run_events
+      WHERE run_id = ? AND kind = 'run_classified'
+      ORDER BY seq DESC
+      LIMIT 1
+    `)
+    .get(runId) as { payload_json?: string } | undefined;
+
+  if (!row?.payload_json) return undefined;
+  const payload = safeParse(row.payload_json);
+  return payload.agentProfile === 'filesystem'
+    ? 'filesystem'
+    : payload.agentProfile === 'bloodhound'
+      ? 'bloodhound'
+      : payload.agentProfile === 'general'
+        ? 'general'
+        : undefined;
+}
+
+export function getLastSpecializedTool(runId: string): string | undefined {
+  const row = getDb()
+    .prepare(`
+      SELECT tool_name
+      FROM run_events
+      WHERE run_id = ? AND tool_name LIKE 'fs_%'
+      ORDER BY seq DESC
+      LIMIT 1
+    `)
+    .get(runId) as { tool_name?: string | null } | undefined;
+
+  return row?.tool_name || undefined;
 }
 
 function safeParse(json: string): Record<string, any> {

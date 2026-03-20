@@ -8,8 +8,9 @@
  *   4. Old loop completes in background → shows in process list
  *   5. User clicks process → loads conversation from DB
  *
- * Only ONE loop runs at a time (serial, not concurrent).
- * The process manager tracks state, routes events, and maintains history.
+ * Multiple loops may run concurrently.
+ * The process manager tracks which one is currently attached to the chat surface,
+ * routes live events for that run, and keeps background history for the rest.
  */
 
 import type { BrowserWindow } from 'electron';
@@ -27,13 +28,17 @@ import {
   setRunDetached,
 } from '../db/runs';
 import { reconcilePendingRunApprovals } from '../db/run-approvals';
-import { appendRunEvent } from '../db/run-events';
+import { reconcilePendingRunHumanInterventions } from '../db/run-human-interventions';
+import { appendRunEvent, getLastSpecializedTool, getRunAgentProfile } from '../db/run-events';
+import { clearRunFileState, initFileLockManager } from './file-lock-manager';
+import { setBrowserExecutionMode } from '../browser/manager';
+import type { AgentProfile } from '../../shared/types';
 
 // ═══════════════════════════════════
 // Types
 // ═══════════════════════════════════
 
-export type ProcessStatus = 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled';
+export type ProcessStatus = 'running' | 'awaiting_approval' | 'needs_human' | 'completed' | 'failed' | 'cancelled';
 
 export interface ProcessInfo {
   id: string;
@@ -46,6 +51,8 @@ export interface ProcessInfo {
   error?: string;
   isAttached: boolean;
   wasDetached: boolean;
+  agentProfile?: AgentProfile;
+  lastSpecializedTool?: string;
 }
 
 interface InternalProcess extends ProcessInfo {
@@ -70,6 +77,8 @@ export function initProcessManager(mainWindow: BrowserWindow): void {
   win = mainWindow;
   reconcileInterruptedRuns();
   reconcilePendingRunApprovals();
+  reconcilePendingRunHumanInterventions();
+  initFileLockManager();
   hydratePersistedRuns();
   broadcast();
 }
@@ -85,6 +94,26 @@ export function initProcessManager(mainWindow: BrowserWindow): void {
 export function registerProcess(conversationId: string, message: string): string {
   const id = `proc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
+  if (attachedId) {
+    const previous = processes.get(attachedId);
+    if (previous && (previous.status === 'running' || previous.status === 'awaiting_approval' || previous.status === 'needs_human')) {
+      previous.isAttached = false;
+      previous.wasDetached = true;
+      setRunDetached(previous.id, true);
+      setBrowserExecutionMode('headless', 'run_detached');
+      appendRunEvent(previous.id, {
+        kind: 'run_detached',
+        phase: 'lifecycle',
+        payload: { reason: 'Switched to a new active chat' },
+      });
+      appendRunEvent(previous.id, {
+        kind: 'browser_mode_changed',
+        phase: 'browser',
+        payload: { mode: 'headless', reason: 'run_detached' },
+      });
+    }
+  }
+
   const proc: InternalProcess = {
     id,
     conversationId,
@@ -94,15 +123,23 @@ export function registerProcess(conversationId: string, message: string): string
     toolCallCount: 0,
     isAttached: true,
     wasDetached: false,
+    agentProfile: undefined,
+    lastSpecializedTool: undefined,
     outputBuffer: [],
   };
 
   processes.set(id, proc);
   createRun(id, conversationId, message);
+  setBrowserExecutionMode('headed', 'run_attached');
   appendRunEvent(id, {
     kind: 'run_started',
     phase: 'lifecycle',
     payload: { conversationId, goal: message },
+  });
+  appendRunEvent(id, {
+    kind: 'browser_mode_changed',
+    phase: 'browser',
+    payload: { mode: 'headed', reason: 'run_attached' },
   });
   attachedId = id;
   broadcast();
@@ -124,6 +161,7 @@ export function completeProcess(processId: string, status: 'completed' | 'failed
   proc.completedAt = Date.now();
   if (error) proc.error = error;
   completeRun(processId, status, error);
+  clearRunFileState(processId);
   appendRunEvent(processId, {
     kind: status === 'completed' ? 'run_completed' : status === 'cancelled' ? 'run_cancelled' : 'run_failed',
     phase: 'lifecycle',
@@ -152,9 +190,26 @@ export function recordToolCall(processId: string): void {
   incrementRunToolCount(processId);
 }
 
+export function setProcessAgentProfile(processId: string, agentProfile: AgentProfile): boolean {
+  const proc = processes.get(processId);
+  if (!proc) return false;
+  if (proc.agentProfile === agentProfile) return true;
+  proc.agentProfile = agentProfile;
+  broadcast();
+  return true;
+}
+
+export function noteProcessSpecializedTool(processId: string, toolName: string): boolean {
+  const proc = processes.get(processId);
+  if (!proc || !toolName.startsWith('fs_')) return false;
+  proc.lastSpecializedTool = toolName;
+  broadcast();
+  return true;
+}
+
 export function setProcessStatus(
   processId: string,
-  status: Extract<ProcessStatus, 'running' | 'awaiting_approval'>,
+  status: Extract<ProcessStatus, 'running' | 'awaiting_approval' | 'needs_human'>,
   error?: string,
 ): boolean {
   const proc = processes.get(processId);
@@ -166,6 +221,14 @@ export function setProcessStatus(
   proc.status = status;
   if (error) proc.error = error;
   setRunStatus(processId, status, error);
+  if (proc.id === attachedId && status === 'needs_human') {
+    setBrowserExecutionMode('persistent_session', 'needs_human');
+    appendRunEvent(processId, {
+      kind: 'browser_mode_changed',
+      phase: 'browser',
+      payload: { mode: 'persistent_session', reason: 'needs_human' },
+    });
+  }
   broadcast();
   return true;
 }
@@ -186,10 +249,16 @@ export function detachCurrent(): string | null {
     setRunDetached(id, true);
   }
   attachedId = null;
+  setBrowserExecutionMode('headless', 'run_detached');
   appendRunEvent(id, {
     kind: 'run_detached',
     phase: 'lifecycle',
     payload: {},
+  });
+  appendRunEvent(id, {
+    kind: 'browser_mode_changed',
+    phase: 'browser',
+    payload: { mode: 'headless', reason: 'run_detached' },
   });
 
   broadcast();
@@ -213,11 +282,18 @@ export function attachTo(processId: string): { process: ProcessInfo; buffer: Arr
 
   attachedId = processId;
   proc.isAttached = true;
+  const mode = proc.status === 'needs_human' ? 'persistent_session' : 'headed';
+  setBrowserExecutionMode(mode, 'run_attached');
   broadcast();
   appendRunEvent(processId, {
     kind: 'run_attached',
     phase: 'lifecycle',
     payload: { bufferedEventCount: proc.outputBuffer.length },
+  });
+  appendRunEvent(processId, {
+    kind: 'browser_mode_changed',
+    phase: 'browser',
+    payload: { mode, reason: 'run_attached' },
   });
 
   console.log(`[Process] Attached to ${processId} (${proc.outputBuffer.length} buffered events)`);
@@ -277,8 +353,10 @@ export function dismissProcess(processId: string): boolean {
     (!proc && !persisted) ||
     proc?.status === 'running' ||
     proc?.status === 'awaiting_approval' ||
+    proc?.status === 'needs_human' ||
     persisted?.status === 'running' ||
-    persisted?.status === 'awaiting_approval'
+    persisted?.status === 'awaiting_approval' ||
+    persisted?.status === 'needs_human'
   ) return false;
   processes.delete(processId);
   deleteRun(processId);
@@ -293,7 +371,7 @@ export function dismissProcess(processId: string): boolean {
  */
 export function cancelProcess(processId: string): boolean {
   const proc = processes.get(processId);
-  if (!proc || proc.status !== 'running') return false;
+  if (!proc || (proc.status !== 'running' && proc.status !== 'awaiting_approval' && proc.status !== 'needs_human')) return false;
 
   completeProcess(processId, 'cancelled');
   return true;
@@ -303,7 +381,7 @@ export function cancelProcess(processId: string): boolean {
  * Check if any process is currently running.
  */
 export function hasRunningProcess(): boolean {
-  return [...processes.values()].some(p => p.status === 'running' || p.status === 'awaiting_approval');
+  return [...processes.values()].some(p => p.status === 'running' || p.status === 'awaiting_approval' || p.status === 'needs_human');
 }
 
 // ═══════════════════════════════════
@@ -322,6 +400,8 @@ function serialize(proc: InternalProcess): ProcessInfo {
     error: proc.error,
     isAttached: proc.id === attachedId,
     wasDetached: proc.wasDetached,
+    agentProfile: proc.agentProfile,
+    lastSpecializedTool: proc.lastSpecializedTool,
   };
 }
 
@@ -331,7 +411,7 @@ function broadcast(): void {
 
 function evictOld(): void {
   const done = [...processes.values()]
-    .filter(p => p.status !== 'running' && p.status !== 'awaiting_approval')
+    .filter(p => p.status !== 'running' && p.status !== 'awaiting_approval' && p.status !== 'needs_human')
     .sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
   while (done.length > MAX_HISTORY) {
     const oldest = done.pop()!;
@@ -356,6 +436,8 @@ function hydratePersistedRuns(): void {
       error: row.error || undefined,
       isAttached: false,
       wasDetached: !!row.was_detached,
+      agentProfile: getRunAgentProfile(row.id),
+      lastSpecializedTool: getLastSpecializedTool(row.id),
       outputBuffer: [],
     });
   }

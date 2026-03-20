@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import type { BrowserExecutionMode } from '../../shared/types';
 
 interface TabInfo {
   id: string;
@@ -19,6 +20,7 @@ export default function BrowserPanel() {
   const [ghostText, setGhostText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
+  const [executionMode, setExecutionMode] = useState<BrowserExecutionMode>('headed');
   const viewportRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const matchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -44,6 +46,9 @@ export default function BrowserPanel() {
     const api = (window as any).clawdia?.browser;
     if (!api) return;
     api.listTabs().then((list: TabInfo[]) => { if (list?.length) setTabs(list); });
+    api.getExecutionMode?.().then((mode: BrowserExecutionMode) => {
+      if (mode) setExecutionMode(mode);
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -62,6 +67,11 @@ export default function BrowserPanel() {
         setIsLoading(active.isLoading);
       }
     }));
+    if (api.onModeChanged) {
+      cleanups.push(api.onModeChanged((payload: { mode: BrowserExecutionMode }) => {
+        setExecutionMode(payload.mode);
+      }));
+    }
     return () => cleanups.forEach(fn => fn());
   }, [isFocused]);
 
@@ -146,6 +156,11 @@ export default function BrowserPanel() {
   const ghostSuffix = ghostText && isFocused && ghostText.toLowerCase().startsWith(urlInput.toLowerCase())
     ? ghostText.slice(urlInput.length)
     : '';
+  const modeLabel = executionMode === 'headless'
+    ? 'Headless'
+    : executionMode === 'persistent_session'
+      ? 'Session-bound'
+      : 'Visible';
 
   return (
     <div className="flex flex-col h-full bg-surface-0">
@@ -232,9 +247,24 @@ export default function BrowserPanel() {
             <kbd className="text-[9px] text-text-muted/50 bg-white/[0.05] px-1.5 py-0.5 rounded border border-white/[0.08] font-mono">Tab</kbd>
           </div>
         )}
+
+        <div className="flex-shrink-0 pr-1">
+          <span className="inline-flex items-center h-[22px] px-2 rounded-md border border-white/[0.08] bg-white/[0.04] text-[10px] uppercase tracking-[0.12em] text-text-secondary/80">
+            {modeLabel}
+          </span>
+        </div>
       </div>
 
-      <div ref={viewportRef} className="flex-1 bg-surface-0" />
+      <div ref={viewportRef} className="relative flex-1 bg-surface-0">
+        {executionMode === 'headless' && (
+          <div className="absolute inset-0 flex items-center justify-center bg-surface-0 text-text-secondary/70 pointer-events-none">
+            <div className="flex flex-col items-center gap-2">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-text-secondary/50">Headless Browser</div>
+              <div className="text-[13px] text-text-secondary">This run detached and the browser is now running in the background.</div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

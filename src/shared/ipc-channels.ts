@@ -14,6 +14,7 @@ export const IPC = {
   BROWSER_FORWARD: 'browser:forward',
   BROWSER_REFRESH: 'browser:refresh',
   BROWSER_SET_BOUNDS: 'browser:set-bounds',
+  BROWSER_GET_EXECUTION_MODE: 'browser:get-execution-mode',
   BROWSER_TAB_NEW: 'browser:tab:new',
   BROWSER_TAB_LIST: 'browser:tab:list',
   BROWSER_TAB_SWITCH: 'browser:tab:switch',
@@ -41,6 +42,9 @@ export const IPC = {
   RUN_APPROVALS: 'run:approvals',
   RUN_APPROVE: 'run:approve',
   RUN_DENY: 'run:deny',
+  RUN_HUMAN_INTERVENTIONS: 'run:human-interventions',
+  RUN_RESOLVE_HUMAN_INTERVENTION: 'run:human-intervention:resolve',
+  POLICY_LIST: 'policy:list',
 } as const;
 
 export const IPC_EVENTS = {
@@ -53,6 +57,7 @@ export const IPC_EVENTS = {
   BROWSER_TITLE_CHANGED: 'browser:title-changed',
   BROWSER_LOADING: 'browser:loading',
   BROWSER_TABS_CHANGED: 'browser:tabs-changed',
+  BROWSER_MODE_CHANGED: 'browser:mode-changed',
   // Process events (pushed from main to renderer)
   PROCESS_LIST_CHANGED: 'process:list',
 } as const;

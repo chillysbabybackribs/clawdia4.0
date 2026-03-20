@@ -8,7 +8,7 @@
 
 import type Anthropic from '@anthropic-ai/sdk';
 import type { ToolGroup } from './classifier';
-import { executeShellExec, executeFileRead, executeFileWrite, executeFileEdit, executeDirectoryTree } from './executors/core-executors';
+import { executeShellExec, executeFileRead, executeFileWrite, executeFileEdit, executeDirectoryTree, executeFsQuoteLookup, executeFsFolderSummary, executeFsReorgPlan, executeFsDuplicateScan, executeFsApplyPlan } from './executors/core-executors';
 import { executeBrowserSearch, executeBrowserNavigate, executeBrowserReadPage, executeBrowserClick, executeBrowserType, executeBrowserExtract, executeBrowserScreenshot, executeBrowserScroll } from './executors/browser-executors';
 import { executeCreateDocument, executeMemorySearch, executeMemoryStore, executeRecallContext } from './executors/extra-executors';
 import { executeAppControl, executeGuiInteract, executeDbusControl } from './executors/desktop-executors';
@@ -74,6 +74,85 @@ const CORE_TOOLS: Anthropic.Tool[] = [
         depth: { type: 'number', description: 'Max depth (default 3, max 10)' },
       },
       required: ['path'],
+    },
+  },
+  {
+    name: 'fs_quote_lookup',
+    description: 'Search local text-like files and PDFs under a root directory for a sentence, quote, or phrase. Returns ranked file matches with snippets and confidence. Use when you need to find which file contains a given sentence or fragment.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: 'Sentence, quote fragment, or phrase to find' },
+        rootPath: { type: 'string', description: 'Absolute directory path to search under' },
+        maxResults: { type: 'number', description: 'Maximum ranked results to return (default 5, max 10)' },
+        maxFiles: { type: 'number', description: 'Maximum candidate files to scan (default 300, max 1500)' },
+      },
+      required: ['query', 'rootPath'],
+    },
+  },
+  {
+    name: 'fs_folder_summary',
+    description: 'Summarize a local folder quickly: file counts, dominant file types, largest files, busiest subdirectories, and recent activity. Use before planning reorganizations or when the user wants to understand a directory without dumping a raw tree.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        path: { type: 'string', description: 'Absolute directory path to summarize' },
+        depth: { type: 'number', description: 'Maximum traversal depth (default 2, max 6)' },
+        maxEntries: { type: 'number', description: 'Maximum entries to inspect before capping traversal (default 500, max 5000)' },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'fs_reorg_plan',
+    description: 'Create a planning-only folder reorganization proposal. Returns proposed category folders and explicit source-to-destination moves without changing any files. Use when the user wants to clean up, sort, or reorganize a directory safely before applying changes.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        path: { type: 'string', description: 'Absolute directory path to analyze and plan' },
+        depth: { type: 'number', description: 'Maximum traversal depth (default 3, max 6)' },
+        maxEntries: { type: 'number', description: 'Maximum entries to inspect before capping traversal (default 1000, max 10000)' },
+        maxMoves: { type: 'number', description: 'Maximum proposed moves to return (default 40, max 200)' },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'fs_duplicate_scan',
+    description: 'Scan a local folder for exact duplicate files using size and content hashes. Returns duplicate groups, keep candidates, and reclaimable bytes without deleting anything. Use before cleanup or archive decisions.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        path: { type: 'string', description: 'Absolute directory path to scan' },
+        depth: { type: 'number', description: 'Maximum traversal depth (default 4, max 8)' },
+        maxEntries: { type: 'number', description: 'Maximum entries to inspect before capping traversal (default 2000, max 20000)' },
+        maxGroups: { type: 'number', description: 'Maximum duplicate groups to return (default 20, max 100)' },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'fs_apply_plan',
+    description: 'Apply a reviewed filesystem move plan. Moves files from explicit source paths to explicit destination paths with overwrite protection by default. Use only after the user has reviewed and approved a concrete plan.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        moves: {
+          type: 'array',
+          description: 'Explicit move operations to apply',
+          items: {
+            type: 'object',
+            properties: {
+              source: { type: 'string', description: 'Absolute source file path' },
+              destination: { type: 'string', description: 'Absolute destination file path' },
+            },
+            required: ['source', 'destination'],
+          },
+        },
+        overwrite: { type: 'boolean', description: 'Whether to replace destination files if they already exist (default false)' },
+        createDirectories: { type: 'boolean', description: 'Whether to create destination directories automatically (default true)' },
+      },
+      required: ['moves'],
     },
   },
 ];
@@ -215,6 +294,11 @@ const DISPATCH: Record<string, ToolExecutor> = {
   file_write: executeFileWrite,
   file_edit: executeFileEdit,
   directory_tree: executeDirectoryTree,
+  fs_quote_lookup: executeFsQuoteLookup,
+  fs_folder_summary: executeFsFolderSummary,
+  fs_reorg_plan: executeFsReorgPlan,
+  fs_duplicate_scan: executeFsDuplicateScan,
+  fs_apply_plan: executeFsApplyPlan,
   browser_search: executeBrowserSearch,
   browser_navigate: executeBrowserNavigate,
   browser_read_page: executeBrowserReadPage,

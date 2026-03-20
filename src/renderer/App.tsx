@@ -9,12 +9,15 @@ import ProcessesPanel from './components/ProcessesPanel';
 
 export type View = 'chat' | 'conversations' | 'settings' | 'processes';
 
+type ReplayBufferItem = { type: string; data: any };
+
 export default function App() {
   const [activeView, setActiveView] = useState<View>('chat');
   const [browserVisible, setBrowserVisible] = useState(true);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [chatKey, setChatKey] = useState(0);
   const [loadConversationId, setLoadConversationId] = useState<string | null>(null);
+  const [replayBuffer, setReplayBuffer] = useState<ReplayBufferItem[] | null>(null);
   const [selectedProcessId, setSelectedProcessId] = useState<string | null>(null);
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null); // null = loading
 
@@ -37,12 +40,14 @@ export default function App() {
     const api = (window as any).clawdia;
     if (api) await api.chat.new();
     setLoadConversationId(null);
+    setReplayBuffer(null);
     setChatKey(k => k + 1);
     setActiveView('chat');
   }, []);
 
-  const handleLoadConversation = useCallback(async (id: string) => {
+  const handleLoadConversation = useCallback(async (id: string, buffer?: ReplayBufferItem[] | null) => {
     setLoadConversationId(id);
+    setReplayBuffer(buffer || null);
     setSelectedProcessId(null);
     setChatKey(k => k + 1);
     setActiveView('chat');
@@ -114,6 +119,7 @@ export default function App() {
             onOpenSettings={() => setActiveView('settings')}
             onOpenPendingApproval={handleOpenProcess}
             loadConversationId={loadConversationId}
+            replayBuffer={replayBuffer}
           />
         )}
         {activeView === 'conversations' && (
@@ -126,8 +132,8 @@ export default function App() {
           <ProcessesPanel
             onBack={() => setActiveView('chat')}
             initialRunId={selectedProcessId}
-            onAttach={(conversationId) => {
-              handleLoadConversation(conversationId);
+            onAttach={(conversationId, buffer) => {
+              handleLoadConversation(conversationId, buffer);
             }}
           />
         )}

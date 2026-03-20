@@ -85,6 +85,23 @@ section('Filesystem/code tasks → core group + coding module');
   }
 }
 
+section('Filesystem agent tasks → core group + filesystem module');
+{
+  for (const msg of [
+    'organize my Downloads folder',
+    'find all PDFs in Documents from last month',
+    'rename these files consistently',
+    'clean up my desktop screenshots',
+    'audit this directory structure',
+    'find this line in the exact file and show me the file',
+  ]) {
+    const p = classify(msg);
+    assertEq(p.agentProfile, 'filesystem', `"${msg.slice(0, 40)}..." → filesystem profile`);
+    assertEq(p.toolGroup, 'core', `"${msg.slice(0, 40)}..." → core`);
+    assert(p.promptModules.has('filesystem'), `"${msg.slice(0, 40)}..." → filesystem module`);
+  }
+}
+
 // ════════════════════════════════════════════════════════
 // DESKTOP APP TASKS
 // ════════════════════════════════════════════════════════
@@ -162,6 +179,9 @@ section('Multi-domain → full group');
   // Desktop + self
   const p3 = classify('open gimp and tell me about clawdia settings');
   assertEq(p3.toolGroup, 'full', 'desktop + self → full');
+
+  const p4 = classify('search for recent contracts and organize them in Documents');
+  assertEq(p4.toolGroup, 'full', 'browser + filesystem agent → full');
 }
 
 // ════════════════════════════════════════════════════════

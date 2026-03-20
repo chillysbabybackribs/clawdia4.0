@@ -6,12 +6,15 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
 import { IPC, IPC_EVENTS } from '../shared/ipc-channels';
 import { runAgentLoop, cancelLoop, pauseLoop, resumeLoop, addContext } from './agent/loop';
+import { parseManualAgentProfileOverride } from './agent/agent-profile-override';
 import {
   initProcessManager, registerProcess, completeProcess, routeEvent,
   detachCurrent, attachTo, cancelProcess as cancelProc, dismissProcess,
   listProcesses, getAttachedId, recordToolCall,
 } from './agent/process-manager';
 import { approveRunApproval, denyRunApproval, listApprovalsForRun } from './agent/approval-manager';
+import { listHumanInterventionsForRun, resolveHumanIntervention } from './agent/human-intervention-manager';
+import { listPolicyProfiles, seedPolicyProfiles } from './db/policies';
 import { resetGuiStateForNewConversation } from './agent/executors/desktop-executors';
 import { destroyShell } from './agent/executors/core-executors';
 import { extractMemoryInBackground } from './agent/memory-extractor';
@@ -20,6 +23,10 @@ import {
   setApiKey,
   getSelectedModel,
   setSelectedModel,
+  getSelectedPerformanceStance,
+  getSelectedPolicyProfile,
+  setSelectedPolicyProfile,
+  setSelectedPerformanceStance,
   getUnrestrictedMode,
   setUnrestrictedMode,
 } from './store';
@@ -34,7 +41,7 @@ import { getRunEventRecords } from './db/run-events';
 import { listRunChanges } from './db/run-changes';
 import {
   initBrowser, navigate, goBack, goForward, reload,
-  setBounds, closeBrowser,
+  setBounds, closeBrowser, getBrowserExecutionMode,
   createTab, switchTab, closeTab, getTabList,
   matchUrlHistory,
 } from './browser/manager';
@@ -45,6 +52,11 @@ if (!gotLock) app.quit();
 let mainWindow: BrowserWindow | null = null;
 const isDev = process.env.NODE_ENV === 'development';
 let activeConversationId: string | null = null;
+
+function isDevToolsShortcut(input: Electron.Input): boolean {
+  return input.type === 'keyDown' &&
+    (input.key === 'F12' || ((input.control || input.meta) && input.shift && input.key.toUpperCase() === 'I'));
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -64,6 +76,13 @@ function createWindow(): void {
     show: false,
   });
 
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (!isDevToolsShortcut(input)) return;
+    event.preventDefault();
+    if (mainWindow?.webContents.isDevToolsOpened()) mainWindow.webContents.closeDevTools();
+    else mainWindow?.webContents.openDevTools({ mode: 'detach' });
+  });
+
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
     if (mainWindow) {
@@ -79,6 +98,7 @@ function createWindow(): void {
   }
 
   getDb();
+  seedPolicyProfiles();
   setupIpcHandlers();
 }
 
@@ -90,6 +110,8 @@ app.on('second-instance', () => {
 });
 
 function setupIpcHandlers(): void {
+  const getAttachedRunId = (): string | null => getAttachedId();
+
   ipcMain.handle(IPC.WINDOW_MINIMIZE, () => mainWindow?.minimize());
   ipcMain.handle(IPC.WINDOW_MAXIMIZE, () => {
     if (mainWindow?.isMaximized()) mainWindow.unmaximize();
@@ -101,24 +123,31 @@ function setupIpcHandlers(): void {
     const apiKey = getApiKey();
     if (!apiKey) return { error: 'No API key set. Go to Settings to add your Anthropic API key.' };
 
+    const { cleanedMessage, forcedAgentProfile } = parseManualAgentProfileOverride(message);
+    if (!cleanedMessage.trim()) {
+      return { error: 'Agent override commands require a prompt, for example: /filesystem-agent find the exact file containing "..." or /bloodhound learn the fastest route to GitHub notifications' };
+    }
+
     if (!activeConversationId) {
       const conv = createConversation();
       activeConversationId = conv.id;
     }
+    const conversationId = activeConversationId;
 
     // Process registration — only creates trackable processes when
     // detach/background is wired. For now, still register so the
     // infrastructure works, but mark as attached (won't show in sidebar
     // as "completed" since it's the foreground task).
-    const processId = registerProcess(activeConversationId, message);
+    const processId = registerProcess(conversationId, cleanedMessage);
 
-    addMessage(activeConversationId, 'user', message);
-    const history = getAnthropicHistory(activeConversationId);
+    addMessage(conversationId, 'user', cleanedMessage);
+    const history = getAnthropicHistory(conversationId);
     history.pop();
 
     try {
-      const result = await runAgentLoop(message, history, {
+      const result = await runAgentLoop(cleanedMessage, history, {
         runId: processId,
+        forcedAgentProfile,
         apiKey,
         model: getSelectedModel(),
         onStreamText: (chunk) => routeEvent(processId, IPC_EVENTS.CHAT_STREAM_TEXT, chunk),
@@ -132,12 +161,11 @@ function setupIpcHandlers(): void {
         onStreamEnd: () => routeEvent(processId, IPC_EVENTS.CHAT_STREAM_END, {}),
       });
 
-      // Complete silently — attached foreground processes don't
-      // show in "Recently Completed" (only detached ones will)
-      completeProcess(processId, 'completed');
+      const finalStatus = result.response?.startsWith('[Cancelled by user]') ? 'cancelled' : 'completed';
+      completeProcess(processId, finalStatus);
 
       if (result.response) {
-        addMessage(activeConversationId!, 'assistant', result.response, result.toolCalls);
+        addMessage(conversationId, 'assistant', result.response, result.toolCalls);
         extractMemoryInBackground(apiKey, message, result.response);
       }
 
@@ -146,7 +174,7 @@ function setupIpcHandlers(): void {
         runId: processId,
         response: result.response,
         toolCalls: result.toolCalls,
-        conversationId: activeConversationId,
+        conversationId,
       };
     } catch (err: any) {
       completeProcess(processId, 'failed', err.message);
@@ -156,22 +184,23 @@ function setupIpcHandlers(): void {
   });
 
   ipcMain.handle(IPC.CHAT_STOP, async () => {
-    cancelLoop();
-    return { ok: true };
+    const runId = getAttachedRunId();
+    return { ok: runId ? cancelLoop(runId) : false };
   });
   ipcMain.handle(IPC.CHAT_PAUSE, async () => {
-    pauseLoop();
-    return { ok: true };
+    const runId = getAttachedRunId();
+    return { ok: runId ? pauseLoop(runId) : false };
   });
   ipcMain.handle(IPC.CHAT_RESUME, async () => {
-    resumeLoop();
-    return { ok: true };
+    const runId = getAttachedRunId();
+    return { ok: runId ? resumeLoop(runId) : false };
   });
   ipcMain.handle(IPC.CHAT_ADD_CONTEXT, async (_e, text: string) => {
-    addContext(text);
-    return { ok: true };
+    const runId = getAttachedRunId();
+    return { ok: runId ? addContext(runId, text) : false };
   });
   ipcMain.handle(IPC.CHAT_NEW, async () => {
+    if (getAttachedRunId()) detachCurrent();
     const conv = createConversation();
     activeConversationId = conv.id;
     resetGuiStateForNewConversation();
@@ -183,6 +212,7 @@ function setupIpcHandlers(): void {
     }));
   });
   ipcMain.handle(IPC.CHAT_LOAD, async (_e, id: string) => {
+    if (getAttachedRunId()) detachCurrent();
     const conv = getConversation(id);
     if (!conv) return { error: 'Conversation not found' };
     activeConversationId = id;
@@ -202,12 +232,16 @@ function setupIpcHandlers(): void {
   ipcMain.handle(IPC.SETTINGS_GET, async (_e, key: string) => {
     if (key === 'apiKey') return getApiKey() ? 'set' : '';
     if (key === 'unrestrictedMode') return getUnrestrictedMode();
+    if (key === 'policyProfile') return getSelectedPolicyProfile();
+    if (key === 'performanceStance') return getSelectedPerformanceStance();
     return null;
   });
   ipcMain.handle(IPC.SETTINGS_SET, async (_e, key: string, value: any) => {
     if (key === 'apiKey') setApiKey(value);
     if (key === 'model') setSelectedModel(value);
     if (key === 'unrestrictedMode') setUnrestrictedMode(!!value);
+    if (key === 'policyProfile') setSelectedPolicyProfile(String(value || 'standard'));
+    if (key === 'performanceStance') setSelectedPerformanceStance(value);
     return { ok: true };
   });
 
@@ -218,6 +252,7 @@ function setupIpcHandlers(): void {
   ipcMain.handle(IPC.BROWSER_FORWARD, async () => { await goForward(); return { ok: true }; });
   ipcMain.handle(IPC.BROWSER_REFRESH, async () => { await reload(); return { ok: true }; });
   ipcMain.handle(IPC.BROWSER_SET_BOUNDS, async (_e, bounds: any) => { setBounds(bounds); return { ok: true }; });
+  ipcMain.handle(IPC.BROWSER_GET_EXECUTION_MODE, async () => getBrowserExecutionMode());
 
   ipcMain.handle(IPC.BROWSER_TAB_NEW, async (_e, url?: string) => {
     const id = createTab(url);
@@ -265,7 +300,7 @@ function setupIpcHandlers(): void {
     return { ok: true, ...result };
   });
   ipcMain.handle(IPC.PROCESS_CANCEL, async (_e, processId: string) => {
-    cancelLoop(); // Cancel the running loop (module-level)
+    cancelLoop(processId);
     cancelProc(processId);
     return { ok: true };
   });
@@ -287,6 +322,9 @@ function setupIpcHandlers(): void {
   ipcMain.handle(IPC.RUN_APPROVALS, async (_e, runId: string) => {
     return listApprovalsForRun(runId);
   });
+  ipcMain.handle(IPC.RUN_HUMAN_INTERVENTIONS, async (_e, runId: string) => {
+    return listHumanInterventionsForRun(runId);
+  });
   ipcMain.handle(IPC.RUN_APPROVE, async (_e, approvalId: number) => {
     const approval = approveRunApproval(approvalId);
     return { ok: !!approval, approval };
@@ -295,6 +333,11 @@ function setupIpcHandlers(): void {
     const approval = denyRunApproval(approvalId);
     return { ok: !!approval, approval };
   });
+  ipcMain.handle(IPC.RUN_RESOLVE_HUMAN_INTERVENTION, async (_e, interventionId: number) => {
+    const intervention = resolveHumanIntervention(interventionId);
+    return { ok: !!intervention, intervention };
+  });
+  ipcMain.handle(IPC.POLICY_LIST, async () => listPolicyProfiles());
 
   // ── Browser URL autocomplete ──
   ipcMain.handle(IPC.BROWSER_HISTORY_MATCH, async (_e, prefix: string) => matchUrlHistory(prefix));

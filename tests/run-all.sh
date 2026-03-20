@@ -45,12 +45,16 @@ run_electron() {
 
 # Pure logic tests — no native modules, fast
 run_tsx "Classifier"           tests/test-classifier.ts
+run_tsx "Agent Overrides"     tests/test-agent-profile-override.ts
+run_tsx "Filesystem Routing"  tests/test-filesystem-agent-routing.ts
+run_tsx "Filesystem Stop"     tests/test-filesystem-agent-stop.ts
 run_tsx "Capability Snapshot"  tests/test-capability-snapshot.ts
 run_tsx "Loop Dispatch"        tests/test-loop-dispatch.ts
 run_tsx "UI State + Shortcuts" tests/phase1-test.ts
 
 # Tests requiring native modules (better-sqlite3 via executors/DB) — run via Electron
 run_electron "Tool Builder"    tests/test-tool-builder.ts
+run_electron "Filesystem Agent" tests/test-filesystem-agent.ts
 run_electron "Routing"         tests/test-routing.ts
 
 echo "═══════════════════════════════════════════════════════"

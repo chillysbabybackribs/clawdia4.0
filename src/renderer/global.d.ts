@@ -17,9 +17,11 @@ interface ClawdiaAPI {
     forward: () => Promise<any>;
     refresh: () => Promise<any>;
     setBounds: (bounds: any) => Promise<any>;
+    getExecutionMode: () => Promise<string>;
     onUrlChanged: (cb: (url: string) => void) => () => void;
     onTitleChanged: (cb: (title: string) => void) => () => void;
     onLoading: (cb: (loading: boolean) => void) => () => void;
+    onModeChanged: (cb: (payload: { mode: string; reason: string }) => void) => () => void;
   };
   settings: {
     get: (key: string) => Promise<any>;
@@ -30,6 +32,10 @@ interface ClawdiaAPI {
     setModel: (model: string) => Promise<any>;
     getUnrestrictedMode: () => Promise<boolean>;
     setUnrestrictedMode: (enabled: boolean) => Promise<any>;
+    getPolicyProfile: () => Promise<string>;
+    setPolicyProfile: (profileId: string) => Promise<any>;
+    getPerformanceStance: () => Promise<'conservative' | 'standard' | 'aggressive'>;
+    setPerformanceStance: (stance: 'conservative' | 'standard' | 'aggressive') => Promise<any>;
   };
   process: {
     list: () => Promise<any>;
@@ -45,8 +51,13 @@ interface ClawdiaAPI {
     events: (runId: string) => Promise<any>;
     changes: (runId: string) => Promise<any>;
     approvals: (runId: string) => Promise<any>;
+    humanInterventions: (runId: string) => Promise<any>;
     approve: (approvalId: number) => Promise<any>;
     deny: (approvalId: number) => Promise<any>;
+    resolveHumanIntervention: (interventionId: number) => Promise<any>;
+  };
+  policy: {
+    list: () => Promise<any>;
   };
   window: {
     minimize: () => Promise<void>;

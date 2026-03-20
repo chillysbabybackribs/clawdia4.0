@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import type { Message, ToolCall, FeedItem, ProcessInfo, RunApproval } from '../../shared/types';
+import type { Message, ToolCall, FeedItem, ProcessInfo, RunApproval, RunHumanIntervention, AgentProfile } from '../../shared/types';
 import InputBar from './InputBar';
 import StatusLine from './StatusLine';
 import ToolActivity, { type ToolStreamMap } from './ToolActivity';
@@ -12,6 +12,7 @@ interface ChatPanelProps {
   onOpenSettings: () => void;
   onOpenPendingApproval?: (processId: string) => void;
   loadConversationId?: string | null;
+  replayBuffer?: Array<{ type: string; data: any }> | null;
 }
 
 function ApprovalBanner({
@@ -26,10 +27,10 @@ function ApprovalBanner({
   onOpenReview: () => void;
 }) {
   return (
-    <div className="mx-4 mb-3 rounded-xl border border-[#ff7a00]/25 bg-[#ff7a00]/8 px-4 py-3">
+    <div className="mx-4 mb-3 rounded-xl border border-white/[0.08] bg-white/[0.025] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-[13px] font-medium text-[#ff9a3d]">Approval required</div>
+          <div className="text-[13px] font-medium text-text-primary">Approval required</div>
           <div className="mt-1 text-[13px] text-text-primary">{approval.summary}</div>
           <div className="mt-1 text-2xs text-text-muted break-all">
             {approval.actionType} · {approval.target}
@@ -45,15 +46,66 @@ function ApprovalBanner({
       <div className="flex items-center gap-2 mt-3">
         <button
           onClick={onApprove}
-          className="text-2xs px-2.5 py-1 rounded-md bg-[#ff7a00]/16 text-[#ff9a3d] hover:bg-[#ff7a00]/24 transition-colors cursor-pointer"
+          className="text-2xs px-2.5 py-1 rounded-md bg-white/[0.07] text-text-primary hover:bg-white/[0.1] transition-colors cursor-pointer"
         >
           Approve
         </button>
         <button
           onClick={onDeny}
-          className="text-2xs px-2.5 py-1 rounded-md bg-red-400/10 text-red-300 hover:bg-red-400/18 transition-colors cursor-pointer"
+          className="text-2xs px-2.5 py-1 rounded-md bg-white/[0.04] text-text-secondary hover:bg-white/[0.08] hover:text-text-primary transition-colors cursor-pointer"
         >
           Deny
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function HumanInterventionBanner({
+  intervention,
+  onResume,
+  onCancelRun,
+  onOpenReview,
+}: {
+  intervention: RunHumanIntervention;
+  onResume: () => void;
+  onCancelRun: () => void;
+  onOpenReview: () => void;
+}) {
+  return (
+    <div className="mx-4 mb-3 rounded-xl border border-white/[0.14] bg-white/[0.04] px-4 py-3 shadow-[0_0_0_1px_rgba(255,255,255,0.03),0_0_18px_rgba(255,255,255,0.08)] animate-pulse">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[13px] font-medium text-text-primary">Needs human intervention</div>
+          <div className="mt-1 text-[13px] text-text-primary">{intervention.summary}</div>
+          {intervention.instructions && (
+            <div className="mt-2 text-[12px] leading-relaxed text-text-secondary whitespace-pre-wrap">
+              {intervention.instructions}
+            </div>
+          )}
+          <div className="mt-2 text-2xs text-text-muted break-all">
+            {intervention.interventionType}{intervention.target ? ` · ${intervention.target}` : ''}
+          </div>
+        </div>
+        <button
+          onClick={onOpenReview}
+          className="text-2xs px-2.5 py-1 rounded-md text-text-secondary hover:text-text-primary hover:bg-white/[0.06] transition-colors cursor-pointer flex-shrink-0"
+        >
+          Open review
+        </button>
+      </div>
+      <div className="flex items-center gap-2 mt-3">
+        <button
+          onClick={onResume}
+          className="text-2xs px-2.5 py-1 rounded-md bg-white/[0.07] text-text-primary hover:bg-white/[0.1] transition-colors cursor-pointer"
+        >
+          Resume
+        </button>
+        <button
+          onClick={onCancelRun}
+          className="text-2xs px-2.5 py-1 rounded-md bg-white/[0.04] text-text-secondary hover:bg-white/[0.08] hover:text-text-primary transition-colors cursor-pointer"
+        >
+          Cancel run
         </button>
       </div>
     </div>
@@ -68,6 +120,27 @@ function Clock() {
     return () => clearInterval(interval);
   }, []);
   return <span className="text-[13px] text-text-secondary tabular-nums">{time}</span>;
+}
+
+function AgentBadge({ profile }: { profile: AgentProfile }) {
+  const label = profile === 'filesystem'
+    ? 'Filesystem Agent'
+    : profile === 'bloodhound'
+      ? 'Bloodhound'
+      : 'General Agent';
+  return (
+    <span className="px-2.5 py-1 rounded-md border border-white/[0.08] bg-white/[0.04] text-[11px] font-medium tracking-wide text-text-primary/85">
+      {label}
+    </span>
+  );
+}
+
+function ToolBadge({ toolName }: { toolName: string }) {
+  return (
+    <span className="px-2 py-1 rounded-md border border-white/[0.06] bg-white/[0.025] text-[11px] text-text-secondary">
+      {toolName}
+    </span>
+  );
 }
 
 /** Copy button with checkmark feedback */
@@ -198,7 +271,7 @@ function UserMessage({ message }: { message: Message }) {
   );
 }
 
-export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSettings, onOpenPendingApproval, loadConversationId }: ChatPanelProps) {
+export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSettings, onOpenPendingApproval, loadConversationId, replayBuffer }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -206,6 +279,11 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
   const [streamMap, setStreamMap] = useState<ToolStreamMap>({});
   const [pendingApprovalRunId, setPendingApprovalRunId] = useState<string | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState<RunApproval[]>([]);
+  const [pendingHumanRunId, setPendingHumanRunId] = useState<string | null>(null);
+  const [pendingHumanInterventions, setPendingHumanInterventions] = useState<RunHumanIntervention[]>([]);
+  const [loadedConversationId, setLoadedConversationId] = useState<string | null>(null);
+  const [attachedAgentProfile, setAttachedAgentProfile] = useState<AgentProfile | null>(null);
+  const [attachedSpecializedTool, setAttachedSpecializedTool] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Flat append-only feed — each item appended once, never moved
   const feedRef = useRef<FeedItem[]>([]);
@@ -213,44 +291,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
   const rafRef = useRef<number | null>(null);
   const pendingUpdateRef = useRef(false);
   const isUserScrolledUpRef = useRef(false);
-
-  useEffect(() => {
-    if (!loadConversationId) return;
-    const api = (window as any).clawdia;
-    if (!api) return;
-    api.chat.load(loadConversationId).then((result: any) => {
-      if (result.messages?.length > 0) {
-        setMessages(result.messages);
-        requestAnimationFrame(() => {
-          if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-        });
-      }
-    }).catch(() => {});
-  }, [loadConversationId]);
-
-  useEffect(() => {
-    const api = (window as any).clawdia;
-    if (!api?.process || !api?.run) return;
-
-    const syncPendingApproval = async (processes: ProcessInfo[]) => {
-      const attachedBlocked = processes.find((proc) => proc.isAttached && proc.status === 'awaiting_approval');
-      if (!attachedBlocked) {
-        setPendingApprovalRunId(null);
-        setPendingApprovals([]);
-        return;
-      }
-
-      setPendingApprovalRunId(attachedBlocked.id);
-      const approvals = await api.run.approvals(attachedBlocked.id);
-      setPendingApprovals((approvals || []).filter((approval: RunApproval) => approval.status === 'pending'));
-    };
-
-    api.process.list().then(syncPendingApproval).catch(() => {});
-    const cleanup = api.process.onListChanged((processes: ProcessInfo[]) => {
-      syncPendingApproval(processes).catch(() => {});
-    });
-    return cleanup;
-  }, []);
+  const replayedBufferRef = useRef<string | null>(null);
 
   const scrollToBottom = useCallback((behavior: 'auto' | 'smooth' = 'auto') => {
     if (scrollRef.current) scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior });
@@ -290,100 +331,242 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
     });
   }, [flushStreamUpdate]);
 
+  const ensureAssistantReplayMessage = useCallback(() => {
+    if (assistantMsgIdRef.current) return assistantMsgIdRef.current;
+    const assistantId = `assistant-replay-${Date.now()}`;
+    assistantMsgIdRef.current = assistantId;
+    setMessages(prev => [...prev, {
+      id: assistantId,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+      isStreaming: true,
+    }]);
+    setIsStreaming(true);
+    return assistantId;
+  }, []);
+
+  const handleStreamTextChunk = useCallback((chunk: string) => {
+    ensureAssistantReplayMessage();
+    if (chunk.includes('__RESET__')) {
+      const lastIdx = feedRef.current.length - 1;
+      if (lastIdx >= 0 && feedRef.current[lastIdx].kind === 'text') {
+        feedRef.current[lastIdx] = { ...feedRef.current[lastIdx], isStreaming: false } as FeedItem;
+      }
+      scheduleStreamUpdate();
+      return;
+    }
+
+    const lastIdx = feedRef.current.length - 1;
+    if (lastIdx >= 0 && feedRef.current[lastIdx].kind === 'text') {
+      const last = feedRef.current[lastIdx] as { kind: 'text'; text: string; isStreaming?: boolean };
+      feedRef.current[lastIdx] = { kind: 'text', text: last.text + chunk, isStreaming: true };
+    } else {
+      feedRef.current.push({ kind: 'text', text: chunk, isStreaming: true });
+    }
+    setStatusText('');
+    scheduleStreamUpdate();
+  }, [ensureAssistantReplayMessage, scheduleStreamUpdate]);
+
+  const handleThinkingEvent = useCallback((thought: string) => {
+    setStatusText(thought || '');
+    if (thought) autoScroll();
+  }, [autoScroll]);
+
+  const handleToolActivityEvent = useCallback((activity: { name: string; status: string; detail?: string }) => {
+    ensureAssistantReplayMessage();
+    if (activity.status === 'running' || activity.status === 'awaiting_approval' || activity.status === 'needs_human') {
+      const newTool: ToolCall = {
+        id: `tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        name: activity.name,
+        status: activity.status === 'awaiting_approval' ? 'running' : 'running',
+        detail: activity.detail,
+      };
+      const lastIdx = feedRef.current.length - 1;
+      if (lastIdx >= 0 && feedRef.current[lastIdx].kind === 'text') {
+        feedRef.current[lastIdx] = { ...feedRef.current[lastIdx], isStreaming: false } as FeedItem;
+      }
+      feedRef.current.push({ kind: 'tool', tool: newTool });
+      scheduleStreamUpdate();
+      const detail = activity.detail ? ` — ${activity.detail.slice(0, 50)}` : '';
+      setStatusText(
+        activity.status === 'needs_human'
+          ? `Needs human intervention${detail}`
+          : activity.status === 'awaiting_approval'
+            ? `Waiting for approval${detail}`
+            : `Running ${activity.name}${detail}`,
+      );
+    } else {
+      const toolId = feedRef.current
+        .slice().reverse()
+        .find(item => item.kind === 'tool' && item.tool.name === activity.name && item.tool.status === 'running');
+      if (toolId && toolId.kind === 'tool') {
+        const idx = feedRef.current.lastIndexOf(toolId);
+        feedRef.current[idx] = {
+          kind: 'tool',
+          tool: {
+            ...toolId.tool,
+            status: activity.status as ToolCall['status'],
+            detail: activity.detail,
+          },
+        };
+      }
+      scheduleStreamUpdate();
+      if (activity.status === 'success') setStatusText(`Completed ${activity.name}`);
+      else if (activity.status === 'error') setStatusText(`Failed: ${activity.name}`);
+    }
+    autoScroll();
+  }, [autoScroll, ensureAssistantReplayMessage, scheduleStreamUpdate]);
+
+  const handleToolStreamEvent = useCallback((payload: { toolId: string; toolName: string; chunk: string }) => {
+    setStreamMap(prev => {
+      const existing = prev[payload.toolId] ?? [];
+      const next = existing.length >= 200
+        ? [...existing.slice(-199), payload.chunk]
+        : [...existing, payload.chunk];
+      return { ...prev, [payload.toolId]: next };
+    });
+  }, []);
+
+  const handleStreamEndEvent = useCallback(() => {
+    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+    flushStreamUpdate();
+    if (assistantMsgIdRef.current) {
+      const finalFeed = [...feedRef.current].map(item =>
+        item.kind === 'text' ? { ...item, isStreaming: false } : item
+      ) as FeedItem[];
+      setMessages(prev => prev.map(m =>
+        m.id === assistantMsgIdRef.current
+          ? {
+              ...m,
+              feed: finalFeed,
+              content: finalFeed.filter(i => i.kind === 'text').map(i => (i as any).text).join('\n\n'),
+              toolCalls: finalFeed.filter(i => i.kind === 'tool').map(i => (i as any).tool),
+              isStreaming: false,
+            }
+          : m,
+      ));
+    }
+    setIsStreaming(false);
+    setStatusText('');
+    assistantMsgIdRef.current = null;
+  }, [flushStreamUpdate]);
+
+  useEffect(() => {
+    if (!loadConversationId) return;
+    const api = (window as any).clawdia;
+    if (!api) return;
+    api.chat.load(loadConversationId).then((result: any) => {
+      replayedBufferRef.current = null;
+      assistantMsgIdRef.current = null;
+      feedRef.current = [];
+      setStreamMap({});
+      setIsStreaming(false);
+      setStatusText('');
+      setMessages(result.messages || []);
+      setLoadedConversationId(loadConversationId);
+      requestAnimationFrame(() => {
+        if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      });
+    }).catch(() => {});
+  }, [loadConversationId]);
+
+  useEffect(() => {
+    if (!replayBuffer || replayBuffer.length === 0 || !loadConversationId || loadedConversationId !== loadConversationId) return;
+    const replayKey = `${loadConversationId}:${replayBuffer.length}:${JSON.stringify(replayBuffer[replayBuffer.length - 1])}`;
+    if (replayedBufferRef.current === replayKey) return;
+    replayedBufferRef.current = replayKey;
+
+    feedRef.current = [];
+    setStreamMap({});
+    setStatusText('');
+    setIsStreaming(true);
+
+    const replay = async () => {
+      for (const item of replayBuffer) {
+        if (item.type === 'chat:stream:text') handleStreamTextChunk(item.data);
+        if (item.type === 'chat:thinking') handleThinkingEvent(item.data);
+        if (item.type === 'chat:tool-activity') handleToolActivityEvent(item.data);
+        if (item.type === 'chat:tool-stream') handleToolStreamEvent(item.data);
+        if (item.type === 'chat:stream:end') handleStreamEndEvent();
+      }
+      if (assistantMsgIdRef.current) {
+        flushStreamUpdate();
+      }
+    };
+
+    void replay();
+  }, [
+    replayBuffer,
+    loadConversationId,
+    loadedConversationId,
+    handleStreamTextChunk,
+    handleThinkingEvent,
+    handleToolActivityEvent,
+    handleToolStreamEvent,
+    handleStreamEndEvent,
+    flushStreamUpdate,
+  ]);
+
+  useEffect(() => {
+    const api = (window as any).clawdia;
+    if (!api?.process || !api?.run) return;
+
+    const syncPendingApproval = async (processes: ProcessInfo[]) => {
+      const attachedProcess = processes.find((proc) => proc.isAttached);
+      setAttachedAgentProfile(attachedProcess?.agentProfile || null);
+      setAttachedSpecializedTool(attachedProcess?.lastSpecializedTool || null);
+
+      const attachedBlocked = processes.find((proc) => proc.isAttached && proc.status === 'awaiting_approval');
+      if (!attachedBlocked) {
+        setPendingApprovalRunId(null);
+        setPendingApprovals([]);
+      } else {
+        setPendingApprovalRunId(attachedBlocked.id);
+        const approvals = await api.run.approvals(attachedBlocked.id);
+        setPendingApprovals((approvals || []).filter((approval: RunApproval) => approval.status === 'pending'));
+      }
+
+      const attachedNeedsHuman = processes.find((proc) => proc.isAttached && proc.status === 'needs_human');
+      if (!attachedNeedsHuman) {
+        setPendingHumanRunId(null);
+        setPendingHumanInterventions([]);
+      } else {
+        setPendingHumanRunId(attachedNeedsHuman.id);
+        const interventions = await api.run.humanInterventions(attachedNeedsHuman.id);
+        setPendingHumanInterventions((interventions || []).filter((item: RunHumanIntervention) => item.status === 'pending'));
+      }
+    };
+
+    api.process.list().then(syncPendingApproval).catch(() => {});
+    const cleanup = api.process.onListChanged((processes: ProcessInfo[]) => {
+      syncPendingApproval(processes).catch(() => {});
+    });
+    return cleanup;
+  }, []);
+
   useEffect(() => {
     const api = (window as any).clawdia;
     if (!api) return;
     const cleanups: (() => void)[] = [];
 
-    cleanups.push(api.chat.onStreamText((chunk: string) => {
-      if (chunk.includes('__RESET__')) {
-        // Finalize the current streaming text item (seal it as non-streaming)
-        const lastIdx = feedRef.current.length - 1;
-        if (lastIdx >= 0 && feedRef.current[lastIdx].kind === 'text') {
-          feedRef.current[lastIdx] = { ...feedRef.current[lastIdx], isStreaming: false } as FeedItem;
-        }
-        scheduleStreamUpdate();
-        return;
-      }
-      // Append to existing streaming text item, or create one
-      const lastIdx = feedRef.current.length - 1;
-      if (lastIdx >= 0 && feedRef.current[lastIdx].kind === 'text') {
-        const last = feedRef.current[lastIdx] as { kind: 'text'; text: string; isStreaming?: boolean };
-        feedRef.current[lastIdx] = { kind: 'text', text: last.text + chunk, isStreaming: true };
-      } else {
-        feedRef.current.push({ kind: 'text', text: chunk, isStreaming: true });
-      }
-      setStatusText('');
-      scheduleStreamUpdate();
-    }));
+    cleanups.push(api.chat.onStreamText(handleStreamTextChunk));
 
-    cleanups.push(api.chat.onThinking((thought: string) => {
-      if (thought) { setStatusText(thought); autoScroll(); }
-    }));
+    cleanups.push(api.chat.onThinking(handleThinkingEvent));
 
-    cleanups.push(api.chat.onToolActivity((activity: { name: string; status: string; detail?: string }) => {
-      if (activity.status === 'running') {
-        const newTool: ToolCall = {
-          id: `tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          name: activity.name,
-          status: 'running',
-          detail: activity.detail,
-        };
-        // Finalize any open text item above, then append tool
-        const lastIdx = feedRef.current.length - 1;
-        if (lastIdx >= 0 && feedRef.current[lastIdx].kind === 'text') {
-          feedRef.current[lastIdx] = { ...feedRef.current[lastIdx], isStreaming: false } as FeedItem;
-        }
-        feedRef.current.push({ kind: 'tool', tool: newTool });
-        scheduleStreamUpdate();
-        const detail = activity.detail ? ` — ${activity.detail.slice(0, 50)}` : '';
-        setStatusText(`Running ${activity.name}${detail}`);
-      } else {
-        // Tool completed — find the matching running tool item and update it in place
-        const toolId = feedRef.current
-          .slice().reverse()
-          .find(item => item.kind === 'tool' && item.tool.name === activity.name && item.tool.status === 'running');
-        if (toolId && toolId.kind === 'tool') {
-          const idx = feedRef.current.lastIndexOf(toolId);
-          feedRef.current[idx] = {
-            kind: 'tool',
-            tool: {
-              ...toolId.tool,
-              status: activity.status as ToolCall['status'],
-              detail: activity.detail,
-            },
-          };
-        }
-        scheduleStreamUpdate();
-        if (activity.status === 'success') setStatusText(`Completed ${activity.name}`);
-        else if (activity.status === 'error') setStatusText(`Failed: ${activity.name}`);
-      }
-      autoScroll();
-    }));
+    cleanups.push(api.chat.onToolActivity(handleToolActivityEvent));
 
     if (api.chat.onToolStream) {
-      cleanups.push(api.chat.onToolStream((payload: { toolId: string; toolName: string; chunk: string }) => {
-        setStreamMap(prev => {
-          const existing = prev[payload.toolId] ?? [];
-          // Cap at 200 lines to avoid unbounded memory growth
-          const next = existing.length >= 200
-            ? [...existing.slice(-199), payload.chunk]
-            : [...existing, payload.chunk];
-          return { ...prev, [payload.toolId]: next };
-        });
-      }));
+      cleanups.push(api.chat.onToolStream(handleToolStreamEvent));
     }
 
-    cleanups.push(api.chat.onStreamEnd(() => {
-      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-      flushStreamUpdate();
-    }));
+    cleanups.push(api.chat.onStreamEnd(handleStreamEndEvent));
 
     return () => {
       cleanups.forEach(fn => fn());
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [scheduleStreamUpdate, autoScroll]);
+  }, [handleStreamEndEvent, handleStreamTextChunk, handleThinkingEvent, handleToolActivityEvent, handleToolStreamEvent]);
 
   const handleSend = useCallback(async (text: string) => {
     const api = (window as any).clawdia;
@@ -521,10 +704,31 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
     }
   }, [pendingApprovalRunId, pendingApprovals]);
 
+  const handleHumanResume = useCallback(async () => {
+    const api = (window as any).clawdia;
+    const intervention = pendingHumanInterventions[0];
+    if (!api?.run || !intervention) return;
+
+    await api.run.resolveHumanIntervention(intervention.id);
+
+    if (pendingHumanRunId) {
+      const interventions = await api.run.humanInterventions(pendingHumanRunId);
+      setPendingHumanInterventions((interventions || []).filter((item: RunHumanIntervention) => item.status === 'pending'));
+    }
+  }, [pendingHumanInterventions, pendingHumanRunId]);
+
+  const handleCancelRun = useCallback(() => {
+    (window as any).clawdia?.chat.stop();
+    setPendingHumanRunId(null);
+    setPendingHumanInterventions([]);
+  }, []);
+
   return (
     <div className="flex flex-col h-full">
       <header className="drag-region flex items-center gap-2 px-4 h-[44px] flex-shrink-0 bg-surface-1 border-b border-border-subtle shadow-[inset_0_-1px_6px_rgba(0,0,0,0.2),0_2px_8px_rgba(0,0,0,0.3)] relative z-10">
         <Clock />
+        {attachedAgentProfile && <AgentBadge profile={attachedAgentProfile} />}
+        {attachedSpecializedTool && <ToolBadge toolName={attachedSpecializedTool} />}
         <div className="flex-1 drag-region" />
         <button onClick={onOpenSettings} title="Settings" className="no-drag flex items-center justify-center w-8 h-8 rounded-lg text-text-secondary hover:text-text-primary hover:bg-white/[0.06] transition-all cursor-pointer">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -560,6 +764,15 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onOpenSetti
           <TerminalLogStrip lines={terminalLines} isStreaming={isStreaming} />
         ) : null;
       })()}
+
+      {pendingHumanRunId && pendingHumanInterventions[0] && (
+        <HumanInterventionBanner
+          intervention={pendingHumanInterventions[0]}
+          onResume={handleHumanResume}
+          onCancelRun={handleCancelRun}
+          onOpenReview={() => onOpenPendingApproval?.(pendingHumanRunId)}
+        />
+      )}
 
       {pendingApprovalRunId && pendingApprovals[0] && (
         <ApprovalBanner

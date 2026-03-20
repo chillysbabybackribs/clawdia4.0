@@ -14,7 +14,7 @@ const Module = require('module');
 
 app.disableHardwareAcceleration();
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   const testFiles = process.argv.slice(2).filter(f => f.endsWith('.ts'));
 
   if (testFiles.length === 0) {
@@ -77,7 +77,14 @@ app.whenReady().then(() => {
 
     // Run the compiled test inside Electron's Node
     try {
-      require(outJs);
+      const exported = require(outJs);
+      if (exported && typeof exported.then === 'function') {
+        await exported;
+      } else if (exported?.default && typeof exported.default.then === 'function') {
+        await exported.default;
+      } else if (exported?.done && typeof exported.done.then === 'function') {
+        await exported.done;
+      }
     } catch (err) {
       console.error(`  CRASHED: ${err.message}`);
       console.error(`  ${err.stack?.split('\n').slice(1, 3).join('\n  ')}`);

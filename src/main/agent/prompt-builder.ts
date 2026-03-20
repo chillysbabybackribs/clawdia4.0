@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { ToolGroup, PromptModule } from './classifier';
+import type { AgentProfile, PerformanceStance } from '../../shared/types';
 
 function resolvePromptPath(...segments: string[]): string {
   const srcPath = path.join(__dirname, '..', '..', '..', 'src', 'main', 'agent', ...segments);
@@ -36,7 +37,7 @@ export function buildStaticPrompt(toolGroup: ToolGroup, modules: Set<PromptModul
 
   const MODULE_FILES: Record<PromptModule, string> = {
     browser: 'BROWSER.md', coding: 'CODING.md', research: 'RESEARCH.md',
-    document: 'DOCUMENT.md', desktop_apps: 'DESKTOP_APPS.md', self_knowledge: 'SELF_KNOWLEDGE.md',
+    document: 'DOCUMENT.md', desktop_apps: 'DESKTOP_APPS.md', filesystem: 'FILESYSTEM.md', self_knowledge: 'SELF_KNOWLEDGE.md', bloodhound: 'BLOODHOUND.md',
   };
 
   for (const mod of modules) {
@@ -54,6 +55,7 @@ export function buildStaticPrompt(toolGroup: ToolGroup, modules: Set<PromptModul
  * Now includes executionConstraint from the Control Surface Registry.
  */
 export function buildDynamicPrompt(opts: {
+  agentProfile?: AgentProfile;
   model: string;
   toolGroup: ToolGroup;
   browserUrl?: string;
@@ -66,6 +68,7 @@ export function buildDynamicPrompt(opts: {
   shortcutContext?: string;
   guiStateContext?: string;
   isGreeting?: boolean;
+  performanceStance?: PerformanceStance;
 }): string {
   const now = new Date();
   const year = now.getFullYear();
@@ -81,6 +84,26 @@ export function buildDynamicPrompt(opts: {
     `MODEL: ${opts.model}`,
     `TOOLS: ${opts.toolGroup} group active`,
   ];
+
+  if (opts.agentProfile) {
+    lines.push(`AGENT PROFILE: ${opts.agentProfile}`);
+    if (opts.agentProfile === 'filesystem') {
+      lines.push('PROFILE DIRECTIVE: You are acting as the Filesystem Agent. Prefer path-aware inspection, directory-level reasoning, safe batch operations, and filesystem-native workflows over generic coding behavior.');
+    } else if (opts.agentProfile === 'bloodhound') {
+      lines.push('PROFILE DIRECTIVE: You are acting as Bloodhound. Your job is to design the most efficient reliable browser executor for the user task, validate it through real execution, and persist the learned executor for reuse.');
+    }
+  }
+
+  if (opts.performanceStance) {
+    lines.push(`STANCE: ${opts.performanceStance}`);
+    if (opts.performanceStance === 'conservative') {
+      lines.push('OPERATING STYLE: Be careful, narrower in scope, and bias toward smaller changes, tighter review, and earlier clarification when ambiguity is high.');
+    } else if (opts.performanceStance === 'aggressive') {
+      lines.push('OPERATING STYLE: Be more aggressive. Widen search breadth, batch more work together, take larger but coherent steps, follow through further before asking, and optimize for momentum while still obeying policy boundaries.');
+    } else {
+      lines.push('OPERATING STYLE: Stay balanced. Move decisively without becoming reckless, and keep reviewability high.');
+    }
+  }
 
   // Execution constraint from registry routing — HIGHEST PRIORITY
   if (opts.executionConstraint) {

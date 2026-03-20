@@ -11,11 +11,16 @@
  *   app_registry     — id, profile_json, last_scanned (v3)
  *   coordinate_cache — app, window_key, element, x, y, confidence (v4)
  *   site_profiles    — domain, auth_status, visit_count, nav_hints, account_info (v7)
- *   browser_playbooks— domain, task_pattern, steps, success_count, fail_count (v8)
+ *   browser_playbooks— domain, task_pattern, steps, success_count, fail_count (v8, v16 executor metadata)
  *   runs             — durable task runs for detached/reviewable execution history (v9)
  *   run_events       — structured durable run event log (v10)
  *   run_changes      — reviewable normalized change records (v11)
  *   run_approvals    — durable approval checkpoints for sensitive actions (v12)
+ *   policy_profiles  — reusable policy bundles for tool governance (v13)
+ *   run_human_interventions — durable human-required pauses for active runs (v14)
+ *   run_file_locks   — active per-file write ownership for simultaneous runs (v15)
+ *   filesystem_extractions — persistent extracted-text cache for local retrieval (v17)
+ *   filesystem_extractions_fts — lexical index over extracted local text (v18)
  */
 
 import Database from 'better-sqlite3';
@@ -326,5 +331,173 @@ function runMigrations(db: Database.Database): void {
     `);
   }
 
-  console.log(`[DB] Schema at version ${Math.max(currentVersion, 12)}`);
+  if (currentVersion < 13) {
+    console.log('[DB] Running migration v13: policy_profiles');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS policy_profiles (
+        id          TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        scope_type  TEXT NOT NULL CHECK(scope_type IN ('global', 'workspace', 'task_type')),
+        scope_value TEXT,
+        rules_json  TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_policy_profiles_scope ON policy_profiles(scope_type, scope_value);
+
+      INSERT INTO schema_version (version) VALUES (13);
+    `);
+  }
+
+  if (currentVersion < 14) {
+    console.log('[DB] Running migration v14: needs-human runs + run_human_interventions');
+    db.exec(`
+      ALTER TABLE runs RENAME TO runs_old;
+
+      CREATE TABLE IF NOT EXISTS runs (
+        id               TEXT PRIMARY KEY,
+        conversation_id  TEXT NOT NULL,
+        title            TEXT NOT NULL,
+        goal             TEXT NOT NULL,
+        status           TEXT NOT NULL CHECK(status IN ('running', 'awaiting_approval', 'needs_human', 'completed', 'failed', 'cancelled')),
+        started_at       TEXT NOT NULL,
+        updated_at       TEXT NOT NULL,
+        completed_at     TEXT,
+        tool_call_count  INTEGER NOT NULL DEFAULT 0,
+        error            TEXT,
+        was_detached     INTEGER NOT NULL DEFAULT 0
+      );
+
+      INSERT INTO runs (
+        id, conversation_id, title, goal, status,
+        started_at, updated_at, completed_at, tool_call_count, error, was_detached
+      )
+      SELECT
+        id, conversation_id, title, goal, status,
+        started_at, updated_at, completed_at, tool_call_count, error, was_detached
+      FROM runs_old;
+
+      DROP TABLE runs_old;
+
+      CREATE INDEX IF NOT EXISTS idx_runs_conversation ON runs(conversation_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_runs_updated_at ON runs(updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS run_human_interventions (
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id             TEXT NOT NULL,
+        status             TEXT NOT NULL CHECK(status IN ('pending', 'resolved', 'dismissed')),
+        intervention_type  TEXT NOT NULL,
+        target             TEXT,
+        summary            TEXT NOT NULL,
+        instructions       TEXT,
+        request_json       TEXT NOT NULL DEFAULT '{}',
+        created_at         TEXT NOT NULL,
+        resolved_at        TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_run_human_interventions_run_id
+        ON run_human_interventions(run_id, id ASC);
+      CREATE INDEX IF NOT EXISTS idx_run_human_interventions_status
+        ON run_human_interventions(status, created_at DESC);
+
+      INSERT INTO schema_version (version) VALUES (14);
+    `);
+  }
+
+  if (currentVersion < 15) {
+    console.log('[DB] Running migration v15: run_file_locks');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS run_file_locks (
+        path            TEXT PRIMARY KEY,
+        run_id          TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        acquired_at     TEXT NOT NULL,
+        last_seen_at    TEXT NOT NULL,
+        source_revision TEXT,
+        lock_mode       TEXT NOT NULL DEFAULT 'write' CHECK(lock_mode IN ('write'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_run_file_locks_run_id
+        ON run_file_locks(run_id, acquired_at DESC);
+
+      INSERT INTO schema_version (version) VALUES (15);
+    `);
+  }
+
+  if (currentVersion < 16) {
+    console.log('[DB] Running migration v16: browser_playbooks executor metadata');
+    db.exec(`
+      ALTER TABLE browser_playbooks ADD COLUMN agent_profile TEXT NOT NULL DEFAULT 'general';
+      ALTER TABLE browser_playbooks ADD COLUMN success_rate REAL NOT NULL DEFAULT 1.0;
+      ALTER TABLE browser_playbooks ADD COLUMN validation_runs INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE browser_playbooks ADD COLUMN avg_runtime_ms INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE browser_playbooks ADD COLUMN avg_step_count REAL NOT NULL DEFAULT 0;
+      ALTER TABLE browser_playbooks ADD COLUMN notes TEXT NOT NULL DEFAULT '[]';
+
+      CREATE INDEX IF NOT EXISTS idx_playbook_agent_profile ON browser_playbooks(agent_profile, domain, success_count DESC);
+
+      INSERT INTO schema_version (version) VALUES (16);
+    `);
+  }
+
+  if (currentVersion < 17) {
+    console.log('[DB] Running migration v17: filesystem extraction cache');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS filesystem_extractions (
+        path             TEXT PRIMARY KEY,
+        size_bytes       INTEGER NOT NULL,
+        mtime_ms         REAL NOT NULL,
+        extraction_type  TEXT NOT NULL CHECK(extraction_type IN ('text', 'pdf', 'unsupported')),
+        text_content     TEXT,
+        note             TEXT,
+        updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_filesystem_extractions_updated
+        ON filesystem_extractions(updated_at DESC);
+
+      INSERT INTO schema_version (version) VALUES (17);
+    `);
+  }
+
+  if (currentVersion < 18) {
+    console.log('[DB] Running migration v18: filesystem extraction lexical index');
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS filesystem_extractions_fts USING fts5(
+        path UNINDEXED,
+        text_content
+      );
+
+      INSERT INTO filesystem_extractions_fts(rowid, path, text_content)
+      SELECT rowid, path, COALESCE(text_content, '')
+      FROM filesystem_extractions
+      WHERE text_content IS NOT NULL;
+
+      CREATE TRIGGER IF NOT EXISTS filesystem_extractions_fts_ai
+      AFTER INSERT ON filesystem_extractions BEGIN
+        INSERT INTO filesystem_extractions_fts(rowid, path, text_content)
+        VALUES (new.rowid, new.path, COALESCE(new.text_content, ''));
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS filesystem_extractions_fts_ad
+      AFTER DELETE ON filesystem_extractions BEGIN
+        INSERT INTO filesystem_extractions_fts(filesystem_extractions_fts, rowid, path, text_content)
+        VALUES('delete', old.rowid, old.path, COALESCE(old.text_content, ''));
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS filesystem_extractions_fts_au
+      AFTER UPDATE ON filesystem_extractions BEGIN
+        INSERT INTO filesystem_extractions_fts(filesystem_extractions_fts, rowid, path, text_content)
+        VALUES('delete', old.rowid, old.path, COALESCE(old.text_content, ''));
+        INSERT INTO filesystem_extractions_fts(rowid, path, text_content)
+        VALUES (new.rowid, new.path, COALESCE(new.text_content, ''));
+      END;
+
+      INSERT INTO schema_version (version) VALUES (18);
+    `);
+  }
+
+  console.log(`[DB] Schema at version ${Math.max(currentVersion, 18)}`);
 }

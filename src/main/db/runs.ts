@@ -7,7 +7,7 @@
 
 import { getDb } from './database';
 
-export type RunStatus = 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled';
+export type RunStatus = 'running' | 'awaiting_approval' | 'needs_human' | 'completed' | 'failed' | 'cancelled';
 
 export interface RunRow {
   id: string;
@@ -83,7 +83,7 @@ export function listRunRecords(limit = 100): RunRecord[] {
   return listRuns(limit).map(toRunRecord);
 }
 
-export function completeRun(id: string, status: Exclude<RunStatus, 'running' | 'awaiting_approval'>, error?: string): void {
+export function completeRun(id: string, status: Exclude<RunStatus, 'running' | 'awaiting_approval' | 'needs_human'>, error?: string): void {
   const now = new Date().toISOString();
   getDb().prepare(`
     UPDATE runs
@@ -92,7 +92,7 @@ export function completeRun(id: string, status: Exclude<RunStatus, 'running' | '
   `).run(status, error || null, now, now, id);
 }
 
-export function setRunStatus(id: string, status: Extract<RunStatus, 'running' | 'awaiting_approval'>, error?: string): void {
+export function setRunStatus(id: string, status: Extract<RunStatus, 'running' | 'awaiting_approval' | 'needs_human'>, error?: string): void {
   const now = new Date().toISOString();
   getDb().prepare(`
     UPDATE runs
@@ -129,13 +129,15 @@ export function reconcileInterruptedRuns(reason = 'Clawdia restarted before this
         error = COALESCE(error, ?),
         completed_at = COALESCE(completed_at, ?),
         updated_at = ?
-    WHERE status IN ('running', 'awaiting_approval')
+    WHERE status IN ('running', 'awaiting_approval', 'needs_human')
   `).run(reason, now, now);
 }
 
 export function deleteRun(id: string): void {
   const db = getDb();
   db.prepare('DELETE FROM run_approvals WHERE run_id = ?').run(id);
+  db.prepare('DELETE FROM run_human_interventions WHERE run_id = ?').run(id);
+  db.prepare('DELETE FROM run_file_locks WHERE run_id = ?').run(id);
   db.prepare('DELETE FROM run_changes WHERE run_id = ?').run(id);
   db.prepare('DELETE FROM run_events WHERE run_id = ?').run(id);
   db.prepare('DELETE FROM runs WHERE id = ?').run(id);
@@ -154,11 +156,15 @@ export function evictOldRuns(maxHistory: number): void {
   if (oldDone.length === 0) return;
   const del = db.prepare('DELETE FROM runs WHERE id = ?');
   const delApprovals = db.prepare('DELETE FROM run_approvals WHERE run_id = ?');
+  const delHuman = db.prepare('DELETE FROM run_human_interventions WHERE run_id = ?');
+  const delLocks = db.prepare('DELETE FROM run_file_locks WHERE run_id = ?');
   const delChanges = db.prepare('DELETE FROM run_changes WHERE run_id = ?');
   const delEvents = db.prepare('DELETE FROM run_events WHERE run_id = ?');
   const tx = db.transaction((rows: Array<{ id: string }>) => {
     for (const row of rows) {
       delApprovals.run(row.id);
+      delHuman.run(row.id);
+      delLocks.run(row.id);
       delChanges.run(row.id);
       delEvents.run(row.id);
       del.run(row.id);

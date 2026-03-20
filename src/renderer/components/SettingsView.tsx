@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import type { PolicyProfile, PerformanceStance } from '../../shared/types';
 
 interface SettingsViewProps {
   onBack: () => void;
@@ -10,6 +11,9 @@ export default function SettingsView({ onBack }: SettingsViewProps) {
   const [saved, setSaved] = useState(false);
   const [currentModel, setCurrentModel] = useState('claude-sonnet-4-6');
   const [unrestrictedMode, setUnrestrictedMode] = useState(false);
+  const [policyProfiles, setPolicyProfiles] = useState<PolicyProfile[]>([]);
+  const [selectedPolicyProfile, setSelectedPolicyProfile] = useState('standard');
+  const [performanceStance, setPerformanceStance] = useState<PerformanceStance>('standard');
   const [loaded, setLoaded] = useState(false);
   const originalKeyRef = useRef('');
 
@@ -21,13 +25,19 @@ export default function SettingsView({ onBack }: SettingsViewProps) {
       api.settings.getApiKey(),
       api.settings.getModel(),
       api.settings.getUnrestrictedMode(),
-    ]).then(([key, model, unrestricted]: [string, string, boolean]) => {
+      api.settings.getPolicyProfile(),
+      api.settings.getPerformanceStance(),
+      api.policy.list(),
+    ]).then(([key, model, unrestricted, policyProfile, stance, profiles]: [string, string, boolean, string, PerformanceStance, PolicyProfile[]]) => {
       if (key) {
         setApiKey(key);
         originalKeyRef.current = key;
       }
       if (model) setCurrentModel(model);
       setUnrestrictedMode(!!unrestricted);
+      setSelectedPolicyProfile(policyProfile || 'standard');
+      setPerformanceStance(stance || 'standard');
+      setPolicyProfiles(profiles || []);
       setLoaded(true);
     });
   }, []);
@@ -40,6 +50,8 @@ export default function SettingsView({ onBack }: SettingsViewProps) {
     await api.settings.setApiKey(apiKey);
     await api.settings.setModel(currentModel);
     await api.settings.setUnrestrictedMode(unrestrictedMode);
+    await api.settings.setPolicyProfile(selectedPolicyProfile);
+    await api.settings.setPerformanceStance(performanceStance);
     originalKeyRef.current = apiKey;
 
     setSaved(true);
@@ -129,6 +141,56 @@ export default function SettingsView({ onBack }: SettingsViewProps) {
                 </span>
               </div>
             </label>
+          </section>
+
+          <section className="flex flex-col gap-2">
+            <label className="text-xs font-medium text-text-secondary uppercase tracking-wider">Policy Profile</label>
+            <p className="text-2xs text-text-muted -mt-1">Controls when Clawdia allows, blocks, or pauses for approval before execution.</p>
+            <div className="flex flex-col gap-1">
+              {policyProfiles.map(profile => (
+                <label key={profile.id} className="flex items-start gap-3 px-3 py-2.5 rounded-xl hover:bg-white/[0.02] transition-colors cursor-pointer">
+                  <input
+                    type="radio"
+                    name="policy-profile"
+                    value={profile.id}
+                    checked={selectedPolicyProfile === profile.id}
+                    onChange={() => setSelectedPolicyProfile(profile.id)}
+                    className="mt-0.5 accent-white"
+                  />
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-sm text-text-primary">{profile.name}</span>
+                    <span className="text-2xs text-text-muted">{profile.rules.length} rules</span>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </section>
+
+          <section className="flex flex-col gap-2">
+            <label className="text-xs font-medium text-text-secondary uppercase tracking-wider">Performance Stance</label>
+            <p className="text-2xs text-text-muted -mt-1">Controls how aggressively Clawdia searches, batches, and pushes work forward by default.</p>
+            <div className="flex flex-col gap-1">
+              {[
+                { id: 'conservative', label: 'Conservative', desc: 'Smaller changes, tighter review, earlier pause points' },
+                { id: 'standard', label: 'Standard', desc: 'Balanced behavior for normal day-to-day work' },
+                { id: 'aggressive', label: 'Aggressive', desc: 'Broader search, bigger swings, less hand-holding' },
+              ].map(option => (
+                <label key={option.id} className="flex items-start gap-3 px-3 py-2.5 rounded-xl hover:bg-white/[0.02] transition-colors cursor-pointer">
+                  <input
+                    type="radio"
+                    name="performance-stance"
+                    value={option.id}
+                    checked={performanceStance === option.id}
+                    onChange={() => setPerformanceStance(option.id as PerformanceStance)}
+                    className="mt-0.5 accent-white"
+                  />
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-sm text-text-primary">{option.label}</span>
+                    <span className="text-2xs text-text-muted">{option.desc}</span>
+                  </div>
+                </label>
+              ))}
+            </div>
           </section>
 
           {/* Save */}

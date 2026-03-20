@@ -6,7 +6,7 @@ interface SidebarProps {
   activeView: View;
   onViewChange: (view: View) => void;
   onNewChat: () => void;
-  onLoadConversation: (conversationId: string) => void;
+  onLoadConversation: (conversationId: string, buffer?: Array<{ type: string; data: any }> | null) => void;
   onOpenProcess: (processId: string) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
@@ -55,11 +55,32 @@ function ApprovalIcon() {
   );
 }
 
+function HumanIcon() {
+  return (
+    <span className="relative flex h-[14px] w-[14px] items-center justify-center">
+      <span className="absolute inline-flex h-full w-full rounded-full border border-white/30 animate-ping opacity-70" />
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="relative text-text-primary">
+        <circle cx="8" cy="8" r="6" />
+        <path d="M8 4.8v3.6" />
+        <circle cx="8" cy="11.5" r="0.65" fill="currentColor" stroke="none" />
+      </svg>
+    </span>
+  );
+}
+
 function StatusIcon({ status }: { status: ProcessInfo['status'] }) {
   if (status === 'running') return <Spinner />;
   if (status === 'awaiting_approval') return <ApprovalIcon />;
+  if (status === 'needs_human') return <HumanIcon />;
   if (status === 'completed') return <Check />;
   return <XIcon />;
+}
+
+function profileLabel(profile?: ProcessInfo['agentProfile']): string | null {
+  if (profile === 'filesystem') return 'Filesystem';
+  if (profile === 'bloodhound') return 'Bloodhound';
+  if (profile === 'general') return 'General';
+  return null;
 }
 
 function timeAgo(ts: number): string {
@@ -176,9 +197,9 @@ export default function Sidebar({
   const handleProcessClick = async (proc: ProcessInfo) => {
     const api = (window as any).clawdia;
     if (!api) return;
-    if (proc.status === 'running') {
-      await api.process.attach(proc.id);
-      onLoadConversation(proc.conversationId);
+    if (proc.status === 'running' || proc.status === 'awaiting_approval' || proc.status === 'needs_human') {
+      const result = await api.process.attach(proc.id);
+      onLoadConversation(proc.conversationId, result?.buffer || null);
       return;
     }
     onOpenProcess(proc.id);
@@ -192,10 +213,11 @@ export default function Sidebar({
     setConversations(prev => prev.filter(c => c.id !== id));
   }, []);
 
-  const running = processes.filter(p => p.status === 'running' || p.status === 'awaiting_approval');
+  const running = processes.filter(p => p.status === 'running' || p.status === 'awaiting_approval' || p.status === 'needs_human');
   const done = processes.filter(p =>
     p.status !== 'running' &&
     p.status !== 'awaiting_approval' &&
+    p.status !== 'needs_human' &&
     (Date.now() - (p.completedAt || p.startedAt)) <= RECENT_COMPLETED_MAX_AGE_MS,
   );
   const recentCompletedConversationIds = new Set(done.map(p => p.conversationId));
@@ -270,15 +292,37 @@ export default function Sidebar({
           {filteredRunning.length > 0 ? (
             filteredRunning.map(proc => (
               <button key={proc.id} onClick={() => handleProcessClick(proc)}
-                className={`w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg text-left transition-all cursor-pointer ${proc.isAttached ? 'bg-accent/[0.08] border border-accent/[0.12]' : 'hover:bg-white/[0.04] border border-transparent'}`}>
+                className={`w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg text-left transition-all cursor-pointer ${
+                  proc.status === 'needs_human'
+                    ? 'border border-white/[0.18] bg-white/[0.05] shadow-[0_0_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(255,255,255,0.08)] animate-pulse'
+                    : proc.isAttached
+                      ? 'bg-accent/[0.08] border border-accent/[0.12]'
+                      : 'hover:bg-white/[0.04] border border-transparent'
+                }`}>
                 <div className="mt-0.5 flex-shrink-0"><StatusIcon status={proc.status} /></div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-1">
                     <span className="text-[13px] text-text-primary truncate font-medium">{proc.summary.slice(0, 28)}</span>
                     <span className="text-[11px] text-text-secondary/60 flex-shrink-0">{timeAgo(proc.startedAt)}</span>
                   </div>
+                  {(profileLabel(proc.agentProfile) || proc.lastSpecializedTool) && (
+                    <div className="flex items-center gap-1.5 mt-1">
+                      {profileLabel(proc.agentProfile) && (
+                        <span className="px-1.5 py-0.5 rounded bg-white/[0.05] text-[10px] uppercase tracking-wide text-text-secondary">
+                          {profileLabel(proc.agentProfile)}
+                        </span>
+                      )}
+                      {proc.lastSpecializedTool && (
+                        <span className="text-[10px] text-text-secondary/70 truncate">
+                          {proc.lastSpecializedTool}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   <div className="text-[12px] text-text-secondary mt-0.5 truncate">
-                    {proc.status === 'awaiting_approval'
+                    {proc.status === 'needs_human'
+                      ? 'Needs your attention'
+                      : proc.status === 'awaiting_approval'
                       ? 'Waiting for approval'
                       : proc.toolCallCount > 0
                         ? `${proc.toolCallCount} tool${proc.toolCallCount !== 1 ? 's' : ''} used...`
@@ -310,6 +354,20 @@ export default function Sidebar({
                     <span className="text-[13px] text-text-primary/70 truncate">{proc.summary.slice(0, 28)}</span>
                     <span className="text-[11px] text-text-secondary/60 flex-shrink-0">{timeAgo(proc.startedAt)}</span>
                   </div>
+                  {(profileLabel(proc.agentProfile) || proc.lastSpecializedTool) && (
+                    <div className="flex items-center gap-1.5 mt-1">
+                      {profileLabel(proc.agentProfile) && (
+                        <span className="px-1.5 py-0.5 rounded bg-white/[0.05] text-[10px] uppercase tracking-wide text-text-secondary">
+                          {profileLabel(proc.agentProfile)}
+                        </span>
+                      )}
+                      {proc.lastSpecializedTool && (
+                        <span className="text-[10px] text-text-secondary/70 truncate">
+                          {proc.lastSpecializedTool}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   <div className="text-[12px] text-text-secondary mt-0.5 truncate">
                     {proc.status === 'completed' ? `Done · ${proc.toolCallCount} tools`
                       : proc.status === 'failed' ? `Failed: ${proc.error?.slice(0, 20) || 'error'}`
@@ -346,10 +404,18 @@ export default function Sidebar({
 
             <div className="px-1.5 pb-1">
               {visibleConvs.map(conv => (
-                <button
+                <div
                   key={conv.id}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => onLoadConversation(conv.id)}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-white/[0.04] transition-all cursor-pointer group"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      onLoadConversation(conv.id);
+                    }
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-white/[0.04] focus:bg-white/[0.04] transition-all cursor-pointer group outline-none"
                 >
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="text-text-secondary/40 flex-shrink-0">
                     <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
@@ -368,7 +434,7 @@ export default function Sidebar({
                       <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
                     </svg>
                   </button>
-                </button>
+                </div>
               ))}
 
               {/* Show more / less chevron */}

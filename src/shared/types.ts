@@ -43,10 +43,12 @@ export interface BrowserTab {
   active: boolean;
 }
 
+export type AgentProfile = 'general' | 'filesystem' | 'bloodhound';
+
 export interface ProcessInfo {
   id: string;
   conversationId: string;
-  status: 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled';
+  status: 'running' | 'awaiting_approval' | 'needs_human' | 'completed' | 'failed' | 'cancelled';
   summary: string;
   startedAt: number;
   completedAt?: number;
@@ -54,9 +56,11 @@ export interface ProcessInfo {
   error?: string;
   isAttached: boolean;
   wasDetached: boolean;
+  agentProfile?: AgentProfile;
+  lastSpecializedTool?: string;
 }
 
-export type RunStatus = 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled';
+export type RunStatus = 'running' | 'awaiting_approval' | 'needs_human' | 'completed' | 'failed' | 'cancelled';
 
 export interface RunSummary {
   id: string;
@@ -104,6 +108,44 @@ export interface RunApproval {
   request: Record<string, any>;
   createdAt: string;
   resolvedAt?: string;
+}
+
+export interface RunHumanIntervention {
+  id: number;
+  runId: string;
+  status: 'pending' | 'resolved' | 'dismissed';
+  interventionType: 'password' | 'otp' | 'captcha' | 'native_dialog' | 'site_confirmation' | 'conflict_resolution' | 'manual_takeover' | 'unknown';
+  target?: string;
+  summary: string;
+  instructions?: string;
+  request: Record<string, any>;
+  createdAt: string;
+  resolvedAt?: string;
+}
+
+export type BrowserExecutionMode = 'headed' | 'headless' | 'persistent_session';
+export type PerformanceStance = 'conservative' | 'standard' | 'aggressive';
+
+export interface PolicyRule {
+  id: string;
+  enabled: boolean;
+  match: {
+    toolNames?: string[];
+    commandPatterns?: string[];
+    pathPrefixes?: string[];
+  };
+  effect: 'allow' | 'deny' | 'require_approval';
+  reason: string;
+}
+
+export interface PolicyProfile {
+  id: string;
+  name: string;
+  scopeType: 'global' | 'workspace' | 'task_type';
+  scopeValue?: string;
+  rules: PolicyRule[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ChatSendResult {
