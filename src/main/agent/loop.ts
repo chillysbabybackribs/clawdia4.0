@@ -24,12 +24,13 @@ import { fireNestedCancel } from './loop-cancel';
 import { runPreLLMSetup } from './loop-setup';
 import { dispatchTools, type DispatchContext } from './loop-dispatch';
 import { verifyFileOutcomes, runRecoveryIteration, logVerificationSummary } from './loop-recovery';
+import { createExecutionPlan, requireExecutionPlanApproval, shouldCreateExecutionPlan } from './workflow';
 import { cancelPendingApprovals } from './approval-manager';
 import { cancelPendingHumanInterventions } from './human-intervention-manager';
 import { appendRunEvent } from '../db/run-events';
 import { getSelectedPerformanceStance, getUnrestrictedMode } from '../store';
 import type { AgentProfile, PerformanceStance, ProviderId } from '../../shared/types';
-import { setProcessAgentProfile } from './process-manager';
+import { setProcessAgentProfile, setProcessExecutionInfo, setProcessWorkflowStage } from './process-manager';
 import { getCurrentUrl } from '../browser/manager';
 import { calendarList } from '../db/calendar';
 
@@ -148,6 +149,9 @@ export interface LoopOptions {
   onThinking?: (thought: string) => void;
   onToolActivity?: (activity: { name: string; status: string; detail?: string }) => void;
   onToolStream?: (payload: { toolId: string; toolName: string; chunk: string }) => void;
+  onWorkflowPlanReset?: () => void;
+  onWorkflowPlanText?: (text: string) => void;
+  onWorkflowPlanEnd?: () => void;
   onStreamEnd?: () => void;
   onPaused?: () => void;
   onResumed?: () => void;
@@ -177,6 +181,11 @@ function estimateTokens(msg: NormalizedMessage): number {
   return 50;
 }
 
+function hasOnlyToolResults(msg: NormalizedMessage): boolean {
+  if (!Array.isArray(msg.content)) return false;
+  return (msg.content as any[]).every((b: any) => b.type === 'tool_result');
+}
+
 function trimHistory(history: NormalizedMessage[]): NormalizedMessage[] {
   let trimmed = history.length > MAX_HISTORY_TURNS
     ? history.slice(-MAX_HISTORY_TURNS) : [...history];
@@ -185,7 +194,21 @@ function trimHistory(history: NormalizedMessage[]): NormalizedMessage[] {
     const dropped = trimmed.shift()!;
     totalTokens -= estimateTokens(dropped);
   }
+  // Drop any leading assistant turn — history must start with user
   if (trimmed.length > 0 && trimmed[0].role === 'assistant') trimmed.shift();
+  // Drop any leading user turns that are purely tool_results — their paired
+  // assistant tool_use blocks were already trimmed off, leaving orphaned IDs that
+  // Anthropic and OpenAI will reject. Repeat in case removing one exposes another.
+  // Uses .every() not .some() — mixed text+tool_result messages are preserved.
+  while (trimmed.length > 0 && trimmed[0].role === 'user' && hasOnlyToolResults(trimmed[0])) {
+    totalTokens -= estimateTokens(trimmed[0]);
+    trimmed.shift();
+    // The orphaned tool_result's assistant is now at the front — drop it too
+    if (trimmed.length > 0 && trimmed[0].role === 'assistant') {
+      totalTokens -= estimateTokens(trimmed[0]);
+      trimmed.shift();
+    }
+  }
   const droppedCount = history.length - trimmed.length;
   if (droppedCount > 0) {
     console.log(`[Agent] History trimmed: kept ${trimmed.length} of ${history.length} messages (~${Math.round(totalTokens / 1000)}K tokens)`);
@@ -227,6 +250,7 @@ export async function runAgentLoop(
   }
 
   const modelId = pickModel(options.provider, profile.model, options.model, profile.isGreeting);
+  if (runId) setProcessExecutionInfo(runId, options.provider, modelId);
   const defaultPerformanceStance = getSelectedPerformanceStance();
   const initialPerformanceDirective = detectPerformanceStanceDirective(userMessage);
   control.performanceStance = initialPerformanceDirective || defaultPerformanceStance;
@@ -249,6 +273,8 @@ export async function runAgentLoop(
 
   const client = createProviderClient(options.provider, apiKey, modelId);
   const staticPrompt = buildStaticPrompt(profile.toolGroup, profile.promptModules);
+
+  if (runId) setProcessWorkflowStage(runId, 'starting');
 
   // ── Pre-LLM Setup (extracted to loop-setup.ts) ──
   const setup = await runPreLLMSetup(userMessage, profile, apiKey, options.provider, options.onProgress);
@@ -330,6 +356,75 @@ export async function runAgentLoop(
     isGreeting: profile.isGreeting,
     performanceStance: control.performanceStance,
   });
+
+  if (shouldCreateExecutionPlan(userMessage, profile)) {
+    let executionPlanText: string | null = null;
+    let planRevisionRound = 0;
+
+    while (true) {
+      if (runId) setProcessWorkflowStage(runId, 'planning');
+      if (runId) {
+        appendRunEvent(runId, {
+          kind: 'workflow_stage_changed',
+          phase: 'planning',
+          payload: { workflowStage: 'planning', revisionRound: planRevisionRound },
+        });
+      }
+      options.onWorkflowPlanReset?.();
+      onThinking?.(planRevisionRound > 0 ? 'Drafting revised execution plan...' : 'Drafting execution plan...');
+      executionPlanText = await createExecutionPlan({
+        client,
+        runId,
+        userMessage,
+        staticPrompt,
+        dynamicPrompt,
+        performanceStance: control.performanceStance,
+        onText: (chunk) => options.onWorkflowPlanText?.(chunk),
+        signal: control.abortController.signal,
+        ...(planRevisionRound > 0 && executionPlanText
+          ? { revisionContext: { previousPlan: executionPlanText, round: planRevisionRound } }
+          : {}),
+      });
+      options.onWorkflowPlanEnd?.();
+      onThinking?.('');
+
+      if (!runId || !executionPlanText) break;
+
+      const decision = await requireExecutionPlanApproval({
+        runId,
+        plan: executionPlanText,
+      });
+      if (decision === 'approved') break;
+      if (decision === 'revise') {
+        planRevisionRound += 1;
+        appendRunEvent(runId, {
+          kind: 'workflow_plan_revised',
+          phase: 'planning',
+          payload: { revisionRound: planRevisionRound },
+        });
+        continue;
+      }
+      appendRunEvent(runId, {
+        kind: 'workflow_plan_denied',
+        phase: 'planning',
+        payload: { workflowStage: 'planning' },
+      });
+      onStreamEnd?.();
+      return {
+        response: 'Execution stopped because the plan approval was denied.',
+        toolCalls: [],
+      };
+    }
+  }
+
+  if (runId) setProcessWorkflowStage(runId, 'executing');
+  if (runId) {
+    appendRunEvent(runId, {
+      kind: 'workflow_stage_changed',
+      phase: 'execution',
+      payload: { workflowStage: 'executing' },
+    });
+  }
 
   // ── Prepare tools ──
   let tools = getToolsForGroup(profile.toolGroup);
@@ -573,6 +668,14 @@ export async function runAgentLoop(
 
   // ── Post-loop verification + recovery (extracted to loop-recovery.ts) ──
   if (finalText && !finalText.startsWith('[Cancelled') && !profile.isGreeting && dispatchCtx.allToolCalls.length > 0) {
+    if (runId) setProcessWorkflowStage(runId, 'reviewing');
+    if (runId) {
+      appendRunEvent(runId, {
+        kind: 'workflow_stage_changed',
+        phase: 'review',
+        payload: { workflowStage: 'reviewing' },
+      });
+    }
     const issue = verifyFileOutcomes(finalText, dispatchCtx.allToolCalls);
     if (issue) {
       if (runId) {
@@ -605,11 +708,20 @@ export async function runAgentLoop(
     }
   }
 
+  if (runId) setProcessWorkflowStage(runId, 'completed');
+  if (runId) {
+    appendRunEvent(runId, {
+      kind: 'workflow_stage_changed',
+      phase: 'lifecycle',
+      payload: { workflowStage: 'completed' },
+    });
+  }
+
   // ── Background memory extraction ──
   if (!profile.isGreeting && finalText.length > 50 && userMessage.length > 20) {
     try {
       const { extractMemoryInBackground } = await import('./memory-extractor');
-      extractMemoryInBackground(apiKey, userMessage, finalText);
+      extractMemoryInBackground(options.provider, apiKey, userMessage, finalText);
     } catch { /* non-fatal */ }
   }
 
