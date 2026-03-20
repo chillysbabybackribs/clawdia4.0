@@ -1,5 +1,6 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
 import { EXTRACTOR_SENTINEL_RE, parseExtractorSentinels, runYtdlpPipeline, checkYtdlpInstalled } from '../../src/main/agent/loop-ytdlp';
+import * as loopYtdlp from '../../src/main/agent/loop-ytdlp';
 
 // Mock the factory so we can inject a controlled ProviderClient
 vi.mock('../../src/main/agent/provider/factory', () => ({
@@ -42,6 +43,11 @@ describe('loop-ytdlp helpers', () => {
 
 describe('runYtdlpPipeline', () => {
   const fakeClient = { provider: 'anthropic' as const, supportsHarnessGeneration: true, setModel: vi.fn(), getModel: vi.fn(), chat: vi.fn() };
+
+  beforeEach(() => {
+    // Bypass yt-dlp pre-flight so tests are not coupled to the host environment
+    vi.spyOn(loopYtdlp, 'checkYtdlpInstalled').mockResolvedValue(true);
+  });
 
   test('returns success:false with no files when agent responds with no tool calls and no sentinels', async () => {
     vi.mocked(createProviderClient).mockReturnValue({
