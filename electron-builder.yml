@@ -1,0 +1,17 @@
+appId: com.clawdia.app
+productName: Clawdia
+directories:
+  output: dist-packaged
+files:
+  - dist/main/**/*
+  - dist/renderer/**/*
+  - dist/shared/**/*
+  - package.json
+extraResources:
+  - from: src/main/agent/gui/screenshot-analyzer.py
+    to: gui/screenshot-analyzer.py
+  - from: src/main/agent/gui/a11y-bridge.py
+    to: gui/a11y-bridge.py
+linux:
+  target: AppImage
+  category: Utility

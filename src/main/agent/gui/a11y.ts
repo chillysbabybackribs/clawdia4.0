@@ -50,10 +50,13 @@ export async function isA11yAvailable(): Promise<boolean> {
 
 /** Resolve path to a11y-bridge.py (works in dev + dist). */
 function getBridgePath(): string {
+  if (process.resourcesPath) {
+    const resourcePath = path.join(process.resourcesPath, 'gui', 'a11y-bridge.py');
+    if (fs.existsSync(resourcePath)) return resourcePath;
+  }
   const projectRoot = path.join(__dirname, '..', '..', '..', '..');
   const srcPath = path.join(projectRoot, 'src', 'main', 'agent', 'gui', 'a11y-bridge.py');
   if (fs.existsSync(srcPath)) return srcPath;
-  // Fallback for dist
   return path.join(__dirname, '..', 'gui', 'a11y-bridge.py');
 }
 

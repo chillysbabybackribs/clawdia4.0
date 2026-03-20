@@ -27,6 +27,7 @@
 
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
@@ -106,20 +107,17 @@ function wait(ms: number): Promise<void> {
 
 /** Resolve path to screenshot-analyzer.py (works in dev + dist). */
 function getAnalyzerPath(): string {
-  // __dirname at runtime is dist/main/agent/executors
-  // The .py file lives in src/main/agent/gui/ (not compiled to dist)
-  // Go up 4 levels from dist/main/agent/executors → project root, then into src
+  // Packaged build: .py files are copied alongside the app via electron-builder extraResources
+  if (process.resourcesPath) {
+    const resourcePath = path.join(process.resourcesPath, 'gui', 'screenshot-analyzer.py');
+    if (fs.existsSync(resourcePath)) return resourcePath;
+  }
+  // Dev: __dirname is dist/main/agent/executors — traverse up to project root, then into src
   const projectRoot = path.join(__dirname, '..', '..', '..', '..');
   const srcPath = path.join(projectRoot, 'src', 'main', 'agent', 'gui', 'screenshot-analyzer.py');
-
-  try {
-    require('fs').accessSync(srcPath);
-    return srcPath;
-  } catch {
-    // Fallback: maybe it was copied alongside dist during packaging
-    const distPath = path.join(__dirname, '..', 'gui', 'screenshot-analyzer.py');
-    return distPath;
-  }
+  if (fs.existsSync(srcPath)) return srcPath;
+  // Final fallback alongside dist
+  return path.join(__dirname, '..', 'gui', 'screenshot-analyzer.py');
 }
 
 /** Run the screenshot analyzer and return parsed JSON or null. */
