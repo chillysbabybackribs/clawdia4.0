@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'fs';
 
 vi.mock('fs', async (importOriginal) => {
@@ -9,6 +9,8 @@ vi.mock('fs', async (importOriginal) => {
 import { verifyFileOutcomes } from '../../src/main/agent/loop-recovery';
 
 describe('verifyFileOutcomes()', () => {
+  beforeEach(() => vi.resetAllMocks());
+
   it('returns null when no file tools were called', () => {
     const result = verifyFileOutcomes('Task complete.', [
       { name: 'shell_exec', status: 'success' },
