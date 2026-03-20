@@ -50,6 +50,8 @@ import {
   createTab, switchTab, closeTab, getTabList,
   matchUrlHistory,
 } from './browser/manager';
+import { startCalendarWatcher, stopCalendarWatcher } from './calendar-watcher';
+import { calendarList } from './db/calendar';
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
@@ -105,6 +107,7 @@ function createWindow(): void {
     if (mainWindow) {
       initBrowser(mainWindow);
       initProcessManager(mainWindow);
+      startCalendarWatcher(mainWindow);
     }
   });
 
@@ -125,6 +128,10 @@ app.on('second-instance', () => {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
   }
+});
+
+app.on('will-quit', () => {
+  stopCalendarWatcher();
 });
 
 function setupIpcHandlers(): void {
@@ -361,6 +368,9 @@ function setupIpcHandlers(): void {
     return { ok: !!intervention, intervention };
   });
   ipcMain.handle(IPC.POLICY_LIST, async () => listPolicyProfiles());
+  ipcMain.handle(IPC.CALENDAR_LIST, (_event, from?: string, to?: string) => {
+    return calendarList(from && to ? { from, to } : {});
+  });
 
   // ── Browser URL autocomplete ──
   ipcMain.handle(IPC.BROWSER_HISTORY_MATCH, async (_e, prefix: string) => matchUrlHistory(prefix));
