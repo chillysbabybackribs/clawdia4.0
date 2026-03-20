@@ -34,6 +34,10 @@ import { promisify } from 'util';
 
 const execAsync = promisify(exec);
 
+// One-time warning flags — prevent repeating the same notice every desktop task
+let _degradedWarningEmitted = false;
+let _nonAnthropicHarnessWarningEmitted = false;
+
 async function cmdExists(cmd: string): Promise<boolean> {
   const safeCmd = cmd.replace(/[^a-z0-9-]/gi, '');
   if (!safeCmd) return false;
@@ -154,7 +158,8 @@ export async function runPreLLMSetup(
               onProgress?.(`Harness generation failed — falling back to available surfaces.`);
             }
           }
-        } else if (appAvailable && provider !== 'anthropic') {
+        } else if (appAvailable && provider !== 'anthropic' && !_nonAnthropicHarnessWarningEmitted) {
+          _nonAnthropicHarnessWarningEmitted = true;
           onProgress?.(`Skipping automatic CLI harness generation for ${targetApp} because the current nested harness pipeline is Anthropic-only.`);
         }
         // Note: clearNestedCancel() not needed here — registerNestedCancel was never called
@@ -208,7 +213,8 @@ export async function runPreLLMSetup(
       // AT-SPI only flagged when xdotool is also missing (xdotool is the primary fallback)
       if (!caps.a11y && !caps.xdotool) missing.push('AT-SPI (install: sudo apt install gir1.2-atspi-2.0)');
 
-      if (missing.length > 0) {
+      if (missing.length > 0 && !_degradedWarningEmitted) {
+        _degradedWarningEmitted = true;
         const notice = `[Desktop] Running in degraded mode — missing: ${missing.join(', ')}. Some desktop automation capabilities are reduced.`;
         console.warn(notice);
         onProgress?.(notice);
