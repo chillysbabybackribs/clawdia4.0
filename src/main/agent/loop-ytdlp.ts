@@ -117,11 +117,11 @@ export async function runYtdlpPipeline(
   for (let iteration = 0; iteration < EXTRACTOR_MAX_ITERATIONS; iteration++) {
     if (abortController.signal.aborted) {
       onProgress('[Extractor] Download cancelled.');
-      return { success: files.length > 0, files, reason: 'cancelled' };
+      return { success: false, files, reason: 'cancelled' };
     }
     if (Date.now() - startMs > EXTRACTOR_MAX_MS) {
       onProgress('[Extractor] Download timed out after 10 minutes.');
-      return { success: files.length > 0, files, reason: 'timeout' };
+      return { success: false, files, reason: 'timed out' };
     }
 
     let response: Awaited<ReturnType<typeof ytdlpClient.chat>>;
@@ -138,7 +138,7 @@ export async function runYtdlpPipeline(
       );
     } catch (err: any) {
       if (abortController.signal.aborted) {
-        return { success: files.length > 0, files, reason: 'cancelled' };
+        return { success: false, files, reason: 'cancelled' };
       }
       console.error(`[Extractor] LLM error at iteration ${iteration}:`, err.message);
       return { success: files.length > 0, files, reason: `LLM error: ${err.message}` };
