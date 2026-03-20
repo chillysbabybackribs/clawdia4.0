@@ -18,6 +18,7 @@ export interface TaskProfile {
 }
 
 const GREETING_RE = /^(hi|hello|hey|yo|sup|good morning|good afternoon|good evening)[!?.,]?\s*$/i;
+const YTDLP_RE = /\b(download|grab|save|extract|rip)\b.*(video|clip|audio|youtube|youtu\.be|vimeo|twitch|reel|short)|youtu\.be\/|youtube\.com\/watch|vimeo\.com\/\d/i;
 const BLOODHOUND_RE = /\bbloodhound\b|executor designer|build (?:an |a )?executor|design (?:an |a )?executor|automate (?:this|that|the)\b|figure out how to automate|learn (?:this|that|the) (?:site|app|workflow)|create (?:an |a )?(?:playbook|workflow automation)/i;
 
 const BROWSER_RE = /https?:\/\/|search\b|look\s?up|google|browse|find online|navigate to|go to .*(site|page|url)|open.*website|check.*site|what.*price|how much.*cost|latest news|github|gitlab|linkedin|reddit|pull requests?|notifications?|inbox|messages?|saved posts?|review requests?/i;
@@ -44,6 +45,12 @@ export function classify(message: string): TaskProfile {
   // Rule 0: Greetings
   if (GREETING_RE.test(trimmed)) {
     return { agentProfile: 'general', toolGroup: 'core', promptModules: modules, model: 'haiku', isGreeting: true };
+  }
+
+  // Rule: ytdlp — clear download/video intent
+  if (YTDLP_RE.test(trimmed)) {
+    modules.add('browser');
+    return { agentProfile: 'ytdlp', toolGroup: 'browser', promptModules: modules, model: 'sonnet', isGreeting: false };
   }
 
   // Collect all matching modules
