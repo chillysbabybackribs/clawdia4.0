@@ -5,6 +5,7 @@ const SLASH_PROFILE_MAP: Record<string, AgentProfile> = {
   '/filesystem-agent': 'filesystem',
   '/general-agent': 'general',
   '/bloodhound': 'bloodhound',
+  '/extractor': 'ytdlp',
 };
 
 export function parseManualAgentProfileOverride(message: string): {
@@ -55,6 +56,19 @@ export function applyAgentProfileOverride(
       toolGroup: baseProfile.toolGroup === 'core' ? 'browser' : baseProfile.toolGroup,
       promptModules,
       model: 'sonnet',
+      isGreeting: false,
+    };
+  }
+
+  if (forcedAgentProfile === 'ytdlp') {
+    promptModules.add('browser');
+    promptModules.delete('filesystem');
+    promptModules.delete('bloodhound');
+    return {
+      ...baseProfile,
+      agentProfile: 'ytdlp',
+      toolGroup: 'browser',
+      promptModules,
       isGreeting: false,
     };
   }
