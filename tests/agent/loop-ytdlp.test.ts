@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest';
-import { EXTRACTOR_SENTINEL_RE, parseExtractorSentinels, runYtdlpPipeline } from '../../src/main/agent/loop-ytdlp';
+import { EXTRACTOR_SENTINEL_RE, parseExtractorSentinels, runYtdlpPipeline, checkYtdlpInstalled } from '../../src/main/agent/loop-ytdlp';
 
 // Mock the factory so we can inject a controlled ProviderClient
 vi.mock('../../src/main/agent/provider/factory', () => ({
@@ -98,5 +98,17 @@ describe('runYtdlpPipeline', () => {
 
     expect(result.success).toBe(false);
     expect(result.reason).toBe('cancelled');
+  });
+});
+
+describe('checkYtdlpInstalled', () => {
+  test('returns false when exec throws', async () => {
+    const result = await checkYtdlpInstalled(() => Promise.reject(new Error('not found')));
+    expect(result).toBe(false);
+  });
+
+  test('returns true when exec resolves', async () => {
+    const result = await checkYtdlpInstalled(() => Promise.resolve('/usr/bin/yt-dlp'));
+    expect(result).toBe(true);
   });
 });

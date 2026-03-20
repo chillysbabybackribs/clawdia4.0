@@ -42,6 +42,26 @@ export function parseExtractorSentinels(text: string): string[] {
   return paths;
 }
 
+/** Exported for testing — checks that yt-dlp is available on PATH. */
+export async function checkYtdlpInstalled(
+  exec: (cmd: string) => Promise<string> = defaultExec,
+): Promise<boolean> {
+  try {
+    await exec('which yt-dlp');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function defaultExec(cmd: string): Promise<string> {
+  const { exec } = await import('child_process');
+  const { promisify } = await import('util');
+  const execAsync = promisify(exec);
+  const { stdout } = await execAsync(cmd, { timeout: 5000 });
+  return stdout.trim();
+}
+
 export interface YtdlpPipelineOptions {
   client: ProviderClient;          // only .provider is read — never mutated
   apiKey: string;
@@ -86,6 +106,13 @@ export async function runYtdlpPipeline(
   options: YtdlpPipelineOptions,
 ): Promise<YtdlpResult> {
   const { client, apiKey, onProgress, onRegisterCancel } = options;
+
+  // Pre-flight: verify yt-dlp is installed
+  const ytdlpInstalled = await checkYtdlpInstalled();
+  if (!ytdlpInstalled) {
+    onProgress('[Extractor] yt-dlp is not installed. Install it with: pip install yt-dlp (or: sudo apt install yt-dlp)');
+    return { success: false, files: [], reason: 'yt-dlp not installed' };
+  }
 
   // Create a fresh client using the same provider — never mutate the passed-in client
   const modelId = resolveModelForProvider(client.provider, 'sonnet');
