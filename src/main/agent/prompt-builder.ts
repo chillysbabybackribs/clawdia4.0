@@ -67,6 +67,7 @@ export function buildDynamicPrompt(opts: {
   executionConstraint?: string;
   shortcutContext?: string;
   guiStateContext?: string;
+  calendarContext?: string;
   isGreeting?: boolean;
   performanceStance?: PerformanceStance;
 }): string {
@@ -129,6 +130,8 @@ export function buildDynamicPrompt(opts: {
   if (opts.playbookContext) lines.push('', opts.playbookContext);
 
   if (opts.browserUrl) lines.push(`BROWSER: ${opts.browserUrl}`);
+
+  if (opts.calendarContext) lines.push('', opts.calendarContext);
 
   if (opts.isGreeting) {
     lines.push('', 'The user sent a greeting. Reply in one sentence — acknowledge and ask what they need.');

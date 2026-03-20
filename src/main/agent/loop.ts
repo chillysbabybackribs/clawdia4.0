@@ -10,14 +10,13 @@
  *   loop.ts          — This file: orchestrator that ties everything together
  */
 
-import type Anthropic from '@anthropic-ai/sdk';
 import type { BrowserWindow } from 'electron';
 import { classify, type TaskProfile, type ToolGroup } from './classifier';
 import { applyAgentProfileOverride } from './agent-profile-override';
 import { isFilesystemQuoteLookupTask } from './filesystem-agent-routing';
 import { buildStaticPrompt, buildDynamicPrompt } from './prompt-builder';
 import { getToolsForGroup, filterTools } from './tool-builder';
-import { AnthropicClient, resolveModelId, type LLMResponse } from './client';
+import { createProviderClient, resolveModelForProvider, type LLMResponse, type NormalizedMessage, type NormalizedTextBlock, type NormalizedToolUseBlock } from './client';
 import { seedRegistry, type ExecutionPlan } from '../db/app-registry';
 import { savePlaybook, validatePlaybookCandidate, writeBloodhoundExecutorArtifacts, executeSavedBloodhoundPlaybook } from '../db/browser-playbooks';
 import { type VerificationResult } from './verification';
@@ -29,9 +28,10 @@ import { cancelPendingApprovals } from './approval-manager';
 import { cancelPendingHumanInterventions } from './human-intervention-manager';
 import { appendRunEvent } from '../db/run-events';
 import { getSelectedPerformanceStance, getUnrestrictedMode } from '../store';
-import type { AgentProfile, PerformanceStance } from '../../shared/types';
+import type { AgentProfile, PerformanceStance, ProviderId } from '../../shared/types';
 import { setProcessAgentProfile } from './process-manager';
 import { getCurrentUrl } from '../browser/manager';
+import { calendarList } from '../db/calendar';
 
 const MAX_ITERATIONS = 50;
 const MAX_WALL_MS = 10 * 60 * 1000;
@@ -140,6 +140,7 @@ function detectPerformanceStanceDirective(text: string): PerformanceStance | nul
 
 export interface LoopOptions {
   runId?: string;
+  provider: ProviderId;
   forcedAgentProfile?: AgentProfile;
   apiKey: string;
   model?: string;
@@ -154,14 +155,14 @@ export interface LoopOptions {
   window?: BrowserWindow;
 }
 
-function pickModel(classifierModel: string, storedModel?: string, isGreeting?: boolean): string {
-  if (isGreeting) return resolveModelId('haiku');
-  if (classifierModel === 'opus') return resolveModelId('opus');
-  if (storedModel) return storedModel;
-  return resolveModelId(classifierModel);
+function pickModel(provider: ProviderId, classifierModel: string, storedModel?: string, isGreeting?: boolean): string {
+  if (isGreeting) return resolveModelForProvider(provider, 'haiku');
+  if (classifierModel === 'opus') return resolveModelForProvider(provider, 'opus');
+  if (storedModel) return resolveModelForProvider(provider, storedModel);
+  return resolveModelForProvider(provider, classifierModel);
 }
 
-function estimateTokens(msg: Anthropic.MessageParam): number {
+function estimateTokens(msg: NormalizedMessage): number {
   if (typeof msg.content === 'string') return Math.ceil(msg.content.length / 4);
   if (Array.isArray(msg.content)) {
     let total = 0;
@@ -176,7 +177,7 @@ function estimateTokens(msg: Anthropic.MessageParam): number {
   return 50;
 }
 
-function trimHistory(history: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+function trimHistory(history: NormalizedMessage[]): NormalizedMessage[] {
   let trimmed = history.length > MAX_HISTORY_TURNS
     ? history.slice(-MAX_HISTORY_TURNS) : [...history];
   let totalTokens = trimmed.reduce((sum, m) => sum + estimateTokens(m), 0);
@@ -198,7 +199,7 @@ function trimHistory(history: Anthropic.MessageParam[]): Anthropic.MessageParam[
 
 export async function runAgentLoop(
   userMessage: string,
-  history: Anthropic.MessageParam[],
+  history: NormalizedMessage[],
   options: LoopOptions,
 ): Promise<{ response: string; toolCalls: { name: string; status: string; detail?: string }[] }> {
   const { apiKey, onStreamText, onThinking, onToolActivity, onToolStream, onStreamEnd, runId } = options;
@@ -225,7 +226,7 @@ export async function runAgentLoop(
     setProcessAgentProfile(runId, profile.agentProfile);
   }
 
-  const modelId = pickModel(profile.model, options.model, profile.isGreeting);
+  const modelId = pickModel(options.provider, profile.model, options.model, profile.isGreeting);
   const defaultPerformanceStance = getSelectedPerformanceStance();
   const initialPerformanceDirective = detectPerformanceStanceDirective(userMessage);
   control.performanceStance = initialPerformanceDirective || defaultPerformanceStance;
@@ -246,11 +247,11 @@ export async function runAgentLoop(
     });
   }
 
-  const client = new AnthropicClient(apiKey, modelId);
+  const client = createProviderClient(options.provider, apiKey, modelId);
   const staticPrompt = buildStaticPrompt(profile.toolGroup, profile.promptModules);
 
   // ── Pre-LLM Setup (extracted to loop-setup.ts) ──
-  const setup = await runPreLLMSetup(userMessage, profile, apiKey, options.onProgress);
+  const setup = await runPreLLMSetup(userMessage, profile, apiKey, options.provider, options.onProgress);
   const { executionPlan } = setup;
   if (runId) {
     appendRunEvent(runId, {
@@ -297,10 +298,27 @@ export async function runAgentLoop(
   }
 
   // ── Build dynamic prompt ──
+  const calendarContext = (() => {
+    try {
+      const todayEvents = calendarList({});  // reads from calendar.sqlite directly — no subprocess
+      const now = new Date();
+      const weekday = now.toLocaleDateString([], { weekday: 'long' });
+      const dateStr = now.toISOString().slice(0, 10);
+      if (!todayEvents.length) return `Today is ${weekday} ${dateStr}. No events scheduled.`;
+      const lines = todayEvents.map(e => {
+        const time = e.start_time ? `${e.start_time}` : 'All day';
+        const dur = e.duration ? ` (${e.duration} min)` : '';
+        return `  - ${time}  ${e.title}${dur}`;
+      });
+      return `Today is ${weekday} ${dateStr}. Your schedule:\n${lines.join('\n')}`;
+    } catch { return ''; }
+  })();
+
   const dynamicPrompt = buildDynamicPrompt({
     agentProfile: profile.agentProfile,
     model: modelId,
     toolGroup: profile.toolGroup,
+    calendarContext: calendarContext || undefined,
     memoryContext: setup.memoryContext,
     recallContext: setup.recallContext,
     siteContext: setup.siteContext,
@@ -325,7 +343,7 @@ export async function runAgentLoop(
 
   // ── Prepare message history ──
   const trimmedHistory = trimHistory(history);
-  const messages: Anthropic.MessageParam[] = [...trimmedHistory, { role: 'user', content: userMessage }];
+  const messages: NormalizedMessage[] = [...trimmedHistory, { role: 'user', content: userMessage }];
 
   // ── Dispatch context (mutable, shared with loop-dispatch) ──
   const dispatchCtx: DispatchContext = {
@@ -496,8 +514,8 @@ export async function runAgentLoop(
 
     onThinking?.('');
 
-    const textBlocks = response.content.filter((b): b is Anthropic.TextBlock => b.type === 'text');
-    const toolUseBlocks = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
+    const textBlocks = response.content.filter((b): b is NormalizedTextBlock => b.type === 'text');
+    const toolUseBlocks = response.content.filter((b): b is NormalizedToolUseBlock => b.type === 'tool_use');
     const responseText = textBlocks.map(b => b.text).join('');
 
     // ── No tools → check for narration/denial or return ──
