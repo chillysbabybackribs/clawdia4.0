@@ -2,7 +2,7 @@
  * Clawdia 4.0 — Main Process
  */
 
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, clipboard } from 'electron';
 import * as path from 'path';
 import { IPC, IPC_EVENTS } from '../shared/ipc-channels';
 import { runAgentLoop, cancelLoop, pauseLoop, resumeLoop, addContext } from './agent/loop';
@@ -15,13 +15,18 @@ import {
 import { approveRunApproval, denyRunApproval, listApprovalsForRun } from './agent/approval-manager';
 import { listHumanInterventionsForRun, resolveHumanIntervention } from './agent/human-intervention-manager';
 import { listPolicyProfiles, seedPolicyProfiles } from './db/policies';
+import { scheduleAutoGraduation } from './db/executor-auto-graduation';
 import { resetGuiStateForNewConversation } from './agent/executors/desktop-executors';
 import { destroyShell } from './agent/executors/core-executors';
 import { extractMemoryInBackground } from './agent/memory-extractor';
 import {
   getApiKey,
+  getProviderKeys,
+  getSelectedProvider,
+  hasAnyApiKey,
   setApiKey,
   getSelectedModel,
+  setSelectedProvider,
   setSelectedModel,
   getSelectedPerformanceStance,
   getSelectedPolicyProfile,
@@ -41,7 +46,7 @@ import { getRunEventRecords } from './db/run-events';
 import { listRunChanges } from './db/run-changes';
 import {
   initBrowser, navigate, goBack, goForward, reload,
-  setBounds, closeBrowser, getBrowserExecutionMode,
+  setBounds, hideBrowser, showBrowser, closeBrowser, getBrowserExecutionMode,
   createTab, switchTab, closeTab, getTabList,
   matchUrlHistory,
 } from './browser/manager';
@@ -83,6 +88,18 @@ function createWindow(): void {
     else mainWindow?.webContents.openDevTools({ mode: 'detach' });
   });
 
+  // Context menu for the chat/renderer (copy, paste, select all)
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    const menu = Menu.buildFromTemplate([
+      { label: 'Cut', role: 'cut', enabled: params.isEditable && params.selectionText.length > 0 },
+      { label: 'Copy', role: 'copy', enabled: params.selectionText.length > 0 },
+      { label: 'Paste', role: 'paste', enabled: params.isEditable },
+      { type: 'separator' },
+      { label: 'Select All', role: 'selectAll' },
+    ]);
+    menu.popup({ window: mainWindow! });
+  });
+
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
     if (mainWindow) {
@@ -99,6 +116,7 @@ function createWindow(): void {
 
   getDb();
   seedPolicyProfiles();
+  scheduleAutoGraduation();
   setupIpcHandlers();
 }
 
@@ -120,7 +138,8 @@ function setupIpcHandlers(): void {
   ipcMain.handle(IPC.WINDOW_CLOSE, () => mainWindow?.close());
 
   ipcMain.handle(IPC.CHAT_SEND, async (_event, message: string) => {
-    const apiKey = getApiKey();
+    const provider = getSelectedProvider();
+    const apiKey = getApiKey(provider);
     if (!apiKey) return { error: 'No API key set. Go to Settings to add your Anthropic API key.' };
 
     const { cleanedMessage, forcedAgentProfile } = parseManualAgentProfileOverride(message);
@@ -147,9 +166,10 @@ function setupIpcHandlers(): void {
     try {
       const result = await runAgentLoop(cleanedMessage, history, {
         runId: processId,
+        provider,
         forcedAgentProfile,
         apiKey,
-        model: getSelectedModel(),
+        model: getSelectedModel(provider),
         onStreamText: (chunk) => routeEvent(processId, IPC_EVENTS.CHAT_STREAM_TEXT, chunk),
         onProgress: (text) => routeEvent(processId, IPC_EVENTS.CHAT_STREAM_TEXT, text),
         onThinking: (thought) => routeEvent(processId, IPC_EVENTS.CHAT_THINKING, thought),
@@ -225,20 +245,21 @@ function setupIpcHandlers(): void {
     return { ok: true };
   });
 
-  ipcMain.handle(IPC.API_KEY_GET, async () => getApiKey());
-  ipcMain.handle(IPC.API_KEY_SET, async (_e, key: string) => { setApiKey(key); return { ok: true }; });
-  ipcMain.handle(IPC.MODEL_GET, async () => getSelectedModel());
-  ipcMain.handle(IPC.MODEL_SET, async (_e, model: string) => { setSelectedModel(model); return { ok: true }; });
+  ipcMain.handle(IPC.API_KEY_GET, async (_e, provider?: string) => getApiKey(provider as any));
+  ipcMain.handle(IPC.API_KEY_SET, async (_e, provider: string, key: string) => { setApiKey(provider as any, key); return { ok: true }; });
+  ipcMain.handle(IPC.MODEL_GET, async (_e, provider?: string) => getSelectedModel(provider as any));
+  ipcMain.handle(IPC.MODEL_SET, async (_e, provider: string, model: string) => { setSelectedModel(provider as any, model); return { ok: true }; });
   ipcMain.handle(IPC.SETTINGS_GET, async (_e, key: string) => {
-    if (key === 'apiKey') return getApiKey() ? 'set' : '';
+    if (key === 'apiKey') return hasAnyApiKey() ? 'set' : '';
+    if (key === 'providerKeys') return getProviderKeys();
+    if (key === 'selectedProvider') return getSelectedProvider();
     if (key === 'unrestrictedMode') return getUnrestrictedMode();
     if (key === 'policyProfile') return getSelectedPolicyProfile();
     if (key === 'performanceStance') return getSelectedPerformanceStance();
     return null;
   });
   ipcMain.handle(IPC.SETTINGS_SET, async (_e, key: string, value: any) => {
-    if (key === 'apiKey') setApiKey(value);
-    if (key === 'model') setSelectedModel(value);
+    if (key === 'selectedProvider') setSelectedProvider(value);
     if (key === 'unrestrictedMode') setUnrestrictedMode(!!value);
     if (key === 'policyProfile') setSelectedPolicyProfile(String(value || 'standard'));
     if (key === 'performanceStance') setSelectedPerformanceStance(value);
@@ -253,6 +274,8 @@ function setupIpcHandlers(): void {
   ipcMain.handle(IPC.BROWSER_REFRESH, async () => { await reload(); return { ok: true }; });
   ipcMain.handle(IPC.BROWSER_SET_BOUNDS, async (_e, bounds: any) => { setBounds(bounds); return { ok: true }; });
   ipcMain.handle(IPC.BROWSER_GET_EXECUTION_MODE, async () => getBrowserExecutionMode());
+  ipcMain.handle(IPC.BROWSER_HIDE, async () => { hideBrowser(); return { ok: true }; });
+  ipcMain.handle(IPC.BROWSER_SHOW, async () => { showBrowser(); return { ok: true }; });
 
   ipcMain.handle(IPC.BROWSER_TAB_NEW, async (_e, url?: string) => {
     const id = createTab(url);
