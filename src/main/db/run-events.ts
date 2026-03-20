@@ -104,7 +104,9 @@ export function getRunAgentProfile(runId: string): AgentProfile | undefined {
       ? 'bloodhound'
       : payload.agentProfile === 'general'
         ? 'general'
-        : undefined;
+        : payload.agentProfile === 'ytdlp'
+          ? 'ytdlp'
+          : undefined;
 }
 
 export function getLastSpecializedTool(runId: string): string | undefined {
