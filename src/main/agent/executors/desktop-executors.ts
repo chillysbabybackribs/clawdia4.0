@@ -105,13 +105,11 @@ function wait(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
-/** Resolve path to screenshot-analyzer.py (works in dev + dist). */
+/** Resolve path to screenshot-analyzer.py (works in dev + packaged builds). */
 function getAnalyzerPath(): string {
-  // Packaged build: .py files are copied alongside the app via electron-builder extraResources
-  if (process.resourcesPath) {
-    const resourcePath = path.join(process.resourcesPath, 'gui', 'screenshot-analyzer.py');
-    if (fs.existsSync(resourcePath)) return resourcePath;
-  }
+  // Packaged: electron-builder copies .py files to resources/gui/ via extraResources
+  const resourcePath = path.join(process.resourcesPath, 'gui', 'screenshot-analyzer.py');
+  if (fs.existsSync(resourcePath)) return resourcePath;
   // Dev: __dirname is dist/main/agent/executors — traverse up to project root, then into src
   const projectRoot = path.join(__dirname, '..', '..', '..', '..');
   const srcPath = path.join(projectRoot, 'src', 'main', 'agent', 'gui', 'screenshot-analyzer.py');
