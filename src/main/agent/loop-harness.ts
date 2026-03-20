@@ -11,7 +11,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { AnthropicProviderClient as AnthropicClient, resolveAnthropicModelId as resolveModelId } from './provider/anthropic-adapter';
+import type { ProviderClient } from './provider/base';
 import type { NormalizedMessage, NormalizedTextBlock, NormalizedToolResultBlock, NormalizedToolUseBlock } from './client';
 import { executeTool, getToolsForGroup } from './tool-builder';
 import { getAppProfile, updateAppProfile, type AppProfile } from '../db/app-registry';
@@ -24,7 +24,7 @@ const HARNESS_MAX_ITERATIONS = 40;
 const HARNESS_MAX_MS = 12 * 60 * 1000;
 
 export interface HarnessPipelineOptions {
-  apiKey: string;
+  client: ProviderClient;
   onProgress: (text: string) => void;
   onRegisterCancel: (fn: () => void) => void;
 }
@@ -78,7 +78,7 @@ export async function runHarnessPipeline(
   appId: string,
   options: HarnessPipelineOptions,
 ): Promise<boolean> {
-  const { apiKey, onProgress, onRegisterCancel } = options;
+  const { client, onProgress, onRegisterCancel } = options;
 
   // Sanitise appId before any path/shell use
   const safeAppId = appId.toLowerCase().replace(/[^a-z0-9-]/g, '');
@@ -110,7 +110,6 @@ export async function runHarnessPipeline(
   const abortController = new AbortController();
   onRegisterCancel(() => abortController.abort());
 
-  const client = new AnthropicClient(apiKey, resolveModelId('sonnet'));
   const systemPrompt = buildSystemPrompt(appId, preflight.harnessContent!, outputDir);
 
   // Get app version for context

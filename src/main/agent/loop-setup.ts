@@ -28,7 +28,7 @@ import { buildCapabilitySnapshot, formatSnapshotLog } from './capability-snapsho
 import { installApp } from './loop-app-install';
 import { runHarnessPipeline } from './loop-harness';
 import { registerNestedCancel, clearNestedCancel } from './loop-cancel';
-import type { ProviderId } from '../../shared/types';
+import type { ProviderClient } from './provider/base';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
@@ -69,8 +69,7 @@ export interface SetupResult {
 export async function runPreLLMSetup(
   userMessage: string,
   profile: TaskProfile,
-  apiKey: string,
-  provider: ProviderId,
+  client: ProviderClient,
   onProgress?: (text: string) => void,
 ): Promise<SetupResult> {
   const result: SetupResult = {
@@ -139,7 +138,7 @@ export async function runPreLLMSetup(
         }
 
         // ── NEW: Generate harness if none exists (only when app is available) ──
-        if (appAvailable && provider === 'anthropic') {
+        if (appAvailable && client.supportsHarnessGeneration) {
           const existingProfile = getAppProfile(targetApp);
           const hasHarness = existingProfile?.cliAnything?.installed === true;
           if (!hasHarness) {
@@ -147,7 +146,7 @@ export async function runPreLLMSetup(
             let built = false;
             try {
               built = await runHarnessPipeline(targetApp, {
-                apiKey,
+                client,
                 onProgress: onProgress ?? (() => {}),
                 onRegisterCancel: registerNestedCancel,
               });
@@ -158,9 +157,9 @@ export async function runPreLLMSetup(
               onProgress?.(`Harness generation failed — falling back to available surfaces.`);
             }
           }
-        } else if (appAvailable && provider !== 'anthropic' && !_nonAnthropicHarnessWarningEmitted) {
+        } else if (appAvailable && !client.supportsHarnessGeneration && !_nonAnthropicHarnessWarningEmitted) {
           _nonAnthropicHarnessWarningEmitted = true;
-          onProgress?.(`Skipping automatic CLI harness generation for ${targetApp} because the current nested harness pipeline is Anthropic-only.`);
+          onProgress?.(`Skipping automatic CLI harness generation for ${targetApp} — not supported by the active provider (${client.provider}).`);
         }
         // Note: clearNestedCancel() not needed here — registerNestedCancel was never called
         // because we skipped the harness pipeline due to install failure.

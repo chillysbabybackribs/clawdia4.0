@@ -43,6 +43,7 @@ const GUI_BATCH_NUDGE_AT = 2;
 
 const NARRATION_RE = /^(?:I'll start by|Let me (?:start|begin|first)|I need to (?:first|read|check|look)|Here's my (?:plan|approach)|I want to (?:start|begin))/i;
 const CAPABILITY_DENIAL_RE = /(?:I (?:can't|cannot|don't have|am unable to) (?:access|browse|execute|run|open|launch|read|write))/i;
+const MULTI_STEP_CONNECTOR_RE = /\b(and then|then|after that|afterwards|next|followed by)\b/i;
 
 // Seed registry on first import
 let registrySeeded = false;
@@ -204,8 +205,9 @@ function trimHistory(history: NormalizedMessage[]): NormalizedMessage[] {
     totalTokens -= estimateTokens(trimmed[0]);
     trimmed.shift();
     // The orphaned tool_result's assistant is now at the front — drop it too
-    if (trimmed.length > 0 && trimmed[0].role === 'assistant') {
-      totalTokens -= estimateTokens(trimmed[0]);
+    const nextFront = trimmed[0];
+    if (nextFront && nextFront.role === 'assistant') {
+      totalTokens -= estimateTokens(nextFront);
       trimmed.shift();
     }
   }
@@ -214,6 +216,46 @@ function trimHistory(history: NormalizedMessage[]): NormalizedMessage[] {
     console.log(`[Agent] History trimmed: kept ${trimmed.length} of ${history.length} messages (~${Math.round(totalTokens / 1000)}K tokens)`);
   }
   return trimmed;
+}
+
+function shouldForceContinuationAfterPartialExecution(
+  userMessage: string,
+  toolCalls: { name: string; status: string }[],
+): string | null {
+  const successfulToolCalls = toolCalls.filter((call) => call.status === 'success');
+  if (successfulToolCalls.length === 0) return null;
+
+  const lower = userMessage.toLowerCase();
+  const successfulNames = new Set(successfulToolCalls.map((call) => call.name));
+
+  const wantsSearch = /\b(search|look up)\b/i.test(userMessage);
+  const wantsOpenOrNavigate = /\b(open|launch|navigate|go to|visit)\b/i.test(userMessage);
+  const isMultiStep = MULTI_STEP_CONNECTOR_RE.test(userMessage) || (wantsSearch && wantsOpenOrNavigate);
+
+  if (!isMultiStep) return null;
+
+  const hasSearchExecution =
+    successfulNames.has('browser_search') ||
+    successfulNames.has('browser_type') ||
+    successfulNames.has('browser_extract') ||
+    successfulNames.has('browser_read_page');
+
+  if (wantsSearch && !hasSearchExecution) {
+    return `You only completed the setup/open step. Continue until the full request is done: "${userMessage}". Opening or launching the site is not enough; perform the requested search and then respond.`;
+  }
+
+  if (successfulToolCalls.length === 1) {
+    const firstTool = successfulToolCalls[0]?.name;
+    if (firstTool === 'app_control' || firstTool === 'browser_navigate') {
+      return `You only completed the first step of a multi-step request. Continue executing the remaining steps for: "${userMessage}". Do not stop after the initial open/navigate action.`;
+    }
+  }
+
+  if (/\bsearch google for\b/i.test(lower) && !successfulNames.has('browser_search')) {
+    return `The user asked you to search Google, not just open it. Continue executing the search for: "${userMessage}".`;
+  }
+
+  return null;
 }
 
 // ═══════════════════════════════════
@@ -277,7 +319,7 @@ export async function runAgentLoop(
   if (runId) setProcessWorkflowStage(runId, 'starting');
 
   // ── Pre-LLM Setup (extracted to loop-setup.ts) ──
-  const setup = await runPreLLMSetup(userMessage, profile, apiKey, options.provider, options.onProgress);
+  const setup = await runPreLLMSetup(userMessage, profile, client, options.onProgress);
   const { executionPlan } = setup;
   if (runId) {
     appendRunEvent(runId, {
@@ -628,6 +670,14 @@ export async function runAgentLoop(
         onStreamText?.('\n\n__RESET__');
         messages.push({ role: 'assistant', content: response.content as any });
         messages.push({ role: 'user', content: '[SYSTEM] You have full system access. Use your tools.' });
+        continue;
+      }
+
+      const continuationInstruction = shouldForceContinuationAfterPartialExecution(userMessage, dispatchCtx.allToolCalls);
+      if (continuationInstruction && iteration < MAX_ITERATIONS - 1) {
+        onStreamText?.('\n\n__RESET__');
+        messages.push({ role: 'assistant', content: response.content as any });
+        messages.push({ role: 'user', content: `[SYSTEM] ${continuationInstruction}` });
         continue;
       }
 

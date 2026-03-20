@@ -216,6 +216,7 @@ async function* readSseData(stream: ReadableStream<Uint8Array>): AsyncGenerator<
 
 export class OpenAIProviderClient implements ProviderClient {
   readonly provider = 'openai' as const;
+  readonly supportsHarnessGeneration = false as const;
   private apiKey: string;
   private model: string;
 
