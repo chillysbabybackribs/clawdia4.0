@@ -402,26 +402,16 @@ export function verify(rule: VerificationRule, result: string): VerificationResu
       };
     }
 
-    // RetryPolicy: 'once' or 'refocus_then_retry' — re-check the same result
-    // This closes the declared type contract. Full live re-execution (re-calling
-    // the tool) is a Phase 2 enhancement handled in loop-dispatch.ts.
-    if (rule.retryPolicy === 'once' || rule.retryPolicy === 'refocus_then_retry') {
-      const retryCheck = runCheck(rule, result);
-      return {
-        rule,
-        passed: retryCheck.passed,
-        actual: retryCheck.actual,
-        retried: true,
-        retryPassed: retryCheck.passed,
-        durationMs: Date.now() - start,
-      };
-    }
-
+    // RetryPolicy: 'once' or 'refocus_then_retry' — re-check the same result.
+    // (Only remaining cases after the guard above — the trailing return is unreachable.)
+    // Full live re-execution (re-calling the tool) is a Phase 2 enhancement.
+    const retryCheck = runCheck(rule, result);
     return {
       rule,
-      passed: check.passed,
-      actual: check.actual,
-      retried: false,
+      passed: retryCheck.passed,
+      actual: retryCheck.actual,
+      retried: true,
+      retryPassed: retryCheck.passed,
       durationMs: Date.now() - start,
     };
   } catch (err: any) {
