@@ -20,6 +20,8 @@ export const IPC = {
   BROWSER_TAB_SWITCH: 'browser:tab:switch',
   BROWSER_TAB_CLOSE: 'browser:tab:close',
   BROWSER_HISTORY_MATCH: 'browser:history-match',
+  BROWSER_HIDE: 'browser:hide',
+  BROWSER_SHOW: 'browser:show',
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
   API_KEY_GET: 'api-key:get',
@@ -45,6 +47,7 @@ export const IPC = {
   RUN_HUMAN_INTERVENTIONS: 'run:human-interventions',
   RUN_RESOLVE_HUMAN_INTERVENTION: 'run:human-intervention:resolve',
   POLICY_LIST: 'policy:list',
+  CALENDAR_LIST: 'calendar:list',
 } as const;
 
 export const IPC_EVENTS = {
@@ -60,4 +63,5 @@ export const IPC_EVENTS = {
   BROWSER_MODE_CHANGED: 'browser:mode-changed',
   // Process events (pushed from main to renderer)
   PROCESS_LIST_CHANGED: 'process:list',
+  CALENDAR_EVENTS_CHANGED: 'calendar:events-changed',
 } as const;
