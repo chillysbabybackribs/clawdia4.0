@@ -6,17 +6,17 @@
  * disallowed tools based on the ExecutionPlan.
  */
 
-import type Anthropic from '@anthropic-ai/sdk';
 import type { ToolGroup } from './classifier';
+import type { NormalizedToolDefinition } from './client';
 import { executeShellExec, executeFileRead, executeFileWrite, executeFileEdit, executeDirectoryTree, executeFsQuoteLookup, executeFsFolderSummary, executeFsReorgPlan, executeFsDuplicateScan, executeFsApplyPlan } from './executors/core-executors';
 import { executeBrowserSearch, executeBrowserNavigate, executeBrowserReadPage, executeBrowserClick, executeBrowserType, executeBrowserExtract, executeBrowserScreenshot, executeBrowserScroll } from './executors/browser-executors';
 import { executeCreateDocument, executeMemorySearch, executeMemoryStore, executeRecallContext } from './executors/extra-executors';
 import { executeAppControl, executeGuiInteract, executeDbusControl } from './executors/desktop-executors';
 
-const CORE_TOOLS: Anthropic.Tool[] = [
+const CORE_TOOLS: NormalizedToolDefinition[] = [
   {
     name: 'shell_exec',
-    description: 'Execute a bash command in a persistent shell session. The shell retains cwd between calls. Returns stdout, stderr, and exit code. Use for: installing packages, running builds, launching apps, system queries, git operations. Background GUI processes with & so the command returns.',
+    description: 'Execute a bash command in a persistent shell session. The shell retains cwd between calls. Returns stdout, stderr, and exit code. Use for: installing packages, running builds, launching apps, system queries, git operations. Background GUI processes with & so the command returns.\n\nUse ~/Desktop/clawdia4.0/scripts/clawdia-cal to manage the user\'s calendar: clawdia-cal add "Title" --date YYYY-MM-DD [--time HH:MM] [--duration N] [--notes "..."]; clawdia-cal list [--date YYYY-MM-DD]; clawdia-cal update <id> [--title ...] [--date ...] [--time ...] [--duration N]; clawdia-cal delete <id>; clawdia-cal get <id>. All output is JSON. Always confirm with the user before deleting events.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -157,7 +157,7 @@ const CORE_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
-const BROWSER_TOOLS: Anthropic.Tool[] = [
+const BROWSER_TOOLS: NormalizedToolDefinition[] = [
   { name: 'browser_search', description: 'Web search via Google. Returns top 5 results.', input_schema: { type: 'object' as const, properties: { query: { type: 'string', description: 'Search query' } }, required: ['query'] } },
   { name: 'browser_navigate', description: 'Navigate to URL. Returns title, URL, visible text, AND a numbered list of interactive elements (buttons, links, inputs) with their types, labels, and aria attributes. Use element indices from this list for precise clicking.', input_schema: { type: 'object' as const, properties: { url: { type: 'string', description: 'URL' } }, required: ['url'] } },
   { name: 'browser_read_page', description: 'Re-read current page text + interactive elements. Use after SPA navigation or dynamic content changes. Returns the same format as browser_navigate (text + element list).', input_schema: { type: 'object' as const, properties: {} } },
@@ -179,7 +179,7 @@ const BROWSER_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
-const EXTRA_TOOLS: Anthropic.Tool[] = [
+const EXTRA_TOOLS: NormalizedToolDefinition[] = [
   {
     name: 'create_document',
     description: 'Create document (docx, pdf, xlsx, csv, md, html, json, txt).',
@@ -254,7 +254,7 @@ const EXTRA_TOOLS: Anthropic.Tool[] = [
 // Group Builders
 // ═══════════════════════════════════
 
-export function getToolsForGroup(group: ToolGroup): Anthropic.Tool[] {
+export function getToolsForGroup(group: ToolGroup): NormalizedToolDefinition[] {
   switch (group) {
     case 'core': return [...CORE_TOOLS];
     case 'browser': return [...BROWSER_TOOLS];
@@ -266,7 +266,7 @@ export function getToolsForGroup(group: ToolGroup): Anthropic.Tool[] {
  * Filter tools by removing disallowed tool names.
  * Used by the routing layer to constrain what the LLM can call.
  */
-export function filterTools(tools: Anthropic.Tool[], disallowed: string[]): Anthropic.Tool[] {
+export function filterTools(tools: NormalizedToolDefinition[], disallowed: string[]): NormalizedToolDefinition[] {
   if (disallowed.length === 0) return tools;
   const blocked = new Set(disallowed);
   const filtered = tools.filter(t => !blocked.has(t.name));
