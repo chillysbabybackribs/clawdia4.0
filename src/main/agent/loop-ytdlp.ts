@@ -141,7 +141,7 @@ export async function runYtdlpPipeline(
         return { success: false, files, reason: 'cancelled' };
       }
       console.error(`[Extractor] LLM error at iteration ${iteration}:`, err.message);
-      return { success: files.length > 0, files, reason: `LLM error: ${err.message}` };
+      return { success: false, files, reason: `LLM error: ${err.message}` };
     }
 
     const textBlocks = response.content.filter(
