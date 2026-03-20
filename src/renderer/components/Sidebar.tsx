@@ -30,7 +30,7 @@ function Spinner() {
 
 function Check() {
   return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[#ff7a00] drop-shadow-[0_0_6px_rgba(255,122,0,0.75)]">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[#FF5061] drop-shadow-[0_0_6px_rgba(255,80,97,0.75)]">
       <polyline points="3 8 7 12 13 4" />
     </svg>
   );
@@ -47,7 +47,7 @@ function XIcon() {
 
 function ApprovalIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="text-[#ff7a00]">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="text-[#FF5061]">
       <path d="M8 1.75 14 13H2L8 1.75Z" />
       <path d="M8 5.2v3.8" />
       <circle cx="8" cy="11.4" r="0.65" fill="currentColor" stroke="none" />
@@ -126,7 +126,7 @@ function CollapsedSidebar({ onToggle, onNewChat, runningCount }: {
   runningCount: number;
 }) {
   return (
-    <nav className="flex flex-col items-center w-[44px] flex-shrink-0 py-2.5 gap-1.5 bg-[#151518] border-r border-white/[0.06] shadow-[inset_-1px_0_8px_rgba(0,0,0,0.3),2px_0_12px_rgba(0,0,0,0.4)]">
+    <nav className="flex flex-col items-center w-[44px] flex-shrink-0 py-2.5 gap-1.5 bg-surface-0 border-r border-white/[0.06] shadow-[inset_-1px_0_8px_rgba(0,0,0,0.3),2px_0_12px_rgba(0,0,0,0.4)]">
       <button onClick={onToggle} title="Expand sidebar (Ctrl+S)"
         className="no-drag flex items-center justify-center w-8 h-8 rounded-lg text-text-secondary hover:text-text-primary hover:bg-white/[0.06] transition-all cursor-pointer">
         <CollapseIcon collapsed={true} />
@@ -239,7 +239,7 @@ export default function Sidebar({
   }
 
   return (
-    <nav className="flex flex-col w-[196px] flex-shrink-0 bg-[#151518] border-r border-white/[0.06] shadow-[inset_-1px_0_8px_rgba(0,0,0,0.3),2px_0_12px_rgba(0,0,0,0.4)]">
+    <nav className="flex flex-col w-[196px] flex-shrink-0 bg-surface-0 border-r border-white/[0.06] shadow-[inset_-1px_0_8px_rgba(0,0,0,0.3),2px_0_12px_rgba(0,0,0,0.4)]">
       {/* Brand + collapse */}
       <div className="drag-region flex items-center justify-between px-3.5 pt-3 pb-3">
         <span className="text-[14px] font-semibold tracking-[0.1em] uppercase text-text-primary/40 select-none">
@@ -275,7 +275,7 @@ export default function Sidebar({
       <div className="px-2.5 pb-2">
         <button
           onClick={onNewChat}
-          className="no-drag flex items-center justify-center w-full h-[28px] rounded-lg border border-white/[0.08] text-[13px] font-medium text-text-primary/70 hover:text-text-primary hover:bg-white/[0.05] hover:border-white/[0.14] transition-all cursor-pointer"
+          className="no-drag flex items-center justify-center w-full h-[28px] rounded-lg border border-[#FF5061]/20 text-[13px] font-medium text-text-primary/70 hover:text-[#FF5061]/80 hover:bg-[#FF5061]/[0.04] hover:border-[#FF5061]/40 transition-all cursor-pointer"
         >
           New Agent
         </button>
@@ -292,12 +292,12 @@ export default function Sidebar({
           {filteredRunning.length > 0 ? (
             filteredRunning.map(proc => (
               <button key={proc.id} onClick={() => handleProcessClick(proc)}
-                className={`w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg text-left transition-all cursor-pointer ${
+                className={`w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors cursor-pointer border ${
                   proc.status === 'needs_human'
-                    ? 'border border-white/[0.18] bg-white/[0.05] shadow-[0_0_0_1px_rgba(255,255,255,0.04),0_0_18px_rgba(255,255,255,0.08)] animate-pulse'
+                    ? 'border-white/[0.18] bg-white/[0.05] shadow-[0_0_18px_rgba(255,255,255,0.08)] animate-pulse'
                     : proc.isAttached
-                      ? 'bg-accent/[0.08] border border-accent/[0.12]'
-                      : 'hover:bg-white/[0.04] border border-transparent'
+                      ? 'border-accent/[0.12] bg-accent/[0.08]'
+                      : 'border-transparent hover:bg-white/[0.04]'
                 }`}>
                 <div className="mt-0.5 flex-shrink-0"><StatusIcon status={proc.status} /></div>
                 <div className="flex-1 min-w-0">
@@ -345,9 +345,7 @@ export default function Sidebar({
           {filteredDone.length > 0 ? (
             filteredDone.map(proc => (
               <button key={proc.id} onClick={() => handleProcessClick(proc)}
-                className={`w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg text-left transition-all cursor-pointer border ${
-                  activeView === 'processes' ? 'border-white/[0.05]' : 'border-transparent'
-                } hover:bg-white/[0.04]`}>
+                className="w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors cursor-pointer border border-transparent hover:bg-white/[0.04]">
                 <div className="mt-0.5 flex-shrink-0"><StatusIcon status={proc.status} /></div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-1">
@@ -384,8 +382,8 @@ export default function Sidebar({
         </div>
       </div>
 
-      {/* ─── History ─── centered via flex-1 */}
-      <div className="flex-1 min-h-0 border-t border-white/[0.04] overflow-y-auto">
+      {/* ─── History ─── pushed to bottom */}
+      <div className="flex-1 min-h-0 border-t border-white/[0.04] overflow-y-auto flex flex-col justify-end">
         {filteredConvs.length > 0 && (
           <div>
             <div className="flex items-center justify-between px-3 pt-2 pb-1">

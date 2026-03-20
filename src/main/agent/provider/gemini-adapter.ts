@@ -41,7 +41,7 @@ interface GeminiResponseChunk {
   };
 }
 
-function stringifyContent(content: NormalizedToolResultBlock['content'] | string): string {
+export function stringifyToolResultContent(content: NormalizedToolResultBlock['content'] | string): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
   return content.map((block) => {
@@ -54,7 +54,7 @@ function stringifyContent(content: NormalizedToolResultBlock['content'] | string
   }).join('\n');
 }
 
-function maybeJson(value: string): any {
+export function maybeJson(value: string): any {
   try {
     return JSON.parse(value);
   } catch {
@@ -62,7 +62,7 @@ function maybeJson(value: string): any {
   }
 }
 
-function buildToolNameIndex(messages: NormalizedMessage[]): Map<string, string> {
+export function buildToolNameIndex(messages: NormalizedMessage[]): Map<string, string> {
   const out = new Map<string, string>();
 
   for (const msg of messages) {
@@ -77,7 +77,7 @@ function buildToolNameIndex(messages: NormalizedMessage[]): Map<string, string> 
   return out;
 }
 
-function toGeminiContents(messages: NormalizedMessage[]): Array<{ role: 'user' | 'model'; parts: GeminiPart[] }> {
+export function toGeminiContents(messages: NormalizedMessage[]): Array<{ role: 'user' | 'model'; parts: GeminiPart[] }> {
   const out: Array<{ role: 'user' | 'model'; parts: GeminiPart[] }> = [];
   const toolNameIndex = buildToolNameIndex(messages);
 
@@ -103,7 +103,7 @@ function toGeminiContents(messages: NormalizedMessage[]): Array<{ role: 'user' |
           };
         }
         return {
-          text: stringifyContent(block.content),
+          text: stringifyToolResultContent(block.content),
         };
       });
       out.push({ role: 'model', parts });
@@ -118,7 +118,7 @@ function toGeminiContents(messages: NormalizedMessage[]): Array<{ role: 'user' |
           functionResponse: {
             name: toolNameIndex.get(block.tool_use_id) || block.tool_use_id,
             id: block.tool_use_id,
-            response: maybeJson(stringifyContent(block.content)),
+            response: maybeJson(stringifyToolResultContent(block.content)),
           },
         })),
       });
@@ -134,7 +134,7 @@ function toGeminiContents(messages: NormalizedMessage[]): Array<{ role: 'user' |
   return out;
 }
 
-function toGeminiTools(tools: NormalizedToolDefinition[]): any[] {
+export function toGeminiTools(tools: NormalizedToolDefinition[]): any[] {
   const normalizeSchema = (schema: any): any => {
     if (!schema || typeof schema !== 'object') return schema;
     if (Array.isArray(schema)) return schema.map(normalizeSchema);

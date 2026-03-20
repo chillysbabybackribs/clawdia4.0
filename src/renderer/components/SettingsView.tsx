@@ -1,44 +1,53 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { PolicyProfile, PerformanceStance } from '../../shared/types';
+import { DEFAULT_MODEL_BY_PROVIDER, DEFAULT_PROVIDER, getModelsForProvider, PROVIDERS, type ProviderId } from '../../shared/model-registry';
 
 interface SettingsViewProps {
   onBack: () => void;
 }
 
 export default function SettingsView({ onBack }: SettingsViewProps) {
-  const [apiKey, setApiKey] = useState('');
-  const [keyVisible, setKeyVisible] = useState(false);
+  const [providerKeys, setProviderKeys] = useState<Record<ProviderId, string>>({ anthropic: '', openai: '', gemini: '' });
+  const [keyVisible, setKeyVisible] = useState<Record<ProviderId, boolean>>({ anthropic: false, openai: false, gemini: false });
   const [saved, setSaved] = useState(false);
-  const [currentModel, setCurrentModel] = useState('claude-sonnet-4-6');
+  const [selectedProvider, setSelectedProvider] = useState<ProviderId>(DEFAULT_PROVIDER);
+  const [modelsByProvider, setModelsByProvider] = useState<Record<ProviderId, string>>({ ...DEFAULT_MODEL_BY_PROVIDER });
   const [unrestrictedMode, setUnrestrictedMode] = useState(false);
   const [policyProfiles, setPolicyProfiles] = useState<PolicyProfile[]>([]);
   const [selectedPolicyProfile, setSelectedPolicyProfile] = useState('standard');
   const [performanceStance, setPerformanceStance] = useState<PerformanceStance>('standard');
-  const [loaded, setLoaded] = useState(false);
-  const originalKeyRef = useRef('');
 
-  // Load current settings on mount
   useEffect(() => {
     const api = (window as any).clawdia;
     if (!api) return;
     Promise.all([
-      api.settings.getApiKey(),
-      api.settings.getModel(),
+      api.settings.getProviderKeys(),
+      api.settings.getProvider(),
+      Promise.all(PROVIDERS.map((provider) => api.settings.getModel(provider.id))),
       api.settings.getUnrestrictedMode(),
       api.settings.getPolicyProfile(),
       api.settings.getPerformanceStance(),
       api.policy.list(),
-    ]).then(([key, model, unrestricted, policyProfile, stance, profiles]: [string, string, boolean, string, PerformanceStance, PolicyProfile[]]) => {
-      if (key) {
-        setApiKey(key);
-        originalKeyRef.current = key;
-      }
-      if (model) setCurrentModel(model);
+    ]).then(([keys, provider, models, unrestricted, policyProfile, stance, profiles]: [
+      Record<ProviderId, string>,
+      ProviderId,
+      string[],
+      boolean,
+      string,
+      PerformanceStance,
+      PolicyProfile[],
+    ]) => {
+      setProviderKeys(keys || { anthropic: '', openai: '', gemini: '' });
+      setSelectedProvider(provider || DEFAULT_PROVIDER);
+      setModelsByProvider({
+        anthropic: models[0] || DEFAULT_MODEL_BY_PROVIDER.anthropic,
+        openai: models[1] || DEFAULT_MODEL_BY_PROVIDER.openai,
+        gemini: models[2] || DEFAULT_MODEL_BY_PROVIDER.gemini,
+      });
       setUnrestrictedMode(!!unrestricted);
       setSelectedPolicyProfile(policyProfile || 'standard');
       setPerformanceStance(stance || 'standard');
       setPolicyProfiles(profiles || []);
-      setLoaded(true);
     });
   }, []);
 
@@ -46,19 +55,23 @@ export default function SettingsView({ onBack }: SettingsViewProps) {
     const api = (window as any).clawdia;
     if (!api) return;
 
-    // Always save the key (even if unchanged — it's idempotent)
-    await api.settings.setApiKey(apiKey);
-    await api.settings.setModel(currentModel);
+    for (const provider of PROVIDERS) {
+      await api.settings.setApiKey(provider.id, providerKeys[provider.id] || '');
+      await api.settings.setModel(provider.id, modelsByProvider[provider.id] || DEFAULT_MODEL_BY_PROVIDER[provider.id]);
+    }
+
+    await api.settings.setProvider(selectedProvider);
     await api.settings.setUnrestrictedMode(unrestrictedMode);
     await api.settings.setPolicyProfile(selectedPolicyProfile);
     await api.settings.setPerformanceStance(performanceStance);
-    originalKeyRef.current = apiKey;
 
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
 
-  const hasKey = apiKey.length > 0;
+  const hasKey = Object.values(providerKeys).some(Boolean);
+  const currentModels = getModelsForProvider(selectedProvider);
+  const activeKey = providerKeys[selectedProvider] || '';
 
   return (
     <div className="flex flex-col h-full bg-surface-0">
@@ -77,48 +90,67 @@ export default function SettingsView({ onBack }: SettingsViewProps) {
       </header>
 
       <div className="flex-1 overflow-y-auto px-4 py-5">
-        <div className="max-w-[400px] flex flex-col gap-6">
-
-          {/* API Key */}
+        <div className="max-w-[440px] flex flex-col gap-6">
           <section className="flex flex-col gap-2">
-            <label className="text-xs font-medium text-text-secondary uppercase tracking-wider">Anthropic API Key</label>
+            <label className="text-xs font-medium text-text-secondary uppercase tracking-wider">Provider</label>
+            <div className="grid grid-cols-3 gap-2">
+              {PROVIDERS.map((provider) => (
+                <button
+                  key={provider.id}
+                  onClick={() => setSelectedProvider(provider.id)}
+                  className={`h-[38px] rounded-xl border text-xs transition-colors cursor-pointer ${
+                    selectedProvider === provider.id
+                      ? 'border-accent/40 bg-accent/10 text-text-primary'
+                      : 'border-border bg-surface-2 text-text-muted hover:text-text-secondary'
+                  }`}
+                >
+                  {provider.label}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="flex flex-col gap-2">
+            <label className="text-xs font-medium text-text-secondary uppercase tracking-wider">API Key</label>
             <div className="relative">
               <input
-                type={keyVisible ? 'text' : 'password'}
-                value={apiKey}
-                onChange={e => setApiKey(e.target.value)}
-                placeholder="sk-ant-..."
+                type={keyVisible[selectedProvider] ? 'text' : 'password'}
+                value={activeKey}
+                onChange={(e) => setProviderKeys((prev) => ({ ...prev, [selectedProvider]: e.target.value }))}
+                placeholder={selectedProvider === 'anthropic' ? 'sk-ant-...' : selectedProvider === 'openai' ? 'sk-...' : 'AIza...'}
                 className="w-full h-[38px] bg-surface-2 text-text-primary text-sm font-mono pl-3 pr-10 rounded-lg border border-border placeholder:text-text-muted outline-none focus:border-accent/40 transition-colors"
               />
-              <button onClick={() => setKeyVisible(v => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center justify-center w-7 h-7 rounded text-text-muted hover:text-text-secondary transition-colors cursor-pointer">
-                {keyVisible ? (
+              <button onClick={() => setKeyVisible((prev) => ({ ...prev, [selectedProvider]: !prev[selectedProvider] }))} className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center justify-center w-7 h-7 rounded text-text-muted hover:text-text-secondary transition-colors cursor-pointer">
+                {keyVisible[selectedProvider] ? (
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" /></svg>
                 ) : (
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>
                 )}
               </button>
             </div>
-            <p className="text-2xs text-text-muted">Stored locally with encryption. Never leaves your machine.</p>
+            <p className="text-2xs text-text-muted">Stored locally with encryption. Each provider keeps its own key. The selected provider is used for new runs.</p>
           </section>
 
-          {/* Model Default */}
           <section className="flex flex-col gap-2">
             <label className="text-xs font-medium text-text-secondary uppercase tracking-wider">Default Model</label>
-            <p className="text-2xs text-text-muted -mt-1">The classifier auto-selects the best model per task. This sets the fallback.</p>
+            <p className="text-2xs text-text-muted -mt-1">Choose the default model for the currently selected provider.</p>
             <div className="flex flex-col gap-1">
-              {[
-                { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', desc: 'Most capable — complex reasoning, long context', dot: 'bg-amber-400' },
-                { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', desc: 'Balanced — fast, capable, cost-effective', dot: 'bg-accent' },
-                { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', desc: 'Fastest — quick tasks, high throughput', dot: 'bg-emerald-400' },
-              ].map(m => (
-                <label key={m.id} className="flex items-start gap-3 px-3 py-2.5 rounded-xl hover:bg-white/[0.02] transition-colors cursor-pointer">
-                  <input type="radio" name="model" value={m.id} checked={currentModel === m.id} onChange={() => setCurrentModel(m.id)} className="mt-0.5 accent-accent" />
+              {currentModels.map((model) => (
+                <label key={model.id} className="flex items-start gap-3 px-3 py-2.5 rounded-xl hover:bg-white/[0.02] transition-colors cursor-pointer">
+                  <input
+                    type="radio"
+                    name="model"
+                    value={model.id}
+                    checked={modelsByProvider[selectedProvider] === model.id}
+                    onChange={() => setModelsByProvider((prev) => ({ ...prev, [selectedProvider]: model.id }))}
+                    className="mt-0.5 accent-accent"
+                  />
                   <div className="flex flex-col gap-0.5">
                     <div className="flex items-center gap-2">
-                      <div className={`w-1.5 h-1.5 rounded-full ${m.dot}`} />
-                      <span className="text-sm text-text-primary">{m.label}</span>
+                      <div className={`w-1.5 h-1.5 rounded-full ${model.tier === 'deep' ? 'bg-amber-400' : model.tier === 'balanced' ? 'bg-accent' : 'bg-emerald-400'}`} />
+                      <span className="text-sm text-text-primary">{model.label}</span>
                     </div>
-                    <span className="text-2xs text-text-muted">{m.desc}</span>
+                    <span className="text-2xs text-text-muted">{model.description}</span>
                   </div>
                 </label>
               ))}
@@ -193,7 +225,6 @@ export default function SettingsView({ onBack }: SettingsViewProps) {
             </div>
           </section>
 
-          {/* Save */}
           <button
             onClick={handleSave}
             className={`h-[38px] rounded-xl text-sm font-medium transition-all cursor-pointer ${saved ? 'bg-status-success/20 text-status-success' : 'bg-accent/90 hover:bg-accent text-white'}`}

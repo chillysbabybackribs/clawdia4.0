@@ -8,8 +8,8 @@
  * Extracted from loop.ts for testability and separation of concerns.
  */
 
-import type Anthropic from '@anthropic-ai/sdk';
 import { executeTool, isKnownTool, getToolsForGroup, filterTools } from './tool-builder';
+import type { NormalizedToolDefinition, NormalizedToolResultBlock, NormalizedToolUseBlock } from './client';
 import { resolveVerificationRule, verify, logVerification, type VerificationResult } from './verification';
 import { recordSurfaceDeviation, type ExecutionPlan } from '../db/app-registry';
 import { appendRunEvent } from '../db/run-events';
@@ -39,10 +39,10 @@ const SEQUENTIAL_TOOLS = new Set([
  *   - A tool's input references the name of a previous tool
  */
 export function partitionIntoBatches(
-  blocks: Anthropic.ToolUseBlock[],
-): Anthropic.ToolUseBlock[][] {
-  const batches: Anthropic.ToolUseBlock[][] = [];
-  let current: Anthropic.ToolUseBlock[] = [];
+  blocks: NormalizedToolUseBlock[],
+): NormalizedToolUseBlock[][] {
+  const batches: NormalizedToolUseBlock[][] = [];
+  let current: NormalizedToolUseBlock[] = [];
   const seenNames: string[] = [];
 
   for (const block of blocks) {
@@ -84,7 +84,7 @@ const DEFAULT_RESULT_CAP = 10_000;
 export interface DispatchContext {
   runId?: string;
   signal?: AbortSignal;
-  tools: Anthropic.Tool[];
+  tools: NormalizedToolDefinition[];
   executionPlan: ExecutionPlan | null;
   toolGroup: string;
   filesystemQuoteLookupMode?: boolean;
@@ -105,16 +105,16 @@ export interface DispatchContext {
  * and may escalate ctx.tools/ctx.escalatedToFull on mid-loop escalation.
  */
 export async function dispatchTools(
-  toolUseBlocks: Anthropic.ToolUseBlock[],
+  toolUseBlocks: NormalizedToolUseBlock[],
   ctx: DispatchContext,
-): Promise<Anthropic.ToolResultBlockParam[]> {
+): Promise<NormalizedToolResultBlock[]> {
   const batches = partitionIntoBatches(toolUseBlocks);
   const parallelBatchCount = batches.filter(b => b.length > 1).length;
   if (parallelBatchCount > 0) {
     console.log(`[Agent] Parallel dispatch: ${toolUseBlocks.length} tools → ${batches.length} batch(es), ${parallelBatchCount} parallel`);
   }
 
-  const toolResults: Anthropic.ToolResultBlockParam[] = [];
+  const toolResults: NormalizedToolResultBlock[] = [];
 
   for (const batch of batches) {
     const batchResults = await Promise.all(batch.map(async (toolUse) => {
@@ -334,7 +334,7 @@ export async function dispatchTools(
 }
 
 async function executeApprovedTool(
-  toolUse: Anthropic.ToolUseBlock,
+  toolUse: NormalizedToolUseBlock,
   ctx: DispatchContext,
   surface: string,
 ): Promise<string> {
@@ -360,7 +360,7 @@ async function executeApprovedTool(
 }
 
 async function executeGuardedTool(
-  toolUse: Anthropic.ToolUseBlock,
+  toolUse: NormalizedToolUseBlock,
   ctx: DispatchContext,
   surface: string,
 ): Promise<string> {

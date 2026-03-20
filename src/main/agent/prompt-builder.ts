@@ -78,12 +78,18 @@ export function buildDynamicPrompt(opts: {
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local';
 
   const desktopDir = path.join(os.homedir(), 'Desktop');
+  const appRoot = path.join(os.homedir(), 'Desktop', 'clawdia4.0');
   const lines: string[] = [
     `DATE: ${date} | TIME: ${time} | TZ: ${tz} | YEAR: ${year}`,
     `SYSTEM: ${os.type()} ${os.release()} (${os.arch()}) | ${os.userInfo().username}@${os.hostname()}`,
     `HOME: ${os.homedir()} | CWD: ${desktopDir} (shell starts here)`,
+    `PRIMARY PROJECT ROOT: ${appRoot}`,
+    `PRIMARY PROJECT SOURCE: ${path.join(appRoot, 'src')}`,
     `MODEL: ${opts.model}`,
     `TOOLS: ${opts.toolGroup} group active`,
+    'FILESYSTEM GROUNDING: "." and relative shell paths resolve from the current shell cwd, which starts at ~/Desktop unless you change it with cd.',
+    'FILESYSTEM GROUNDING: file_read/file_write/file_edit should use absolute paths whenever the target matters.',
+    'FILESYSTEM GROUNDING: if the user says "this repo", "this repository", "this project", or asks about Clawdia\'s codebase without another path, treat that as ~/Desktop/clawdia4.0.',
   ];
 
   if (opts.agentProfile) {

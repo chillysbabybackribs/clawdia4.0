@@ -74,7 +74,7 @@ interface OpenAIStreamingChunk {
   };
 }
 
-function stringifyContent(content: NormalizedToolResultBlock['content'] | string): string {
+export function stringifyToolResultContent(content: NormalizedToolResultBlock['content'] | string): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
   return content.map((block) => {
@@ -87,7 +87,7 @@ function stringifyContent(content: NormalizedToolResultBlock['content'] | string
   }).join('\n');
 }
 
-function toOpenAIMessages(messages: NormalizedMessage[], instructions: string): OpenAIChatMessage[] {
+export function toOpenAIMessages(messages: NormalizedMessage[], instructions: string): OpenAIChatMessage[] {
   const out: OpenAIChatMessage[] = [];
   if (instructions) out.push({ role: 'system', content: instructions });
 
@@ -127,7 +127,7 @@ function toOpenAIMessages(messages: NormalizedMessage[], instructions: string): 
         out.push({
           role: 'tool',
           tool_call_id: block.tool_use_id,
-          content: stringifyContent(block.content),
+          content: stringifyToolResultContent(block.content),
         });
       }
       // Also emit any text blocks that accompanied the tool results — do not drop them
@@ -151,7 +151,7 @@ function toOpenAIMessages(messages: NormalizedMessage[], instructions: string): 
   return out;
 }
 
-function toOpenAITools(tools: NormalizedToolDefinition[]): any[] {
+export function toOpenAITools(tools: NormalizedToolDefinition[]): any[] {
   const normalizeSchema = (schema: any): any => {
     if (!schema || typeof schema !== 'object') return schema;
     if (Array.isArray(schema)) return schema.map(normalizeSchema);
@@ -220,7 +220,7 @@ export class OpenAIProviderClient implements ProviderClient {
   private apiKey: string;
   private model: string;
 
-  constructor(apiKey: string, model: string = 'gpt-5') {
+  constructor(apiKey: string, model: string = 'gpt-5.4') {
     this.apiKey = apiKey;
     this.model = model;
   }
@@ -250,17 +250,31 @@ export class OpenAIProviderClient implements ProviderClient {
       ...(tools.length > 0 ? { tools: toOpenAITools(tools), tool_choice: 'auto', parallel_tool_calls: true } : {}),
     };
 
-    if (options?.maxTokens) body.max_completion_tokens = options.maxTokens;
+    if (options?.maxTokens) body.max_tokens = options.maxTokens;
 
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal: options?.signal,
-    });
+    const RETRYABLE = new Set([429, 502, 503, 504]);
+    const MAX_ATTEMPTS = 3;
+    let response!: Response;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: options?.signal,
+      });
+
+      if (response.ok || !RETRYABLE.has(response.status)) break;
+
+      const retryAfter = response.headers.get('retry-after');
+      const delayMs = retryAfter ? parseFloat(retryAfter) * 1000 : (2 ** attempt) * 1000 + Math.random() * 200;
+      if (attempt < MAX_ATTEMPTS - 1) await new Promise((r) => setTimeout(r, delayMs));
+    }
+
+    const requestId = response.headers.get('x-request-id');
+    if (requestId) console.debug(`[OpenAI] x-request-id: ${requestId}`);
 
     const contentBlocks: NormalizedAssistantContentBlock[] = [];
     if (!response.ok) {

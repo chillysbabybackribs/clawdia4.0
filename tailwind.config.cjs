@@ -19,10 +19,10 @@ module.exports = {
           muted: '#46464f',
         },
         accent: {
-          DEFAULT: '#4f8ff7',
-          hover: '#3d7de8',
-          subtle: 'rgba(79, 143, 247, 0.10)',
-          glow: 'rgba(79, 143, 247, 0.06)',
+          DEFAULT: '#FF5061',
+          hover: '#ff3347',
+          subtle: 'rgba(255, 80, 97, 0.10)',
+          glow: 'rgba(255, 80, 97, 0.06)',
         },
         border: {
           DEFAULT: '#1f1f26',

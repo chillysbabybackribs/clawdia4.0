@@ -2,6 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatPanel from './components/ChatPanel';
 import BrowserPanel from './components/BrowserPanel';
+import Calendar from './components/Calendar';
 import ConversationsView from './components/ConversationsView';
 import SettingsView from './components/SettingsView';
 import WelcomeScreen from './components/WelcomeScreen';
@@ -20,13 +21,14 @@ export default function App() {
   const [replayBuffer, setReplayBuffer] = useState<ReplayBufferItem[] | null>(null);
   const [selectedProcessId, setSelectedProcessId] = useState<string | null>(null);
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null); // null = loading
+  const [calendarOpen, setCalendarOpen] = useState(false);
 
   // Check for API key on mount
   useEffect(() => {
     const api = (window as any).clawdia;
     if (!api) return;
-    api.settings.getApiKey().then((key: string) => {
-      setHasApiKey(!!key);
+    api.settings.getProviderKeys().then((keys: Record<string, string>) => {
+      setHasApiKey(Object.values(keys || {}).some(Boolean));
     });
   }, []);
 
@@ -60,6 +62,31 @@ export default function App() {
 
   const handleToggleBrowser = useCallback(() => {
     setBrowserVisible(v => !v);
+  }, []);
+
+  const handleHideBrowser = useCallback(() => {
+    setBrowserVisible(false);
+  }, []);
+
+  const handleShowBrowser = useCallback(() => {
+    setBrowserVisible(true);
+  }, []);
+
+  const handleToggleCalendar = useCallback(() => {
+    setCalendarOpen(open => {
+      if (!open) {
+        // Opening: forcibly hide the native BrowserView via main process,
+        // then unmount BrowserPanel so its ResizeObserver can't restore bounds
+        (window as any).clawdia?.browser.hide();
+        setBrowserVisible(false);
+      } else {
+        // Closing: show the native BrowserView, then remount BrowserPanel
+        // which will re-run its ResizeObserver and restore correct bounds
+        (window as any).clawdia?.browser.show();
+        setBrowserVisible(true);
+      }
+      return !open;
+    });
   }, []);
 
   const handleWelcomeComplete = useCallback(() => {
@@ -109,13 +136,17 @@ export default function App() {
 
       <div
         className="relative flex flex-col min-w-0 h-full"
-        style={{ flex: browserVisible ? '35 0 0' : '1 0 0' }}
+        style={{ flex: (browserVisible || calendarOpen) ? '35 0 0' : '1 0 0' }}
       >
         {activeView === 'chat' && (
           <ChatPanel
             key={chatKey}
             browserVisible={browserVisible}
             onToggleBrowser={handleToggleBrowser}
+            onHideBrowser={handleHideBrowser}
+            onShowBrowser={handleShowBrowser}
+            calendarOpen={calendarOpen}
+            onToggleCalendar={handleToggleCalendar}
             onOpenSettings={() => setActiveView('settings')}
             onOpenPendingApproval={handleOpenProcess}
             loadConversationId={loadConversationId}
@@ -142,7 +173,16 @@ export default function App() {
         )}
       </div>
 
-      {browserVisible && (
+      {calendarOpen && (
+        <div
+          className="flex flex-col min-w-0 h-full border-l-[2px] border-white/[0.06]"
+          style={{ flex: '65 0 0' }}
+        >
+          <Calendar />
+        </div>
+      )}
+
+      {browserVisible && !calendarOpen && (
         <div
           className="flex flex-col min-w-0 h-full border-l-[2px] border-white/[0.06] shadow-[inset_2px_0_8px_rgba(0,0,0,0.3),-2px_0_12px_rgba(0,0,0,0.4)]"
           style={{ flex: '65 0 0' }}

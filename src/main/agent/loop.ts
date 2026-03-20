@@ -41,8 +41,8 @@ const MAX_HISTORY_TOKENS = 80_000;
 const WRAP_UP_THRESHOLD = 25;
 const GUI_BATCH_NUDGE_AT = 2;
 
-const NARRATION_RE = /^(?:I'll start by|Let me (?:start|begin|first)|I need to (?:first|read|check|look)|Here's my (?:plan|approach)|I want to (?:start|begin))/i;
-const CAPABILITY_DENIAL_RE = /(?:I (?:can't|cannot|don't have|am unable to) (?:access|browse|execute|run|open|launch|read|write))/i;
+const NARRATION_RE = /^(?:I'll start by|Let me (?:start|begin|first)|I need to (?:first|read|check|look)|Here's my (?:plan|approach)|I want to (?:start|begin)|I'll (?:begin|first)|To (?:start|begin|complete|accomplish|do) this|First,? I(?:'ll| will| need)|I'm going to start)/i;
+const CAPABILITY_DENIAL_RE = /(?:I (?:can't|cannot|don't have|am unable to|lack the ability to|do not have) (?:access|browse|execute|run|open|launch|read|write|interact with|control|use))/i;
 const MULTI_STEP_CONNECTOR_RE = /\b(and then|then|after that|afterwards|next|followed by)\b/i;
 
 // Seed registry on first import
@@ -399,14 +399,17 @@ export async function runAgentLoop(
     performanceStance: control.performanceStance,
   });
 
-  if (shouldCreateExecutionPlan(userMessage, profile)) {
+  if (false && shouldCreateExecutionPlan(userMessage, profile)) { // DISABLED: plan creation commented out
     let executionPlanText: string | null = null;
     let planRevisionRound = 0;
 
     while (true) {
-      if (runId) setProcessWorkflowStage(runId, 'planning');
-      if (runId) {
-        appendRunEvent(runId, {
+      const planningRunId = runId;
+      const previousPlan = executionPlanText;
+
+      if (planningRunId) setProcessWorkflowStage(planningRunId!, 'planning');
+      if (planningRunId) {
+        appendRunEvent(planningRunId!, {
           kind: 'workflow_stage_changed',
           phase: 'planning',
           payload: { workflowStage: 'planning', revisionRound: planRevisionRound },
@@ -416,37 +419,39 @@ export async function runAgentLoop(
       onThinking?.(planRevisionRound > 0 ? 'Drafting revised execution plan...' : 'Drafting execution plan...');
       executionPlanText = await createExecutionPlan({
         client,
-        runId,
+        runId: planningRunId,
         userMessage,
         staticPrompt,
         dynamicPrompt,
         performanceStance: control.performanceStance,
         onText: (chunk) => options.onWorkflowPlanText?.(chunk),
         signal: control.abortController.signal,
-        ...(planRevisionRound > 0 && executionPlanText
-          ? { revisionContext: { previousPlan: executionPlanText, round: planRevisionRound } }
+        ...(planRevisionRound > 0 && previousPlan
+          ? { revisionContext: { previousPlan: previousPlan!, round: planRevisionRound } }
           : {}),
       });
       options.onWorkflowPlanEnd?.();
       onThinking?.('');
 
-      if (!runId || !executionPlanText) break;
+      const activeRunId = planningRunId;
+      const currentExecutionPlan = executionPlanText;
+      if (!activeRunId || !currentExecutionPlan) break;
 
       const decision = await requireExecutionPlanApproval({
-        runId,
-        plan: executionPlanText,
+        runId: activeRunId!,
+        plan: currentExecutionPlan!,
       });
       if (decision === 'approved') break;
       if (decision === 'revise') {
         planRevisionRound += 1;
-        appendRunEvent(runId, {
+        appendRunEvent(activeRunId!, {
           kind: 'workflow_plan_revised',
           phase: 'planning',
           payload: { revisionRound: planRevisionRound },
         });
         continue;
       }
-      appendRunEvent(runId, {
+      appendRunEvent(activeRunId!, {
         kind: 'workflow_plan_denied',
         phase: 'planning',
         payload: { workflowStage: 'planning' },
@@ -656,6 +661,16 @@ export async function runAgentLoop(
     const responseText = textBlocks.map(b => b.text).join('');
 
     // ── No tools → check for narration/denial or return ──
+    // Guard: if the provider signalled tool_calls but streaming produced no blocks
+    // (e.g. GPT-5 chunk ordering delivered finish_reason before all deltas), force
+    // another iteration rather than terminating with an empty tool list.
+    if (toolUseBlocks.length === 0 && response.stopReason === 'tool_calls') {
+      console.warn('[Agent] stopReason=tool_calls but no tool_use blocks received — forcing continuation');
+      messages.push({ role: 'assistant', content: response.content as any });
+      messages.push({ role: 'user', content: '[SYSTEM] You indicated tool calls were needed. Please proceed with your tool calls now.' });
+      continue;
+    }
+
     if (toolUseBlocks.length === 0) {
       const isShortNarration = iteration === 0 && responseText.length < 300 && NARRATION_RE.test(responseText) && dispatchCtx.toolCallCount === 0;
 

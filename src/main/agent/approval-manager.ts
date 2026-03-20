@@ -10,7 +10,7 @@ import { evaluatePolicy } from './policy-engine';
 import { getUnrestrictedMode } from '../store';
 import { setProcessStatus } from './process-manager';
 
-type ApprovalDecision = 'approved' | 'denied';
+type ApprovalDecision = 'approved' | 'denied' | 'revise';
 
 const pending = new Map<number, { runId: string; resolve: (decision: ApprovalDecision) => void }>();
 
@@ -179,6 +179,10 @@ export function denyRunApproval(approvalId: number): RunApprovalRecord | null {
   return resolveApproval(approvalId, 'denied');
 }
 
+export function reviseRunApproval(approvalId: number): RunApprovalRecord | null {
+  return resolveApproval(approvalId, 'revise');
+}
+
 export function listApprovalsForRun(runId: string): RunApprovalRecord[] {
   return listRunApprovalRecords(runId);
 }
@@ -208,7 +212,7 @@ export function cancelPendingApprovals(runId?: string, reason = 'Run cancelled w
 }
 
 function resolveApproval(approvalId: number, decision: ApprovalDecision): RunApprovalRecord | null {
-  const record = resolveRunApproval(approvalId, decision);
+  const record = resolveRunApproval(approvalId, decision === 'revise' ? 'denied' : decision);
   if (!record) return getRunApprovalRecord(approvalId);
 
   setProcessStatus(record.runId, 'running');

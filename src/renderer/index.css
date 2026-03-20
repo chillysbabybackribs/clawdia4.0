@@ -17,6 +17,11 @@
 .no-drag { -webkit-app-region: no-drag; }
 textarea { field-sizing: content; }
 
+/* ── Tab close button: show on tab hover ── */
+.tab-close-btn { opacity: 0 !important; }
+*:hover > .tab-close-btn { opacity: 0.6 !important; }
+.tab-close-btn:hover { opacity: 1 !important; background: rgba(255,255,255,0.12) !important; }
+
 /* ══════════════════════════════════════════════════
    MARKDOWN PROSE
    ══════════════════════════════════════════════════ */
@@ -44,11 +49,11 @@ textarea { field-sizing: content; }
 .markdown-prose em { font-style: italic; color: #ccccd4; }
 
 .markdown-prose a {
-  color: #5b9cf5; text-decoration: none;
-  border-bottom: 1px solid rgba(91, 156, 245, 0.3);
+  color: #FF5061; text-decoration: none;
+  border-bottom: 1px solid rgba(255, 80, 97, 0.3);
   transition: border-color 0.15s, color 0.15s;
 }
-.markdown-prose a:hover { color: #7db4ff; border-bottom-color: rgba(125, 180, 255, 0.5); }
+.markdown-prose a:hover { color: #ff7080; border-bottom-color: rgba(255, 80, 97, 0.5); }
 
 .markdown-prose code:not(pre code) {
   font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
@@ -93,20 +98,25 @@ textarea { field-sizing: content; }
 
 .markdown-prose blockquote {
   margin: 0.8em 0; padding: 0.6em 1em;
-  border-left: 3px solid rgba(79, 143, 247, 0.4);
-  background: rgba(79, 143, 247, 0.04); border-radius: 0 6px 6px 0; color: #bcbcc8;
+  border-left: 3px solid rgba(255, 80, 97, 0.4);
+  background: rgba(255, 80, 97, 0.04); border-radius: 0 6px 6px 0; color: #bcbcc8;
 }
 .markdown-prose blockquote p { margin-bottom: 0.3em; }
 .markdown-prose hr { border: none; height: 1px; background: rgba(255, 255, 255, 0.06); margin: 1.2em 0; }
 .markdown-prose img { max-width: 100%; border-radius: 8px; margin: 0.5em 0; }
 
 /* ── Streaming cursor ── */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 @keyframes cursor-blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
 }
 .streaming-cursor::after {
-  content: '▊'; display: inline; color: #4f8ff7;
+  content: '▊'; display: inline; color: #FF5061;
   animation: cursor-blink 0.8s ease-in-out infinite;
   margin-left: 1px; font-size: 0.85em;
 }
@@ -118,11 +128,11 @@ textarea { field-sizing: content; }
 .status-line-container { min-height: 28px; max-height: 28px; }
 
 @keyframes status-dot-pulse {
-  0%, 100% { opacity: 0.4; box-shadow: 0 0 0 0 rgba(79, 143, 247, 0); }
-  50% { opacity: 1; box-shadow: 0 0 8px 2px rgba(79, 143, 247, 0.3); }
+  0%, 100% { opacity: 0.4; box-shadow: 0 0 0 0 rgba(255, 80, 97, 0); }
+  50% { opacity: 1; box-shadow: 0 0 8px 2px rgba(255, 80, 97, 0.3); }
 }
 .status-shimmer-dot {
-  width: 6px; height: 6px; border-radius: 50%; background: #4f8ff7; flex-shrink: 0;
+  width: 6px; height: 6px; border-radius: 50%; background: #FF5061; flex-shrink: 0;
   animation: status-dot-pulse 2s ease-in-out infinite;
 }
 

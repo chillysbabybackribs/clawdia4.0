@@ -21,6 +21,8 @@
  *   run_file_locks   — active per-file write ownership for simultaneous runs (v15)
  *   filesystem_extractions — persistent extracted-text cache for local retrieval (v17)
  *   filesystem_extractions_fts — lexical index over extracted local text (v18)
+ *   runs.provider/model — execution backend metadata (v19)
+ *   runs.workflow_stage + run_artifacts — workflow planning state (v20)
  */
 
 import Database from 'better-sqlite3';
@@ -499,5 +501,38 @@ function runMigrations(db: Database.Database): void {
     `);
   }
 
-  console.log(`[DB] Schema at version ${Math.max(currentVersion, 18)}`);
+  if (currentVersion < 19) {
+    console.log('[DB] Running migration v19: run provider/model metadata');
+    db.exec(`
+      ALTER TABLE runs ADD COLUMN provider TEXT;
+      ALTER TABLE runs ADD COLUMN model TEXT;
+      INSERT INTO schema_version (version) VALUES (19);
+    `);
+  }
+
+  if (currentVersion < 20) {
+    console.log('[DB] Running migration v20: workflow stages + run_artifacts');
+    db.exec(`
+      ALTER TABLE runs ADD COLUMN workflow_stage TEXT NOT NULL DEFAULT 'starting';
+
+      CREATE TABLE IF NOT EXISTS run_artifacts (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id      TEXT NOT NULL,
+        kind        TEXT NOT NULL CHECK(kind IN ('execution_plan')),
+        title       TEXT NOT NULL,
+        body        TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_run_artifacts_run_id
+        ON run_artifacts(run_id, id ASC);
+      CREATE INDEX IF NOT EXISTS idx_run_artifacts_kind
+        ON run_artifacts(kind, updated_at DESC);
+
+      INSERT INTO schema_version (version) VALUES (20);
+    `);
+  }
+
+  console.log(`[DB] Schema at version ${Math.max(currentVersion, 20)}`);
 }

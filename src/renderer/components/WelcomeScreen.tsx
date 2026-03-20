@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { DEFAULT_MODEL_BY_PROVIDER, DEFAULT_PROVIDER, PROVIDERS, type ProviderId } from '../../shared/model-registry';
 
 interface WelcomeScreenProps {
   onComplete: () => void;
@@ -9,9 +10,23 @@ interface WelcomeScreenProps {
  * Lets the user paste their key and get started without hunting for Settings.
  */
 export default function WelcomeScreen({ onComplete }: WelcomeScreenProps) {
+  const [provider, setProvider] = useState<ProviderId>(DEFAULT_PROVIDER);
   const [apiKey, setApiKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  const validateApiKey = (providerId: ProviderId, key: string): string | null => {
+    if (providerId === 'anthropic' && !key.startsWith('sk-ant-')) {
+      return 'Anthropic API key should start with sk-ant-';
+    }
+    if (providerId === 'openai' && !key.startsWith('sk-')) {
+      return 'OpenAI API key should start with sk-';
+    }
+    if (providerId === 'gemini' && !/^AIza[0-9A-Za-z_-]{20,}$/.test(key)) {
+      return 'Gemini API key should usually start with AIza';
+    }
+    return null;
+  };
 
   const handleSubmit = async () => {
     const key = apiKey.trim();
@@ -19,8 +34,9 @@ export default function WelcomeScreen({ onComplete }: WelcomeScreenProps) {
       setError('Please paste your API key');
       return;
     }
-    if (!key.startsWith('sk-ant-')) {
-      setError('API key should start with sk-ant-');
+    const validationError = validateApiKey(provider, key);
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
@@ -29,8 +45,9 @@ export default function WelcomeScreen({ onComplete }: WelcomeScreenProps) {
 
     try {
       const api = (window as any).clawdia;
-      await api.settings.setApiKey(key);
-      await api.settings.setModel('claude-sonnet-4-6');
+      await api.settings.setApiKey(provider, key);
+      await api.settings.setProvider(provider);
+      await api.settings.setModel(provider, DEFAULT_MODEL_BY_PROVIDER[provider]);
       onComplete();
     } catch (err: any) {
       setError('Failed to save: ' + (err.message || 'Unknown error'));
@@ -58,14 +75,32 @@ export default function WelcomeScreen({ onComplete }: WelcomeScreenProps) {
         {/* API key input */}
         <div className="flex flex-col gap-3 w-full">
           <label className="text-xs font-medium text-text-secondary uppercase tracking-wider">
-            Anthropic API Key
+            Provider
+          </label>
+          <div className="grid grid-cols-3 gap-2">
+            {PROVIDERS.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => { setProvider(p.id); setError(''); }}
+                className={`h-[38px] rounded-xl border text-xs transition-colors cursor-pointer ${
+                  provider === p.id
+                    ? 'border-accent/50 bg-accent/10 text-text-primary'
+                    : 'border-border bg-surface-2 text-text-muted hover:text-text-secondary'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <label className="text-xs font-medium text-text-secondary uppercase tracking-wider pt-1">
+            API Key
           </label>
           <input
             type="password"
             value={apiKey}
             onChange={e => { setApiKey(e.target.value); setError(''); }}
             onKeyDown={e => e.key === 'Enter' && handleSubmit()}
-            placeholder="sk-ant-api03-..."
+            placeholder={provider === 'anthropic' ? 'sk-ant-...' : provider === 'openai' ? 'sk-...' : 'AIza...'}
             autoFocus
             className="w-full h-[42px] bg-surface-2 text-text-primary text-sm font-mono px-4 rounded-xl border border-border placeholder:text-text-muted outline-none focus:border-accent/40 transition-colors"
           />
@@ -75,9 +110,18 @@ export default function WelcomeScreen({ onComplete }: WelcomeScreenProps) {
           <p className="text-2xs text-text-muted leading-relaxed">
             Get your key at{' '}
             <span className="text-accent cursor-pointer" onClick={() => {
-              (window as any).clawdia?.browser?.navigate('https://console.anthropic.com');
+              const url = provider === 'anthropic'
+                ? 'https://console.anthropic.com'
+                : provider === 'openai'
+                  ? 'https://platform.openai.com/api-keys'
+                  : 'https://aistudio.google.com/app/apikey';
+              (window as any).clawdia?.browser?.navigate(url);
             }}>
-              console.anthropic.com
+              {provider === 'anthropic'
+                ? 'console.anthropic.com'
+                : provider === 'openai'
+                  ? 'platform.openai.com/api-keys'
+                  : 'aistudio.google.com/app/apikey'}
             </span>
             . Stored locally with encryption — never leaves your machine.
           </p>

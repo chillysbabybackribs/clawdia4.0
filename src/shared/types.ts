@@ -1,3 +1,5 @@
+import type { ProviderId } from './model-registry';
+
 export interface MessageIteration {
   text: string;          // LLM narration for this iteration (may be '')
   toolCalls: ToolCall[]; // tool calls dispatched after this text (may be [])
@@ -44,6 +46,7 @@ export interface BrowserTab {
 }
 
 export type AgentProfile = 'general' | 'filesystem' | 'bloodhound';
+export type WorkflowStage = 'starting' | 'planning' | 'executing' | 'reviewing' | 'completed';
 
 export interface ProcessInfo {
   id: string;
@@ -56,8 +59,11 @@ export interface ProcessInfo {
   error?: string;
   isAttached: boolean;
   wasDetached: boolean;
+  provider?: ProviderId;
+  model?: string;
   agentProfile?: AgentProfile;
   lastSpecializedTool?: string;
+  workflowStage?: WorkflowStage;
 }
 
 export type RunStatus = 'running' | 'awaiting_approval' | 'needs_human' | 'completed' | 'failed' | 'cancelled';
@@ -73,6 +79,19 @@ export interface RunSummary {
   toolCallCount: number;
   error?: string;
   wasDetached: boolean;
+  provider?: ProviderId;
+  model?: string;
+  workflowStage?: WorkflowStage;
+}
+
+export interface RunArtifact {
+  id: number;
+  runId: string;
+  kind: 'execution_plan';
+  title: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface RunEvent {
@@ -125,6 +144,8 @@ export interface RunHumanIntervention {
 
 export type BrowserExecutionMode = 'headed' | 'headless' | 'persistent_session';
 export type PerformanceStance = 'conservative' | 'standard' | 'aggressive';
+
+export type { ProviderId };
 
 export interface PolicyRule {
   id: string;

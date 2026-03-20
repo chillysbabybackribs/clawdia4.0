@@ -183,7 +183,22 @@ const EXTRA_TOOLS: NormalizedToolDefinition[] = [
   {
     name: 'create_document',
     description: 'Create document (docx, pdf, xlsx, csv, md, html, json, txt).',
-    input_schema: { type: 'object' as const, properties: { filename: { type: 'string' }, format: { type: 'string', enum: ['docx', 'pdf', 'xlsx', 'csv', 'md', 'html', 'json', 'txt'] }, content: { type: 'string' }, structured_data: { type: 'array' } }, required: ['filename', 'format'] },
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        filename: { type: 'string' },
+        format: { type: 'string', enum: ['docx', 'pdf', 'xlsx', 'csv', 'md', 'html', 'json', 'txt'] },
+        content: { type: 'string' },
+        structured_data: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: true,
+          },
+        },
+      },
+      required: ['filename', 'format'],
+    },
   },
   {
     name: 'memory_search',

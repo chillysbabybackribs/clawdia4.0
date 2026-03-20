@@ -375,6 +375,10 @@ export async function executeSavedBloodhoundPlaybook(
   const playbook = findPlaybook(taskDescription, url);
   if (!playbook || playbook.agentProfile !== 'bloodhound') return null;
   const compiledSteps = compileBloodhoundExecutorSteps(playbook.steps);
+  if (containsTemplatePlaceholder(compiledSteps)) {
+    console.warn(`[Playbook] Skipping executor "${playbook.taskPattern}" on ${playbook.domain} because it contains unresolved template placeholders.`);
+    return null;
+  }
   if (JSON.stringify(compiledSteps) !== JSON.stringify(playbook.steps)) {
     const db = getDb();
     db.prepare(`
@@ -495,6 +499,19 @@ function compileBloodhoundExecutorSteps(steps: PlaybookStep[]): PlaybookStep[] {
     if (scoreDiff !== 0) return scoreDiff;
     return a.length - b.length;
   })[0] || optimized;
+}
+
+function containsTemplatePlaceholder(steps: PlaybookStep[]): boolean {
+  return steps.some((step) => valueContainsTemplatePlaceholder(step.input));
+}
+
+function valueContainsTemplatePlaceholder(value: unknown): boolean {
+  if (typeof value === 'string') return /\$\{[^}]+\}/.test(value);
+  if (Array.isArray(value)) return value.some((item) => valueContainsTemplatePlaceholder(item));
+  if (value && typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).some((item) => valueContainsTemplatePlaceholder(item));
+  }
+  return false;
 }
 
 /**

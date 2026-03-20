@@ -1,22 +1,22 @@
 /**
  * Memory Extractor — Fire-and-forget background fact extraction.
- * 
+ *
  * After each conversation exchange, sends the user message + assistant response
- * to Haiku with a structured extraction prompt. Results are stored in the
- * user_memory table via the remember() function.
- * 
+ * to the fastest model for the active provider with a structured extraction prompt.
+ * Results are stored in the user_memory table via the remember() function.
+ *
  * Design:
- *   - Uses Haiku (cheapest model) — ~$0.001 per extraction
+ *   - Uses the 'fast' tier model for the current provider (cheap/quick)
  *   - Non-blocking: runs async, errors are silently logged
  *   - Extracts: preferences, facts, names, tools, workflows, projects
  *   - Filters: skips greetings, short exchanges, pure tool-use conversations
  *   - Rate-limited: max 1 extraction per 10 seconds
  */
 
-import { getSharedSdk } from './client';
+import { createProviderClient, resolveModelForProvider } from './client';
+import type { ProviderId } from '../../shared/types';
 import { remember, pruneMemories } from '../db/memory';
 
-const HAIKU_MODEL = 'claude-haiku-4-5-20251001';
 const MIN_INTERVAL_MS = 10_000; // Don't extract more than once per 10s
 const MIN_USER_MSG_LENGTH = 20;  // Skip very short messages
 const MIN_ASSISTANT_MSG_LENGTH = 50;
@@ -51,6 +51,7 @@ Categories:
  * Call this AFTER persisting the messages — it's fire-and-forget.
  */
 export function extractMemoryInBackground(
+  provider: ProviderId,
   apiKey: string,
   userMessage: string,
   assistantResponse: string,
@@ -64,38 +65,40 @@ export function extractMemoryInBackground(
   lastExtractionTime = now;
 
   // Fire and forget — don't await
-  doExtraction(apiKey, userMessage, assistantResponse).catch(err => {
+  doExtraction(provider, apiKey, userMessage, assistantResponse).catch(err => {
     console.warn(`[MemoryExtractor] Extraction failed: ${err.message}`);
   });
 }
 
 async function doExtraction(
+  provider: ProviderId,
   apiKey: string,
   userMessage: string,
   assistantResponse: string,
 ): Promise<void> {
-  const client = getSharedSdk(apiKey);
+  const fastModel = resolveModelForProvider(provider, 'haiku');
+  const client = createProviderClient(provider, apiKey, fastModel);
 
   // Trim inputs to keep costs minimal
   const userTrimmed = userMessage.slice(0, 2000);
   const assistantTrimmed = assistantResponse.slice(0, 3000);
 
-  const response = await client.messages.create({
-    model: HAIKU_MODEL,
-    max_tokens: 1024,
-    system: EXTRACTION_PROMPT,
-    messages: [
+  const response = await client.chat(
+    [
       {
         role: 'user',
         content: `USER MESSAGE:\n${userTrimmed}\n\nASSISTANT RESPONSE:\n${assistantTrimmed}`,
       },
     ],
-  });
+    [],
+    EXTRACTION_PROMPT,
+    '',
+  );
 
-  // Parse the response
+  // Extract text from normalized response
   const text = response.content
-    .filter(b => b.type === 'text')
-    .map(b => (b as any).text as string)
+    .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+    .map((b) => b.text)
     .join('');
 
   if (!text.trim()) return;

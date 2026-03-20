@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import type { ProcessInfo, RunApproval, RunChange, RunEvent, RunHumanIntervention, RunSummary } from '../../shared/types';
+import type { ProcessInfo, RunApproval, RunArtifact, RunChange, RunEvent, RunHumanIntervention, RunSummary, WorkflowStage } from '../../shared/types';
+import { PROVIDERS, getModelById } from '../../shared/model-registry';
 
 interface ProcessesPanelProps {
   onBack: () => void;
@@ -58,6 +59,10 @@ function formatEventLabel(event: RunEvent): string {
     case 'run_classified': return `Classified as ${event.payload.toolGroup || 'task'}`;
     case 'model_selected': return `Model selected: ${event.payload.modelId || 'unknown'}`;
     case 'preflight_completed': return `Preflight complete${event.payload.selectedSurface ? ` (${event.payload.selectedSurface})` : ''}`;
+    case 'workflow_stage_changed': return `Workflow stage: ${formatWorkflowStage(event.payload.workflowStage) || event.payload.workflowStage || 'updated'}`;
+    case 'workflow_plan_created': return 'Execution plan created';
+    case 'workflow_plan_failed': return 'Execution plan failed';
+    case 'workflow_plan_denied': return 'Execution plan denied';
     case 'thinking': return 'Thinking';
     case 'tool_started': return `${event.toolName || 'Tool'} started`;
     case 'tool_progress': return `${event.toolName || 'Tool'} progress`;
@@ -102,6 +107,15 @@ function formatEventDetail(event: RunEvent): string {
   if (event.kind === 'assistant_response') {
     return String(event.payload.text || '').slice(0, 180);
   }
+  if (event.kind === 'workflow_plan_created') {
+    return String(event.payload.preview || '').slice(0, 180);
+  }
+  if (event.kind === 'workflow_plan_failed') {
+    return String(event.payload.message || '').slice(0, 180);
+  }
+  if (event.kind === 'workflow_plan_denied') {
+    return 'The run stopped before execution because the plan was denied.';
+  }
   if (event.kind === 'context_injected') {
     return String(event.payload.text || '').slice(0, 180);
   }
@@ -126,6 +140,24 @@ function formatEventDetail(event: RunEvent): string {
     return `${mode}${reason ? ` · ${reason}` : ''}`.trim();
   }
   return '';
+}
+
+function formatProviderModel(provider?: string, model?: string): string | null {
+  if (!provider && !model) return null;
+  const providerLabel = provider ? (PROVIDERS.find((item) => item.id === provider)?.label || provider) : null;
+  const modelLabel = model ? (getModelById(model)?.label || model) : null;
+  return [providerLabel, modelLabel].filter(Boolean).join(' · ');
+}
+
+function formatWorkflowStage(stage?: WorkflowStage): string | null {
+  if (!stage) return null;
+  return {
+    starting: 'Starting',
+    planning: 'Planning',
+    executing: 'Executing',
+    reviewing: 'Reviewing',
+    completed: 'Completed',
+  }[stage] || stage;
 }
 
 function ProcessCard({
@@ -168,6 +200,18 @@ function ProcessCard({
         <div className="flex items-center gap-3 mt-2 text-2xs text-text-muted">
           <span>{formatTime(process.startedAt)}</span>
           <span>·</span>
+          {formatProviderModel(process.provider, process.model) && (
+            <>
+              <span>{formatProviderModel(process.provider, process.model)}</span>
+              <span>·</span>
+            </>
+          )}
+          {formatWorkflowStage(process.workflowStage) && (
+            <>
+              <span>{formatWorkflowStage(process.workflowStage)}</span>
+              <span>·</span>
+            </>
+          )}
           <span>{process.toolCallCount} tools</span>
           <span>·</span>
           <span>{formatDuration(process.startedAt, process.completedAt)}</span>
@@ -220,6 +264,7 @@ function RunDetail({
   run,
   events,
   changes,
+  artifacts,
   approvals,
   humanInterventions,
   onBack,
@@ -230,6 +275,7 @@ function RunDetail({
   run: RunSummary;
   events: RunEvent[];
   changes: RunChange[];
+  artifacts: RunArtifact[];
   approvals: RunApproval[];
   humanInterventions: RunHumanIntervention[];
   onBack: () => void;
@@ -277,10 +323,42 @@ function RunDetail({
             <span className="px-2 py-1 rounded-md bg-white/[0.04]">{run.toolCallCount} tools</span>
             <span className="px-2 py-1 rounded-md bg-white/[0.04]">{events.length} events</span>
             <span className="px-2 py-1 rounded-md bg-white/[0.04]">{changes.length} changes</span>
+            <span className="px-2 py-1 rounded-md bg-white/[0.04]">{artifacts.length} artifacts</span>
             <span className="px-2 py-1 rounded-md bg-white/[0.04]">{approvals.length} approvals</span>
             <span className="px-2 py-1 rounded-md bg-white/[0.04]">{humanInterventions.length} human steps</span>
+            {formatProviderModel(run.provider, run.model) && <span className="px-2 py-1 rounded-md bg-white/[0.04]">{formatProviderModel(run.provider, run.model)}</span>}
+            {formatWorkflowStage(run.workflowStage) && <span className="px-2 py-1 rounded-md bg-white/[0.04]">{formatWorkflowStage(run.workflowStage)}</span>}
             {run.wasDetached && <span className="px-2 py-1 rounded-md bg-white/[0.04]">Detached</span>}
             {run.error && <span className="px-2 py-1 rounded-md bg-red-400/10 text-red-300">{run.error}</span>}
+          </div>
+        </div>
+
+        <div className="mb-5">
+          <h3 className="text-2xs font-medium text-text-muted uppercase tracking-wider mb-2">Workflow Artifacts</h3>
+          <div className="flex flex-col gap-2">
+            {artifacts.length === 0 && (
+              <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-4 text-sm text-text-muted">
+                No workflow artifacts recorded for this run yet.
+              </div>
+            )}
+
+            {artifacts.map(artifact => (
+              <div key={artifact.id} className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3.5 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[13px] text-text-primary">{artifact.title}</div>
+                    <div className="mt-1 text-2xs text-text-muted">{artifact.kind.replace(/_/g, ' ')}</div>
+                  </div>
+                  <div className="text-2xs text-text-muted flex-shrink-0">
+                    {new Date(artifact.updatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}
+                  </div>
+                </div>
+
+                <pre className="mt-3 overflow-x-auto rounded-lg border border-white/[0.04] bg-[#0f0f13] px-3 py-2 font-mono text-[11px] leading-[1.55] text-text-secondary whitespace-pre-wrap">
+                  {artifact.body}
+                </pre>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -456,6 +534,7 @@ export default function ProcessesPanel({ onBack, onAttach, initialRunId }: Proce
   const [processes, setProcesses] = useState<ProcessInfo[]>([]);
   const [selectedRun, setSelectedRun] = useState<RunSummary | null>(null);
   const [selectedEvents, setSelectedEvents] = useState<RunEvent[]>([]);
+  const [selectedArtifacts, setSelectedArtifacts] = useState<RunArtifact[]>([]);
   const [selectedChanges, setSelectedChanges] = useState<RunChange[]>([]);
   const [selectedApprovals, setSelectedApprovals] = useState<RunApproval[]>([]);
   const [selectedHumanInterventions, setSelectedHumanInterventions] = useState<RunHumanIntervention[]>([]);
@@ -469,18 +548,21 @@ export default function ProcessesPanel({ onBack, onAttach, initialRunId }: Proce
       setProcesses(updated);
       if (selectedRun) {
         const match = updated.find((p: ProcessInfo) => p.id === selectedRun.id);
-        if (match) {
-          setSelectedRun(prev => prev ? {
-            ...prev,
-            status: match.status,
-            startedAt: match.startedAt,
-            completedAt: match.completedAt,
-            toolCallCount: match.toolCallCount,
-            error: match.error,
-            wasDetached: match.wasDetached,
-          } : prev);
-        }
-      }
+            if (match) {
+              setSelectedRun(prev => prev ? {
+                ...prev,
+                status: match.status,
+                startedAt: match.startedAt,
+                completedAt: match.completedAt,
+                toolCallCount: match.toolCallCount,
+                error: match.error,
+                wasDetached: match.wasDetached,
+                provider: match.provider,
+                model: match.model,
+                workflowStage: match.workflowStage,
+              } : prev);
+            }
+          }
     });
     return cleanup;
   }, [selectedRun]);
@@ -489,9 +571,10 @@ export default function ProcessesPanel({ onBack, onAttach, initialRunId }: Proce
     const api = (window as any).clawdia;
     if (!api?.run) return;
 
-    const [run, events, changes, approvals, humanInterventions] = await Promise.all([
+    const [run, events, artifacts, changes, approvals, humanInterventions] = await Promise.all([
       api.run.get(runId),
       api.run.events(runId),
+      api.run.artifacts(runId),
       api.run.changes(runId),
       api.run.approvals(runId),
       api.run.humanInterventions(runId),
@@ -500,6 +583,7 @@ export default function ProcessesPanel({ onBack, onAttach, initialRunId }: Proce
     if (run) {
       setSelectedRun(run);
       setSelectedEvents(events || []);
+      setSelectedArtifacts(artifacts || []);
       setSelectedChanges(changes || []);
       setSelectedApprovals(approvals || []);
       setSelectedHumanInterventions(humanInterventions || []);
@@ -571,8 +655,9 @@ export default function ProcessesPanel({ onBack, onAttach, initialRunId }: Proce
             setSelectedHumanInterventions([]);
           }}
           onOpenConversation={() => onAttach(selectedRun.conversationId)}
-          changes={selectedChanges}
-          approvals={selectedApprovals}
+        changes={selectedChanges}
+        artifacts={selectedArtifacts}
+        approvals={selectedApprovals}
           humanInterventions={selectedHumanInterventions}
           onApprove={(approvalId) => handleApprovalDecision(approvalId, 'approve')}
           onDeny={(approvalId) => handleApprovalDecision(approvalId, 'deny')}

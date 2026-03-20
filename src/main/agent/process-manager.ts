@@ -24,15 +24,17 @@ import {
   incrementRunToolCount,
   listRuns,
   reconcileInterruptedRuns,
+  setRunExecutionInfo,
   setRunStatus,
   setRunDetached,
+  setRunWorkflowStage,
 } from '../db/runs';
 import { reconcilePendingRunApprovals } from '../db/run-approvals';
 import { reconcilePendingRunHumanInterventions } from '../db/run-human-interventions';
 import { appendRunEvent, getLastSpecializedTool, getRunAgentProfile } from '../db/run-events';
 import { clearRunFileState, initFileLockManager } from './file-lock-manager';
 import { setBrowserExecutionMode } from '../browser/manager';
-import type { AgentProfile } from '../../shared/types';
+import type { AgentProfile, ProviderId, WorkflowStage } from '../../shared/types';
 
 // ═══════════════════════════════════
 // Types
@@ -51,8 +53,11 @@ export interface ProcessInfo {
   error?: string;
   isAttached: boolean;
   wasDetached: boolean;
+  provider?: ProviderId;
+  model?: string;
   agentProfile?: AgentProfile;
   lastSpecializedTool?: string;
+  workflowStage?: WorkflowStage;
 }
 
 interface InternalProcess extends ProcessInfo {
@@ -91,7 +96,7 @@ export function initProcessManager(mainWindow: BrowserWindow): void {
  * Register a new process when the agent loop starts.
  * Called from the CHAT_SEND handler in main.ts.
  */
-export function registerProcess(conversationId: string, message: string): string {
+export function registerProcess(conversationId: string, message: string, provider?: ProviderId, model?: string): string {
   const id = `proc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
   if (attachedId) {
@@ -123,13 +128,16 @@ export function registerProcess(conversationId: string, message: string): string
     toolCallCount: 0,
     isAttached: true,
     wasDetached: false,
+    provider,
+    model,
     agentProfile: undefined,
     lastSpecializedTool: undefined,
+    workflowStage: 'starting',
     outputBuffer: [],
   };
 
   processes.set(id, proc);
-  createRun(id, conversationId, message);
+  createRun(id, conversationId, message, provider, model);
   setBrowserExecutionMode('headed', 'run_attached');
   appendRunEvent(id, {
     kind: 'run_started',
@@ -199,10 +207,35 @@ export function setProcessAgentProfile(processId: string, agentProfile: AgentPro
   return true;
 }
 
+export function setProcessExecutionInfo(processId: string, provider: ProviderId, model: string): boolean {
+  const proc = processes.get(processId);
+  if (!proc) {
+    setRunExecutionInfo(processId, provider, model);
+    return false;
+  }
+  proc.provider = provider;
+  proc.model = model;
+  setRunExecutionInfo(processId, provider, model);
+  broadcast();
+  return true;
+}
+
 export function noteProcessSpecializedTool(processId: string, toolName: string): boolean {
   const proc = processes.get(processId);
   if (!proc || !toolName.startsWith('fs_')) return false;
   proc.lastSpecializedTool = toolName;
+  broadcast();
+  return true;
+}
+
+export function setProcessWorkflowStage(processId: string, workflowStage: WorkflowStage): boolean {
+  const proc = processes.get(processId);
+  if (!proc) {
+    setRunWorkflowStage(processId, workflowStage);
+    return false;
+  }
+  proc.workflowStage = workflowStage;
+  setRunWorkflowStage(processId, workflowStage);
   broadcast();
   return true;
 }
@@ -400,8 +433,11 @@ function serialize(proc: InternalProcess): ProcessInfo {
     error: proc.error,
     isAttached: proc.id === attachedId,
     wasDetached: proc.wasDetached,
+    provider: proc.provider,
+    model: proc.model,
     agentProfile: proc.agentProfile,
     lastSpecializedTool: proc.lastSpecializedTool,
+    workflowStage: proc.workflowStage,
   };
 }
 
@@ -436,8 +472,11 @@ function hydratePersistedRuns(): void {
       error: row.error || undefined,
       isAttached: false,
       wasDetached: !!row.was_detached,
+      provider: (row.provider as ProviderId | null) || undefined,
+      model: row.model || undefined,
       agentProfile: getRunAgentProfile(row.id),
       lastSpecializedTool: getLastSpecializedTool(row.id),
+      workflowStage: (row.workflow_stage as WorkflowStage | null) || 'starting',
       outputBuffer: [],
     });
   }

@@ -6,6 +6,7 @@
  */
 
 import { getDb } from './database';
+import type { ProviderId, WorkflowStage } from '../../shared/types';
 
 export type RunStatus = 'running' | 'awaiting_approval' | 'needs_human' | 'completed' | 'failed' | 'cancelled';
 
@@ -21,6 +22,9 @@ export interface RunRow {
   tool_call_count: number;
   error: string | null;
   was_detached: number;
+  provider: string | null;
+  model: string | null;
+  workflow_stage: string;
 }
 
 export interface RunRecord {
@@ -35,9 +39,12 @@ export interface RunRecord {
   toolCallCount: number;
   error?: string;
   wasDetached: boolean;
+  provider?: ProviderId;
+  model?: string;
+  workflowStage?: WorkflowStage;
 }
 
-export function createRun(id: string, conversationId: string, goal: string): RunRow {
+export function createRun(id: string, conversationId: string, goal: string, provider?: ProviderId, model?: string): RunRow {
   const db = getDb();
   const now = new Date().toISOString();
   const title = goal.length > 80 ? goal.slice(0, 77) + '...' : goal;
@@ -45,9 +52,9 @@ export function createRun(id: string, conversationId: string, goal: string): Run
   db.prepare(`
     INSERT INTO runs (
       id, conversation_id, title, goal, status,
-      started_at, updated_at, tool_call_count, was_detached
-    ) VALUES (?, ?, ?, ?, 'running', ?, ?, 0, 0)
-  `).run(id, conversationId, title, goal, now, now);
+      started_at, updated_at, tool_call_count, was_detached, provider, model, workflow_stage
+    ) VALUES (?, ?, ?, ?, 'running', ?, ?, 0, 0, ?, ?, 'starting')
+  `).run(id, conversationId, title, goal, now, now, provider || null, model || null);
 
   return {
     id,
@@ -61,6 +68,9 @@ export function createRun(id: string, conversationId: string, goal: string): Run
     tool_call_count: 0,
     error: null,
     was_detached: 0,
+    provider: provider || null,
+    model: model || null,
+    workflow_stage: 'starting',
   };
 }
 
@@ -119,6 +129,22 @@ export function setRunDetached(id: string, wasDetached: boolean): void {
     SET was_detached = ?, updated_at = ?
     WHERE id = ?
   `).run(wasDetached ? 1 : 0, new Date().toISOString(), id);
+}
+
+export function setRunExecutionInfo(id: string, provider: ProviderId, model: string): void {
+  getDb().prepare(`
+    UPDATE runs
+    SET provider = ?, model = ?, updated_at = ?
+    WHERE id = ?
+  `).run(provider, model, new Date().toISOString(), id);
+}
+
+export function setRunWorkflowStage(id: string, workflowStage: WorkflowStage): void {
+  getDb().prepare(`
+    UPDATE runs
+    SET workflow_stage = ?, updated_at = ?
+    WHERE id = ?
+  `).run(workflowStage, new Date().toISOString(), id);
 }
 
 export function reconcileInterruptedRuns(reason = 'Clawdia restarted before this run completed.'): void {
@@ -186,5 +212,8 @@ function toRunRecord(row: RunRow): RunRecord {
     toolCallCount: row.tool_call_count,
     error: row.error || undefined,
     wasDetached: !!row.was_detached,
+    provider: (row.provider as ProviderId | null) || undefined,
+    model: row.model || undefined,
+    workflowStage: (row.workflow_stage as WorkflowStage | null) || 'starting',
   };
 }

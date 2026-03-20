@@ -8,8 +8,8 @@
  * Extracted from loop.ts for testability.
  */
 
-import type Anthropic from '@anthropic-ai/sdk';
-import type { AnthropicClient, LLMResponse } from './client';
+import type { ProviderClient } from './client';
+import type { LLMResponse, NormalizedMessage, NormalizedTextBlock, NormalizedToolDefinition, NormalizedToolResultBlock, NormalizedToolUseBlock } from './client';
 import { executeTool } from './tool-builder';
 import { type VerificationResult } from './verification';
 import { summarizeInput } from './loop-dispatch';
@@ -95,9 +95,9 @@ export function verifyFileOutcomes(
 // ═══════════════════════════════════
 
 export interface RecoveryOptions {
-  client: AnthropicClient;
-  messages: Anthropic.MessageParam[];
-  tools: Anthropic.Tool[];
+  client: ProviderClient;
+  messages: NormalizedMessage[];
+  tools: NormalizedToolDefinition[];
   staticPrompt: string;
   dynamicPrompt: string;
   signal?: AbortSignal;
@@ -138,12 +138,12 @@ export async function runRecoveryIteration(
     );
 
     const recoveryToolUses = recoveryResponse.content.filter(
-      (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
+      (b): b is NormalizedToolUseBlock => b.type === 'tool_use',
     );
 
     if (recoveryToolUses.length > 0) {
       messages.push({ role: 'assistant', content: recoveryResponse.content as any });
-      const recoveryResults: Anthropic.ToolResultBlockParam[] = [];
+      const recoveryResults: NormalizedToolResultBlock[] = [];
 
       for (const toolUse of recoveryToolUses) {
         opts.toolCallCount++;
@@ -173,7 +173,7 @@ export async function runRecoveryIteration(
       if (finalRecoveryText) finalText = finalRecoveryText;
     } else {
       const textBlocks = recoveryResponse.content.filter(
-        (b): b is Anthropic.TextBlock => b.type === 'text',
+        (b): b is NormalizedTextBlock => b.type === 'text',
       );
       const text = textBlocks.map(b => b.text).join('');
       if (text) finalText = text;

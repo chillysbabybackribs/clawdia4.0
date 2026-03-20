@@ -12,7 +12,7 @@ import {
   detachCurrent, attachTo, cancelProcess as cancelProc, dismissProcess,
   listProcesses, getAttachedId, recordToolCall,
 } from './agent/process-manager';
-import { approveRunApproval, denyRunApproval, listApprovalsForRun } from './agent/approval-manager';
+import { approveRunApproval, denyRunApproval, listApprovalsForRun, reviseRunApproval } from './agent/approval-manager';
 import { listHumanInterventionsForRun, resolveHumanIntervention } from './agent/human-intervention-manager';
 import { listPolicyProfiles, seedPolicyProfiles } from './db/policies';
 import { scheduleAutoGraduation } from './db/executor-auto-graduation';
@@ -43,6 +43,7 @@ import {
 } from './db/conversations';
 import { getRunRecord, listRunRecords } from './db/runs';
 import { getRunEventRecords } from './db/run-events';
+import { listRunArtifacts } from './db/run-artifacts';
 import { listRunChanges } from './db/run-changes';
 import {
   initBrowser, navigate, goBack, goForward, reload,
@@ -111,16 +112,16 @@ function createWindow(): void {
     }
   });
 
+  getDb();
+  seedPolicyProfiles();
+  scheduleAutoGraduation();
+  setupIpcHandlers();
+
   if (isDev) {
     mainWindow.loadURL('http://127.0.0.1:5174');
   } else {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
-
-  getDb();
-  seedPolicyProfiles();
-  scheduleAutoGraduation();
-  setupIpcHandlers();
 }
 
 app.on('second-instance', () => {
@@ -147,7 +148,7 @@ function setupIpcHandlers(): void {
   ipcMain.handle(IPC.CHAT_SEND, async (_event, message: string) => {
     const provider = getSelectedProvider();
     const apiKey = getApiKey(provider);
-    if (!apiKey) return { error: 'No API key set. Go to Settings to add your Anthropic API key.' };
+    if (!apiKey) return { error: `No API key set for ${provider}. Go to Settings to add your API key.` };
 
     const { cleanedMessage, forcedAgentProfile } = parseManualAgentProfileOverride(message);
     if (!cleanedMessage.trim()) {
@@ -164,7 +165,7 @@ function setupIpcHandlers(): void {
     // detach/background is wired. For now, still register so the
     // infrastructure works, but mark as attached (won't show in sidebar
     // as "completed" since it's the foreground task).
-    const processId = registerProcess(conversationId, cleanedMessage);
+    const processId = registerProcess(conversationId, cleanedMessage, provider, getSelectedModel(provider));
 
     addMessage(conversationId, 'user', cleanedMessage);
     const history = getAnthropicHistory(conversationId);
@@ -185,6 +186,9 @@ function setupIpcHandlers(): void {
           routeEvent(processId, IPC_EVENTS.CHAT_TOOL_ACTIVITY, activity);
         },
         onToolStream: (payload) => routeEvent(processId, IPC_EVENTS.CHAT_TOOL_STREAM, payload),
+        onWorkflowPlanReset: () => routeEvent(processId, IPC_EVENTS.CHAT_WORKFLOW_PLAN_RESET, {}),
+        onWorkflowPlanText: (chunk) => routeEvent(processId, IPC_EVENTS.CHAT_WORKFLOW_PLAN_TEXT, chunk),
+        onWorkflowPlanEnd: () => routeEvent(processId, IPC_EVENTS.CHAT_WORKFLOW_PLAN_END, {}),
         onStreamEnd: () => routeEvent(processId, IPC_EVENTS.CHAT_STREAM_END, {}),
       });
 
@@ -193,7 +197,7 @@ function setupIpcHandlers(): void {
 
       if (result.response) {
         addMessage(conversationId, 'assistant', result.response, result.toolCalls);
-        extractMemoryInBackground(apiKey, message, result.response);
+        extractMemoryInBackground(provider, apiKey, message, result.response);
       }
 
       return {
@@ -346,6 +350,9 @@ function setupIpcHandlers(): void {
   ipcMain.handle(IPC.RUN_EVENTS, async (_e, runId: string) => {
     return getRunEventRecords(runId);
   });
+  ipcMain.handle(IPC.RUN_ARTIFACTS, async (_e, runId: string) => {
+    return listRunArtifacts(runId);
+  });
   ipcMain.handle(IPC.RUN_CHANGES, async (_e, runId: string) => {
     return listRunChanges(runId);
   });
@@ -357,6 +364,10 @@ function setupIpcHandlers(): void {
   });
   ipcMain.handle(IPC.RUN_APPROVE, async (_e, approvalId: number) => {
     const approval = approveRunApproval(approvalId);
+    return { ok: !!approval, approval };
+  });
+  ipcMain.handle(IPC.RUN_REVISE, async (_e, approvalId: number) => {
+    const approval = reviseRunApproval(approvalId);
     return { ok: !!approval, approval };
   });
   ipcMain.handle(IPC.RUN_DENY, async (_e, approvalId: number) => {

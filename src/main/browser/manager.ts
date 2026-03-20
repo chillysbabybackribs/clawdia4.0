@@ -9,7 +9,7 @@
  * on the ACTIVE tab. The agent doesn't need to know about tabs.
  */
 
-import { app, BrowserView, BrowserWindow, session } from 'electron';
+import { app, BrowserView, BrowserWindow, session, Menu } from 'electron';
 import { randomUUID } from 'crypto';
 import { IPC_EVENTS } from '../../shared/ipc-channels';
 import type { BrowserExecutionMode } from '../../shared/types';
@@ -27,6 +27,7 @@ interface Tab {
   title: string;
   isLoading: boolean;
   loadingTimer: ReturnType<typeof setTimeout> | null;
+  faviconUrl: string;
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -115,13 +116,14 @@ function emitTabsChanged(): void {
   mainWindow.webContents.send(IPC_EVENTS.BROWSER_TABS_CHANGED, getTabList());
 }
 
-export function getTabList(): { id: string; url: string; title: string; isLoading: boolean; isActive: boolean }[] {
+export function getTabList(): { id: string; url: string; title: string; isLoading: boolean; isActive: boolean; faviconUrl: string }[] {
   return Array.from(tabs.values()).map(t => ({
     id: t.id,
     url: t.url,
     title: t.title || 'New Tab',
     isLoading: t.isLoading,
     isActive: t.id === activeTabId,
+    faviconUrl: t.faviconUrl || '',
   }));
 }
 
@@ -146,7 +148,7 @@ export function createTab(url?: string): string {
   mainWindow.addBrowserView(view);
   view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
 
-  const tab: Tab = { id, view, url: '', title: 'New Tab', isLoading: false, loadingTimer: null };
+  const tab: Tab = { id, view, url: '', title: 'New Tab', isLoading: false, loadingTimer: null, faviconUrl: '' };
   tabs.set(id, tab);
   wireTabEvents(tab);
   switchTab(id);
@@ -322,6 +324,36 @@ function wireTabEvents(tab: Tab): void {
     toggleDevTools(wc);
   });
 
+  // Context menu for browser pages (copy, paste, back/forward, inspect)
+  wc.on('context-menu', (_event, params) => {
+    const items: Electron.MenuItemConstructorOptions[] = [];
+    if (params.selectionText.length > 0) {
+      items.push({ label: 'Copy', role: 'copy' });
+    }
+    if (params.isEditable) {
+      items.push(
+        { label: 'Cut', role: 'cut', enabled: params.selectionText.length > 0 },
+        { label: 'Paste', role: 'paste' },
+      );
+    }
+    if (params.linkURL) {
+      if (items.length) items.push({ type: 'separator' });
+      items.push(
+        { label: 'Open Link in New Tab', click: () => createTab(params.linkURL) },
+        { label: 'Copy Link Address', click: () => { require('electron').clipboard.writeText(params.linkURL); } },
+      );
+    }
+    if (items.length) items.push({ type: 'separator' });
+    items.push(
+      { label: 'Back', enabled: wc.canGoBack(), click: () => wc.goBack() },
+      { label: 'Forward', enabled: wc.canGoForward(), click: () => wc.goForward() },
+      { label: 'Reload', click: () => wc.reload() },
+      { type: 'separator' },
+      { label: 'Select All', role: 'selectAll' },
+    );
+    Menu.buildFromTemplate(items).popup({ window: mainWindow! });
+  });
+
   wc.on('did-navigate', (_event, url) => {
     tab.url = url;
     tab.title = wc.getTitle();
@@ -350,6 +382,13 @@ function wireTabEvents(tab: Tab): void {
     emitTabsChanged();
   });
 
+  wc.on('page-favicon-updated', (_event, favicons: string[]) => {
+    if (favicons && favicons.length > 0) {
+      tab.faviconUrl = favicons[0];
+      emitTabsChanged();
+    }
+  });
+
   wc.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
     if (isMainFrame && !isInPlace) {
       tab.isLoading = true;
@@ -375,6 +414,7 @@ function wireTabEvents(tab: Tab): void {
 
   wc.on('did-finish-load', scheduleStop);
   wc.on('did-stop-loading', scheduleStop);
+  wc.on('dom-ready', scheduleStop);
   wc.on('did-fail-load', (_event, errorCode, _errorDescription, _url, isMainFrame) => {
     if (isMainFrame) { console.warn(`[Browser] Tab ${tab.id} load failed: ${errorCode}`); scheduleStop(); }
   });
