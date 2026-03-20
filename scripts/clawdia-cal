@@ -25,7 +25,7 @@ const { randomUUID } = require('crypto');
 
 function getDbPath() {
   if (process.env.CLAWDIA_CAL_DB_PATH) return process.env.CLAWDIA_CAL_DB_PATH;
-  const dir = path.join(os.homedir(), '.config', 'Clawdia');
+  const dir = path.join(os.homedir(), '.config', 'clawdia');
   fs.mkdirSync(dir, { recursive: true });
   return path.join(dir, 'calendar.sqlite');
 }
