@@ -1405,6 +1405,33 @@ export async function executeDbusControl(input: Record<string, any>): Promise<st
 }
 
 // ═══════════════════════════════════
+// Capability Status — runs once, cached
+// ═══════════════════════════════════
+
+export interface DesktopCapabilityStatus {
+  xdotool: boolean;
+  dbus: boolean;
+  a11y: boolean;
+  cliAnythingPlugin: boolean;
+}
+
+let _capabilityStatus: DesktopCapabilityStatus | null = null;
+
+export async function getCapabilityStatus(): Promise<DesktopCapabilityStatus> {
+  if (_capabilityStatus) return _capabilityStatus;
+  const [xdotool, dbus, a11yResult] = await Promise.all([
+    cmdExists('xdotool'),
+    cmdExists('dbus-send'),
+    isA11yAvailable(),
+  ]);
+  const cliAnythingPlugin = fs.existsSync(
+    path.join(os.homedir(), 'CLI-Anything', 'cli-anything-plugin', 'HARNESS.md')
+  );
+  _capabilityStatus = { xdotool, dbus, a11y: a11yResult, cliAnythingPlugin };
+  return _capabilityStatus;
+}
+
+// ═══════════════════════════════════
 // Capability Discovery — runs once, cached
 // ═══════════════════════════════════
 

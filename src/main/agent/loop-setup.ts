@@ -28,6 +28,7 @@ import { buildCapabilitySnapshot, formatSnapshotLog } from './capability-snapsho
 import { installApp } from './loop-app-install';
 import { runHarnessPipeline } from './loop-harness';
 import { registerNestedCancel, clearNestedCancel } from './loop-cancel';
+import type { ProviderId } from '../../shared/types';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
@@ -65,6 +66,7 @@ export async function runPreLLMSetup(
   userMessage: string,
   profile: TaskProfile,
   apiKey: string,
+  provider: ProviderId,
   onProgress?: (text: string) => void,
 ): Promise<SetupResult> {
   const result: SetupResult = {
@@ -133,7 +135,7 @@ export async function runPreLLMSetup(
         }
 
         // ── NEW: Generate harness if none exists (only when app is available) ──
-        if (appAvailable) {
+        if (appAvailable && provider === 'anthropic') {
           const existingProfile = getAppProfile(targetApp);
           const hasHarness = existingProfile?.cliAnything?.installed === true;
           if (!hasHarness) {
@@ -152,6 +154,8 @@ export async function runPreLLMSetup(
               onProgress?.(`Harness generation failed — falling back to available surfaces.`);
             }
           }
+        } else if (appAvailable && provider !== 'anthropic') {
+          onProgress?.(`Skipping automatic CLI harness generation for ${targetApp} because the current nested harness pipeline is Anthropic-only.`);
         }
         // Note: clearNestedCancel() not needed here — registerNestedCancel was never called
         // because we skipped the harness pipeline due to install failure.
@@ -193,6 +197,25 @@ export async function runPreLLMSetup(
 
   // Capability snapshot logging
   if (isDesktopTask) {
+    // ── Degraded-mode notifications ──
+    try {
+      const { getCapabilityStatus } = await import('./executors/desktop-executors');
+      const caps = await getCapabilityStatus();
+
+      const missing: string[] = [];
+      if (!caps.xdotool) missing.push('xdotool (install: sudo apt install xdotool)');
+      if (!caps.cliAnythingPlugin) missing.push('CLI-Anything plugin (clone to ~/CLI-Anything/cli-anything-plugin/)');
+      // AT-SPI only flagged when xdotool is also missing (xdotool is the primary fallback)
+      if (!caps.a11y && !caps.xdotool) missing.push('AT-SPI (install: sudo apt install gir1.2-atspi-2.0)');
+
+      if (missing.length > 0) {
+        const notice = `[Desktop] Running in degraded mode — missing: ${missing.join(', ')}. Some desktop automation capabilities are reduced.`;
+        console.warn(notice);
+        onProgress?.(notice);
+      }
+    } catch { /* non-fatal */ }
+
+    // ── Capability snapshot ──
     const appProfile = result.executionPlan?.appProfile || null;
     const appId = result.executionPlan?.appId || null;
     const capStr = result.desktopContext || '';
