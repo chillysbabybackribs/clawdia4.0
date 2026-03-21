@@ -64,7 +64,8 @@ The browser panel continues to work as before. The drawer replaces the old sideb
 ### Behavior
 - Clicking an active icon collapses the drawer (toggle)
 - Clicking an inactive icon switches drawer content and expands if collapsed
-- `Ctrl+S` continues to toggle drawer open/closed (same shortcut, new behavior)
+- `Ctrl+S` toggles the drawer open/closed. **Implementation:** remove `sidebarCollapsed` state and the `Ctrl+S` handler from `App.tsx`. The new `Sidebar.tsx` registers its own `keydown` listener for `Ctrl+S` and manages drawer-open state internally. `App.tsx` no longer passes `collapsed` or `onToggleCollapse` to `Sidebar`.
+- Gear icon click calls `onViewChange('settings')` — this prop is retained from the current interface so `App.tsx` can render `SettingsView` as before.
 - Default active icon on launch: `chat`
 
 ---
@@ -125,7 +126,7 @@ Each drawer has:
 - Static list of slash commands with one-line descriptions:
   - `/bloodhound` — web automation
   - `/filesystem` — file operations
-  - `/extractor` — download media
+  - `/ytdlp` — download media
   - `/general` — full capabilities
 - Clicking a row prefills the chat input with the slash command
 
@@ -178,7 +179,7 @@ Each drawer has:
 - Reads directory contents via a new IPC call: `fs.readDir(path)` → `{ name, type, path }[]`
 - Folders are collapsible (click to expand/collapse, lazy-load children)
 - Files show extension as a muted label
-- Clicking a file in Phase 1: **attaches it to the current chat as context** (calls `onAddContext` with file path, the agent reads it via its existing `file_read` tool)
+- Clicking a file in Phase 1: **attaches it to the current chat as context** via a new IPC call `fs.readFile(path: string) → string` (reads file content on the main side, returns text). The renderer then calls `api.chat.addContext(content)` with the file text. This requires `fs.readFile` to be added to the IPC table, preload bridge, and main handler. Files larger than 100KB show a warning before attaching.
 - Currently open/active file highlighted with accent left-border
 - Back navigation: breadcrumb or back arrow at top of tree
 
@@ -193,11 +194,12 @@ Each drawer has:
 **Header:** "Desktop"
 
 **Body — Running Apps section:**
-- Reads running GUI applications via a new IPC call: `desktop.listApps()` → `{ name, pid, memoryMB, icon? }[]`
-- Implementation: shell command (`wmctrl -l` + `ps` on Linux, filtered to windowed apps)
+- Reads running GUI applications via a new IPC call: `desktop.listApps()` → `{ name: string, pid: number, windowId: string, memoryMB: number }[]`
+- **Linux implementation:** `wmctrl -lp` (returns window ID + PID pairs) joined with `ps` for memory and process name. `windowId` is the X11 window ID string from `wmctrl`.
+- **Non-Linux fallback:** returns `[]`. DesktopDrawer renders an "Available on Linux only" empty state.
 - Each row: app icon (emoji fallback) + app name + PID + memory usage + Focus (↗) button + Kill (✕) button
-- Focus button: brings app window to front via `wmctrl -ia <window_id>` or `app_control` tool
-- Kill button: sends SIGTERM via `kill <pid>` — no confirmation dialog in Phase 1 (it's a power-user action)
+- Focus button calls `desktop.focusApp(windowId: string)` → `wmctrl -ia <windowId>` (uses window ID, not PID)
+- Kill button calls `desktop.killApp(pid: number)` → SIGTERM — no confirmation dialog in Phase 1
 - Refreshes every 5 seconds while drawer is active
 
 **Body — System section:**
@@ -215,12 +217,13 @@ Each drawer has:
 
 | Call | Direction | Description |
 |---|---|---|
-| `browser.listSessions()` | renderer → main | Returns `string[]` of domains with active cookies in Electron session |
-| `browser.clearSession(domain: string)` | renderer → main | Clears all cookies for the given domain |
-| `fs.readDir(path: string)` | renderer → main | Returns `{ name: string, type: 'file' \| 'dir', path: string }[]` |
-| `desktop.listApps()` | renderer → main | Returns `{ name: string, pid: number, memoryMB: number }[]` from wmctrl/ps |
-| `desktop.focusApp(pid: number)` | renderer → main | Brings app window to foreground |
-| `desktop.killApp(pid: number)` | renderer → main | Sends SIGTERM to process |
+| `browser.listSessions()` | renderer → main | Returns `string[]` of normalized domains (lowercase, leading dot stripped) with active cookies. Uses `session.defaultSession.cookies.get({})`, groups by normalized `.domain`. |
+| `browser.clearSession(domain: string)` | renderer → main | Enumerates all cookies for the domain via `cookies.get({ domain })`, removes each with `cookies.remove(url, name)`. Constructs URL as `https://<domain><path>`. |
+| `fs.readDir(path: string)` | renderer → main | Returns `{ name: string, type: 'file' \| 'dir', path: string }[]`. Returns `[]` on permission error (no throw). |
+| `fs.readFile(path: string)` | renderer → main | Returns file content as `string`. Throws if file exceeds 500KB (renderer shows warning). |
+| `desktop.listApps()` | renderer → main | Returns `{ name: string, pid: number, windowId: string, memoryMB: number }[]` via `wmctrl -lp` + `ps`. Returns `[]` on non-Linux. |
+| `desktop.focusApp(windowId: string)` | renderer → main | Calls `wmctrl -ia <windowId>`. Linux only. |
+| `desktop.killApp(pid: number)` | renderer → main | Sends SIGTERM via `process.kill(pid)`. |
 
 All new IPC channels follow the existing pattern in `src/shared/ipc-channels.ts` and `src/main/preload.ts`.
 
@@ -240,8 +243,26 @@ All new IPC channels follow the existing pattern in `src/shared/ipc-channels.ts`
 | `src/renderer/components/sidebar/drawers/FilesDrawer.tsx` | **Create** | File tree |
 | `src/renderer/components/sidebar/drawers/DesktopDrawer.tsx` | **Create** | Running apps + system stats |
 
-### Unchanged
-- `App.tsx` — `Sidebar` props interface changes minimally (drop `collapsed`/`onToggleCollapse`, add `activeDrawer` state internally)
+### App.tsx changes (minimal)
+
+The following props are **dropped** from the Sidebar interface:
+- `collapsed` — drawer state is now internal to `Sidebar.tsx`
+- `onToggleCollapse` — replaced by internal `Ctrl+S` listener in `Sidebar.tsx`
+- `activeView` — no longer read by Sidebar (Sidebar does not highlight a current view)
+
+The following props are **retained**:
+- `onNewChat` — New Agent button
+- `onLoadConversation` — history row clicks
+- `onOpenProcess` — agent row clicks
+- `onViewChange` — used only for gear icon → `onViewChange('settings')`
+
+The `sidebarCollapsed` state and `Ctrl+S` handler are **removed from `App.tsx`**.
+
+### History refresh
+
+`ChatDrawer` accepts a `chatKey: number` prop (the existing `chatKey` from `App.tsx` that increments on `handleNewChat`). When `chatKey` changes, `ChatDrawer` re-fetches `api.chat.list()`. This preserves the existing behavior without adding new IPC events.
+
+### Unchanged components
 - `ChatPanel.tsx` — no changes
 - `BrowserPanel.tsx` — no changes
 - `InputBar.tsx` — no changes
@@ -254,14 +275,26 @@ All new IPC channels follow the existing pattern in `src/shared/ipc-channels.ts`
 ```
 App.tsx
   └── Sidebar.tsx (new)
+        │   props: onNewChat, onLoadConversation, onOpenProcess, onViewChange, chatKey
+        │   internal state: activeMode (DrawerMode), drawerOpen (boolean)
+        │   registers own keydown listener for Ctrl+S
         ├── Rail.tsx
         │     └── emits: onModeChange(mode: DrawerMode)
         └── [ActiveDrawer].tsx
-              ├── ChatDrawer    → uses: api.chat.list(), api.process.list(), api.process.onListChanged()
-              ├── AgentsDrawer  → uses: api.process.list(), api.process.onListChanged(), api.process.cancel()
-              ├── BrowserDrawer → uses: api.browser.listSessions(), api.browser.clearSession()
-              ├── FilesDrawer   → uses: api.fs.readDir()
-              └── DesktopDrawer → uses: api.desktop.listApps(), api.desktop.focusApp(), api.desktop.killApp()
+              ├── ChatDrawer
+              │     props: onNewChat, onLoadConversation, onOpenProcess, chatKey
+              │     uses: api.chat.list(), api.process.list(), api.process.onListChanged()
+              │     re-fetches chat.list() when chatKey changes
+              ├── AgentsDrawer
+              │     props: onNewChat, onOpenProcess
+              │     uses: api.process.list(), api.process.onListChanged(), api.process.cancel()
+              ├── BrowserDrawer
+              │     uses: api.browser.listSessions(), api.browser.clearSession()
+              ├── FilesDrawer
+              │     props: onAddContext (calls api.chat.addContext after fs.readFile)
+              │     uses: api.fs.readDir(), api.fs.readFile(), api.chat.addContext()
+              └── DesktopDrawer
+                    uses: api.desktop.listApps(), api.desktop.focusApp(), api.desktop.killApp()
 ```
 
 Active drawer mode is local state inside `Sidebar.tsx`. `App.tsx` does not need to know which drawer is open.
