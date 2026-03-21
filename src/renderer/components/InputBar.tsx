@@ -1,8 +1,9 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { DEFAULT_PROVIDER, getModelsForProvider, PROVIDERS, MODEL_REGISTRY, type ProviderId } from '../../shared/model-registry';
+import type { MessageAttachment } from '../../shared/types';
 
 interface InputBarProps {
-  onSend: (message: string) => void;
+  onSend: (message: string, attachments?: MessageAttachment[]) => void;
   isStreaming: boolean;
   isPaused: boolean;
   onStop: () => void;
@@ -14,12 +15,40 @@ interface InputBarProps {
 
 export default function InputBar({ onSend, isStreaming, isPaused, onStop, onPause, onResume, onAddContext, onModelContextChange }: InputBarProps) {
   const [text, setText] = useState('');
+  const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
   const [provider, setProvider] = useState<ProviderId>(DEFAULT_PROVIDER);
   const [models, setModels] = useState(() => getModelsForProvider(DEFAULT_PROVIDER));
   const [modelIdx, setModelIdx] = useState(0);
   const [modelOpen, setModelOpen] = useState(false);
   const [focused, setFocused] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const hasHydratedSelectionRef = useRef(false);
+
+  const formatBytes = useCallback((bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }, []);
+
+  const isTextLikeFile = useCallback((file: File) => {
+    if (file.type.startsWith('text/')) return true;
+    return /\.(txt|md|mdx|json|js|jsx|ts|tsx|css|html|xml|csv|yml|yaml|log)$/i.test(file.name);
+  }, []);
+
+  const readFileAsDataUrl = useCallback((file: File) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error(`Failed to read ${file.name}`));
+    reader.readAsDataURL(file);
+  }), []);
+
+  const readFileAsText = useCallback((file: File) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error(`Failed to read ${file.name}`));
+    reader.readAsText(file);
+  }), []);
 
   useEffect(() => {
     textareaRef.current?.focus();
@@ -34,38 +63,63 @@ export default function InputBar({ onSend, isStreaming, isPaused, onStop, onPaus
     ]).then(([selectedProvider, model]: [ProviderId, string]) => {
       const nextProvider = selectedProvider || DEFAULT_PROVIDER;
       const nextModels = getModelsForProvider(nextProvider);
+      const persistedModel = model || nextModels[0]?.id || '';
       setProvider(nextProvider);
       setModels(nextModels);
-      const idx = nextModels.findIndex((item) => item.id === model);
+      const idx = nextModels.findIndex((item) => item.id === persistedModel);
       setModelIdx(idx >= 0 ? idx : 0);
-      if (model) onModelContextChange?.(nextProvider, model);
+      hasHydratedSelectionRef.current = true;
+      if (persistedModel) onModelContextChange?.(nextProvider, persistedModel);
     });
   }, [onModelContextChange]);
 
   useEffect(() => {
+    if (!hasHydratedSelectionRef.current) return;
+    const api = (window as any).clawdia;
     const nextModels = getModelsForProvider(provider);
     setModels(nextModels);
-    setModelIdx((current) => current < nextModels.length ? current : 0);
+
+    if (!api) {
+      setModelIdx(0);
+      return;
+    }
+
+    api.settings.getModel(provider).then((storedModel: string) => {
+      const nextModelId = storedModel || nextModels[0]?.id || '';
+      const idx = nextModels.findIndex((item) => item.id === nextModelId);
+      setModelIdx(idx >= 0 ? idx : 0);
+    });
   }, [provider]);
 
   useEffect(() => {
     const api = (window as any).clawdia;
     const model = models[modelIdx];
-    if (!api || !model) return;
+    if (!hasHydratedSelectionRef.current || !api || !model) return;
     api.settings.setProvider(provider);
     api.settings.setModel(provider, model.id);
     onModelContextChange?.(provider, model.id);
   }, [provider, modelIdx, models, onModelContextChange]);
 
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const cmd = (e as CustomEvent<string>).detail;
+      setText(cmd + ' ');
+      textareaRef.current?.focus();
+    };
+    window.addEventListener('clawdia:prefill-input', handler);
+    return () => window.removeEventListener('clawdia:prefill-input', handler);
+  }, []);
 
   const handleSend = useCallback(() => {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed && attachments.length === 0) return;
     if (isStreaming) onAddContext(trimmed);
-    else onSend(trimmed);
+    else onSend(trimmed, attachments);
     setText('');
+    setAttachments([]);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
-  }, [text, isStreaming, onSend, onAddContext]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }, [text, attachments, isStreaming, onSend, onAddContext]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
@@ -79,8 +133,45 @@ export default function InputBar({ onSend, isStreaming, isPaused, onStop, onPaus
     el.style.height = Math.min(el.scrollHeight, 200) + 'px';
   }, []);
 
+  const handlePickFiles = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleRemoveAttachment = useCallback((id: string) => {
+    setAttachments((prev) => prev.filter((attachment) => attachment.id !== id));
+  }, []);
+
+  const handleFilesSelected = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    const nextAttachments = await Promise.all(files.map(async (file) => {
+      const isImage = file.type.startsWith('image/');
+      const attachment: MessageAttachment = {
+        id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2, 8)}`,
+        kind: isImage ? 'image' : 'file',
+        name: file.name,
+        size: file.size,
+        mimeType: file.type || (isImage ? 'image/png' : 'application/octet-stream'),
+        path: (file as File & { path?: string }).path,
+      };
+
+      if (isImage) {
+        attachment.dataUrl = await readFileAsDataUrl(file);
+      } else if (file.size <= 512_000 && isTextLikeFile(file)) {
+        const textContent = await readFileAsText(file);
+        attachment.textContent = textContent.slice(0, 12_000);
+      }
+
+      return attachment;
+    }));
+
+    setAttachments((prev) => [...prev, ...nextAttachments]);
+    e.target.value = '';
+  }, [isTextLikeFile, readFileAsDataUrl, readFileAsText]);
+
   const currentModel = models[modelIdx];
-  const canSend = text.trim().length > 0;
+  const canSend = text.trim().length > 0 || attachments.length > 0;
 
   return (
     <div className="px-4 pb-4 pt-2">
@@ -94,6 +185,51 @@ export default function InputBar({ onSend, isStreaming, isPaused, onStop, onPaus
           }
         `}
       >
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept="image/*,.pdf,.txt,.md,.mdx,.json,.csv,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip"
+          className="hidden"
+          onChange={handleFilesSelected}
+        />
+        {attachments.length > 0 && (
+          <div className="px-3 pt-3 pb-1 flex flex-wrap gap-2">
+            {attachments.map((attachment) => (
+              <div
+                key={attachment.id}
+                className={`group relative overflow-hidden rounded-xl border border-white/[0.08] bg-white/[0.03] ${
+                  attachment.kind === 'image' ? 'w-[132px]' : 'max-w-[220px] px-3 py-2.5'
+                }`}
+              >
+                {attachment.kind === 'image' && attachment.dataUrl ? (
+                  <>
+                    <img src={attachment.dataUrl} alt={attachment.name} className="block w-full h-[92px] object-cover" />
+                    <div className="px-2.5 py-2">
+                      <div className="text-[11px] text-text-primary truncate">{attachment.name}</div>
+                      <div className="mt-0.5 text-[10px] text-text-muted">{formatBytes(attachment.size)}</div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="pr-5 text-[12px] text-text-primary truncate">{attachment.name}</div>
+                    <div className="mt-1 text-[11px] text-text-muted">{formatBytes(attachment.size)}</div>
+                  </>
+                )}
+                <button
+                  onClick={() => handleRemoveAttachment(attachment.id)}
+                  title="Remove attachment"
+                  className="absolute top-1.5 right-1.5 flex items-center justify-center w-5 h-5 rounded-full bg-black/45 text-white/70 hover:text-white hover:bg-black/65 transition-all cursor-pointer"
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                    <path d="M18 6L6 18" />
+                    <path d="M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           value={text}
@@ -108,8 +244,14 @@ export default function InputBar({ onSend, isStreaming, isPaused, onStop, onPaus
 
         <div className="flex items-center justify-between px-3 pb-2.5 pt-0.5">
           <button
+            onClick={handlePickFiles}
+            disabled={isStreaming}
             title="Attach file"
-            className="flex items-center justify-center w-8 h-8 rounded-lg text-text-tertiary hover:text-text-secondary hover:bg-white/[0.05] transition-all cursor-pointer no-drag"
+            className={`flex items-center justify-center w-8 h-8 rounded-lg transition-all no-drag ${
+              isStreaming
+                ? 'text-text-tertiary/35 cursor-default'
+                : 'text-text-tertiary hover:text-text-secondary hover:bg-white/[0.05] cursor-pointer'
+            }`}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
