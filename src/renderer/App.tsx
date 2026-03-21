@@ -15,7 +15,6 @@ type ReplayBufferItem = { type: string; data: any };
 export default function App() {
   const [activeView, setActiveView] = useState<View>('chat');
   const [browserVisible, setBrowserVisible] = useState(true);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [chatKey, setChatKey] = useState(0);
   const [loadConversationId, setLoadConversationId] = useState<string | null>(null);
   const [replayBuffer, setReplayBuffer] = useState<ReplayBufferItem[] | null>(null);
@@ -101,8 +100,7 @@ export default function App() {
       if (ctrl && e.key === ',') { e.preventDefault(); setActiveView(v => v === 'settings' ? 'chat' : 'settings'); }
       if (ctrl && e.key === 'h') { e.preventDefault(); setActiveView(v => v === 'conversations' ? 'chat' : 'conversations'); }
       if (ctrl && e.key === 'b') { e.preventDefault(); handleToggleBrowser(); }
-      if (ctrl && e.key === 's' && !e.shiftKey) { e.preventDefault(); setSidebarCollapsed(v => !v); }
-      if (e.key === 'Escape' && activeView !== 'chat') setActiveView('chat');
+if (e.key === 'Escape' && activeView !== 'chat') setActiveView('chat');
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
