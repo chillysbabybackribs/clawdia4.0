@@ -1,0 +1,196 @@
+<h2>Sidebar Redesign — Three Directions</h2>
+<p class="subtitle">Same color scheme. Everything else is up for consideration. Click your preference.</p>
+
+<div class="cards">
+
+  <!-- Option A -->
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#111;padding:0;overflow:hidden;height:420px;display:flex;">
+      <!-- Sidebar mockup A: Agent Launcher top, runs below -->
+      <div style="width:200px;background:#0d0d0d;border-right:1px solid #222;display:flex;flex-direction:column;font-family:sans-serif;font-size:11px;color:#ccc;height:100%;">
+        <!-- Header -->
+        <div style="padding:12px 10px 8px;border-bottom:1px solid #1a1a1a;font-size:10px;letter-spacing:1px;color:#555;text-transform:uppercase;">Clawdia</div>
+        <!-- Agent launcher section -->
+        <div style="padding:8px 8px 4px;font-size:9px;letter-spacing:1px;color:#444;text-transform:uppercase;">Agents</div>
+        <div style="padding:0 8px;display:flex;flex-direction:column;gap:4px;">
+          <div style="background:#1a1a2e;border:1px solid #2a2a4a;border-radius:6px;padding:7px 10px;cursor:pointer;display:flex;align-items:center;gap:8px;">
+            <div style="width:6px;height:6px;border-radius:50%;background:#6c63ff;flex-shrink:0;"></div>
+            <div>
+              <div style="color:#e0e0ff;font-size:10px;font-weight:600;">General</div>
+              <div style="color:#555;font-size:9px;">All capabilities</div>
+            </div>
+          </div>
+          <div style="background:#1a2e1a;border:1px solid #2a4a2a;border-radius:6px;padding:7px 10px;cursor:pointer;display:flex;align-items:center;gap:8px;">
+            <div style="width:6px;height:6px;border-radius:50%;background:#4ade80;flex-shrink:0;"></div>
+            <div>
+              <div style="color:#e0ffe0;font-size:10px;font-weight:600;">Filesystem</div>
+              <div style="color:#555;font-size:9px;">Files &amp; directories</div>
+            </div>
+          </div>
+          <div style="background:#2e1a1a;border:1px solid #4a2a2a;border-radius:6px;padding:7px 10px;cursor:pointer;display:flex;align-items:center;gap:8px;">
+            <div style="width:6px;height:6px;border-radius:50%;background:#f87171;flex-shrink:0;"></div>
+            <div>
+              <div style="color:#ffe0e0;font-size:10px;font-weight:600;">Bloodhound</div>
+              <div style="color:#555;font-size:9px;">Map &amp; automate</div>
+            </div>
+          </div>
+          <div style="background:#1a1f2e;border:1px solid #2a2f4a;border-radius:6px;padding:7px 10px;cursor:pointer;display:flex;align-items:center;gap:8px;">
+            <div style="width:6px;height:6px;border-radius:50%;background:#60a5fa;flex-shrink:0;"></div>
+            <div>
+              <div style="color:#e0f0ff;font-size:10px;font-weight:600;">Browser</div>
+              <div style="color:#555;font-size:9px;">Web &amp; accounts</div>
+            </div>
+          </div>
+        </div>
+        <!-- Divider -->
+        <div style="margin:10px 8px;border-top:1px solid #1a1a1a;"></div>
+        <!-- Active runs -->
+        <div style="padding:0 8px 4px;font-size:9px;letter-spacing:1px;color:#444;text-transform:uppercase;">Active</div>
+        <div style="padding:0 8px;display:flex;flex-direction:column;gap:3px;">
+          <div style="padding:6px 8px;border-radius:5px;background:#181818;border-left:2px solid #4ade80;cursor:pointer;">
+            <div style="color:#e0e0e0;font-size:10px;">organize downloads</div>
+            <div style="color:#4ade80;font-size:9px;margin-top:1px;">Filesystem · running</div>
+          </div>
+          <div style="padding:6px 8px;border-radius:5px;background:#181818;border-left:2px solid #f87171;cursor:pointer;">
+            <div style="color:#e0e0e0;font-size:10px;">map github workflow</div>
+            <div style="color:#f87171;font-size:9px;margin-top:1px;">Bloodhound · running</div>
+          </div>
+        </div>
+        <!-- History -->
+        <div style="margin-top:auto;padding:8px;border-top:1px solid #1a1a1a;">
+          <div style="font-size:9px;letter-spacing:1px;color:#444;text-transform:uppercase;margin-bottom:6px;">History</div>
+          <div style="padding:5px 6px;border-radius:4px;color:#555;font-size:10px;">what is your api pricing</div>
+          <div style="padding:5px 6px;border-radius:4px;color:#555;font-size:10px;">which model are...</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A — Launcher + Live Runs</h3>
+      <p>Agents as clickable cards at top. Active runs below with agent color coding. History at bottom. Clean separation of "start something" vs "see what's running."</p>
+    </div>
+  </div>
+
+  <!-- Option B -->
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#111;padding:0;overflow:hidden;height:420px;display:flex;">
+      <div style="width:200px;background:#0d0d0d;border-right:1px solid #222;display:flex;flex-direction:column;font-family:sans-serif;font-size:11px;color:#ccc;height:100%;">
+        <!-- Header with new button -->
+        <div style="padding:10px 10px 8px;border-bottom:1px solid #1a1a1a;display:flex;align-items:center;justify-content:space-between;">
+          <span style="font-size:10px;letter-spacing:1px;color:#555;text-transform:uppercase;">Clawdia</span>
+          <div style="background:#6c63ff;color:white;font-size:9px;padding:3px 8px;border-radius:4px;cursor:pointer;">+ New</div>
+        </div>
+        <!-- Icon row of agents -->
+        <div style="padding:10px 8px;display:flex;gap:6px;border-bottom:1px solid #1a1a1a;">
+          <div style="flex:1;background:#1a1a2e;border-radius:8px;padding:8px 4px;text-align:center;cursor:pointer;border:1px solid #2a2a4a;">
+            <div style="font-size:14px;margin-bottom:2px;">⚡</div>
+            <div style="font-size:8px;color:#9090cc;">General</div>
+          </div>
+          <div style="flex:1;background:#1a2e1a;border-radius:8px;padding:8px 4px;text-align:center;cursor:pointer;border:1px solid #2a4a2a;">
+            <div style="font-size:14px;margin-bottom:2px;">📁</div>
+            <div style="font-size:8px;color:#60cc60;">Files</div>
+          </div>
+          <div style="flex:1;background:#2e1a1a;border-radius:8px;padding:8px 4px;text-align:center;cursor:pointer;border:1px solid #4a2a2a;">
+            <div style="font-size:14px;margin-bottom:2px;">🔴</div>
+            <div style="font-size:8px;color:#cc6060;">Hound</div>
+          </div>
+          <div style="flex:1;background:#1a1f2e;border-radius:8px;padding:8px 4px;text-align:center;cursor:pointer;border:1px solid #2a2f4a;">
+            <div style="font-size:14px;margin-bottom:2px;">🌐</div>
+            <div style="font-size:8px;color:#6090cc;">Web</div>
+          </div>
+        </div>
+        <!-- All runs unified, color coded -->
+        <div style="padding:6px 8px 2px;font-size:9px;letter-spacing:1px;color:#444;text-transform:uppercase;">Running now</div>
+        <div style="padding:0 8px;display:flex;flex-direction:column;gap:2px;">
+          <div style="padding:7px 8px;border-radius:5px;background:#181818;cursor:pointer;display:flex;align-items:center;gap:8px;">
+            <div style="width:5px;height:5px;border-radius:50%;background:#4ade80;animation:pulse 1s infinite;flex-shrink:0;"></div>
+            <div style="flex:1;min-width:0;">
+              <div style="color:#e0e0e0;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">organize downloads</div>
+              <div style="color:#4ade80;font-size:8px;">Filesystem</div>
+            </div>
+          </div>
+          <div style="padding:7px 8px;border-radius:5px;background:#181818;cursor:pointer;display:flex;align-items:center;gap:8px;">
+            <div style="width:5px;height:5px;border-radius:50%;background:#f87171;animation:pulse 1s infinite;flex-shrink:0;"></div>
+            <div style="flex:1;min-width:0;">
+              <div style="color:#e0e0e0;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">map github workflow</div>
+              <div style="color:#f87171;font-size:8px;">Bloodhound</div>
+            </div>
+          </div>
+        </div>
+        <div style="padding:6px 8px 2px;margin-top:6px;font-size:9px;letter-spacing:1px;color:#444;text-transform:uppercase;">Recent</div>
+        <div style="padding:0 8px;display:flex;flex-direction:column;gap:1px;">
+          <div style="padding:6px 8px;border-radius:4px;cursor:pointer;display:flex;align-items:center;gap:8px;">
+            <div style="width:5px;height:5px;border-radius:50%;background:#333;flex-shrink:0;"></div>
+            <div style="color:#555;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">what is your api pricing</div>
+          </div>
+          <div style="padding:6px 8px;border-radius:4px;cursor:pointer;display:flex;align-items:center;gap:8px;">
+            <div style="width:5px;height:5px;border-radius:50%;background:#333;flex-shrink:0;"></div>
+            <div style="color:#555;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">which model are...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B — Icon Launcher Row</h3>
+      <p>Compact icon grid for agents at top. Unified run list below. Less vertical space used on agent launchers, more room for run history.</p>
+    </div>
+  </div>
+
+  <!-- Option C -->
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#111;padding:0;overflow:hidden;height:420px;display:flex;">
+      <div style="width:200px;background:#0d0d0d;border-right:1px solid #222;display:flex;flex-direction:column;font-family:sans-serif;font-size:11px;color:#ccc;height:100%;">
+        <div style="padding:12px 10px 8px;border-bottom:1px solid #1a1a1a;font-size:10px;letter-spacing:1px;color:#555;text-transform:uppercase;">Clawdia</div>
+        <!-- Pipeline section - the differentiator -->
+        <div style="padding:8px 8px 4px;font-size:9px;letter-spacing:1px;color:#444;text-transform:uppercase;">Pipeline</div>
+        <div style="padding:0 8px 8px;border-bottom:1px solid #1a1a1a;">
+          <div style="background:linear-gradient(135deg,#1a1a2e,#1a2a1a);border:1px solid #333;border-radius:8px;padding:10px;cursor:pointer;">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+              <div style="width:6px;height:6px;border-radius:50%;background:#a78bfa;"></div>
+              <div style="color:#c4b5fd;font-size:10px;font-weight:600;">Start Pipeline</div>
+            </div>
+            <div style="display:flex;gap:4px;align-items:center;">
+              <div style="background:#1a1a3a;border:1px solid #2a2a5a;border-radius:4px;padding:3px 6px;font-size:8px;color:#8080cc;">General</div>
+              <div style="color:#444;font-size:8px;">→</div>
+              <div style="background:#1a3a1a;border:1px solid #2a5a2a;border-radius:4px;padding:3px 6px;font-size:8px;color:#60aa60;">Files</div>
+              <div style="color:#444;font-size:8px;">→</div>
+              <div style="background:#3a1a1a;border:1px solid #5a2a2a;border-radius:4px;padding:3px 6px;font-size:8px;color:#aa6060;">Hound</div>
+            </div>
+          </div>
+        </div>
+        <!-- Individual agents -->
+        <div style="padding:8px 8px 4px;font-size:9px;letter-spacing:1px;color:#444;text-transform:uppercase;">Single Agent</div>
+        <div style="padding:0 8px;display:flex;flex-direction:column;gap:3px;">
+          <div style="padding:6px 8px;border-radius:5px;background:#111;border:1px solid #1a1a1a;cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+            <span style="color:#aaa;font-size:10px;">General</span>
+            <span style="color:#444;font-size:9px;">▶</span>
+          </div>
+          <div style="padding:6px 8px;border-radius:5px;background:#111;border:1px solid #1a1a1a;cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+            <span style="color:#aaa;font-size:10px;">Filesystem</span>
+            <span style="color:#444;font-size:9px;">▶</span>
+          </div>
+          <div style="padding:6px 8px;border-radius:5px;background:#111;border:1px solid #1a1a1a;cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+            <span style="color:#aaa;font-size:10px;">Bloodhound</span>
+            <span style="color:#444;font-size:9px;">▶</span>
+          </div>
+        </div>
+        <div style="margin-top:auto;padding:8px;border-top:1px solid #1a1a1a;">
+          <div style="font-size:9px;letter-spacing:1px;color:#444;text-transform:uppercase;margin-bottom:4px;">Active (2)</div>
+          <div style="padding:5px 6px;border-radius:4px;background:#181818;color:#aaa;font-size:10px;margin-bottom:2px;border-left:2px solid #a78bfa;">organize + map pipeline</div>
+          <div style="padding:5px 6px;border-radius:4px;color:#555;font-size:10px;">what is your api pricing</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C — Pipeline First</h3>
+      <p>Pipeline as a first-class prominent feature at the top. Single agents below as secondary. Makes the multi-agent capability the headline of the sidebar.</p>
+    </div>
+  </div>
+
+</div>
+
+<style>
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+</style>

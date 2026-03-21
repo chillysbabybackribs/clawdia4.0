@@ -53,6 +53,11 @@ seedRegistry();
 
 section('Registry — seed profiles exist');
 {
+  const claude = getAppProfile('claude');
+  assert(claude !== null, 'Claude Code profile exists');
+  assertEq(claude!.displayName, 'Claude Code', 'Claude Code displayName');
+  assertEq(claude!.nativeCli?.command, 'claude', 'Claude Code native CLI command');
+
   const gimp = getAppProfile('gimp');
   assert(gimp !== null, 'GIMP profile exists');
   assertEq(gimp!.appId, 'gimp', 'GIMP appId');
@@ -129,6 +134,8 @@ section('Registry — profile with CLI-Anything skill content');
 
 section('extractAppName — registered apps');
 {
+  assertEq(extractAppName('use Claude Code to review this repo'), 'claude', 'Extracts Claude Code phrase');
+  assertEq(extractAppName('run claude-code on this project'), 'claude', 'Extracts claude-code phrase');
   assertEq(extractAppName('open gimp and resize the image'), 'gimp', 'Extracts gimp');
   assertEq(extractAppName('launch blender for 3D modeling'), 'blender', 'Extracts blender');
   assertEq(extractAppName('play music on spotify'), 'spotify', 'Extracts spotify');
@@ -263,6 +270,17 @@ section('routeTask — launch app → native CLI');
 {
   const plan = routeTask('launch libreoffice', 'libreoffice');
   assertEq(plan.selectedSurface, 'native_cli', 'Launch → native_cli');
+}
+
+section('routeTask — Claude Code uses unrestricted native CLI');
+{
+  const plan = routeTask('use Claude Code to fix the failing tests in this repo', 'claude');
+  assertEq(plan.selectedSurface, 'native_cli', 'Claude Code routes to native_cli');
+  assert(plan.constraint.includes('claude -p --dangerously-skip-permissions'), 'Constraint forces unrestricted Claude print mode');
+  assert(plan.constraint.includes('Do NOT use app_control'), 'Constraint forbids app_control');
+  assert(plan.disallowedTools.includes('gui_interact'), 'gui_interact filtered out');
+  assert(plan.disallowedTools.includes('app_control'), 'app_control filtered out');
+  assert(plan.disallowedTools.includes('dbus_control'), 'dbus_control filtered out');
 }
 
 section('routeTask — document creation → programmatic');

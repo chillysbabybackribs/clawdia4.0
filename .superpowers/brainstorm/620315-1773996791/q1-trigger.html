@@ -1,0 +1,40 @@
+<h2>Multi-Agent Orchestration — First Question</h2>
+<p class="subtitle">How should the user trigger parallel agents?</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Automatic — Agent decides</h3>
+      <p>The main agent analyzes the task and spawns sub-agents when it detects parallelizable work. User just types a message as normal.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Zero friction</li><li>Smart decomposition</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Less user control</li><li>Harder to debug</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Explicit — User directs it</h3>
+      <p>User explicitly asks for parallel work, e.g. "research X, Y, and Z in parallel" or uses a special syntax like <code>/parallel</code>. Agent only spawns when told to.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Predictable</li><li>User always in control</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Requires user to know the feature exists</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Both — Auto with override</h3>
+      <p>Agent auto-detects parallel opportunities, but user can also force it or suppress it. Best of both but more complex to build.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Flexible</li><li>Grows with user familiarity</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>More surface area to implement correctly</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>

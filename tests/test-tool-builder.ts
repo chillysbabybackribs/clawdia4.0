@@ -28,6 +28,7 @@ section('getToolsForGroup — core');
   const tools = getToolsForGroup('core');
   const names = tools.map(t => t.name);
   assert(names.includes('shell_exec'), 'Core has shell_exec');
+  assert(names.includes('calendar_manage'), 'Core has calendar_manage');
   assert(names.includes('file_read'), 'Core has file_read');
   assert(names.includes('file_write'), 'Core has file_write');
   assert(names.includes('file_edit'), 'Core has file_edit');
@@ -39,7 +40,8 @@ section('getToolsForGroup — core');
   assert(names.includes('fs_apply_plan'), 'Core has fs_apply_plan');
   assert(!names.includes('browser_search'), 'Core does NOT have browser_search');
   assert(!names.includes('gui_interact'), 'Core does NOT have gui_interact');
-  assertEq(tools.length, 10, 'Core has exactly 10 tools');
+  assert(names.includes('agent_spawn'), 'Core has agent_spawn');
+  assertEq(tools.length, 12, 'Core has exactly 12 tools');
 }
 
 section('getToolsForGroup — browser');
@@ -51,12 +53,22 @@ section('getToolsForGroup — browser');
   assert(names.includes('browser_click'), 'Browser has browser_click');
   assert(names.includes('browser_type'), 'Browser has browser_type');
   assert(names.includes('browser_extract'), 'Browser has browser_extract');
+  assert(names.includes('browser_extract_listings'), 'Browser has browser_extract_listings');
+  assert(names.includes('browser_extract_product_details'), 'Browser has browser_extract_product_details');
+  assert(names.includes('browser_extract_reviews_summary'), 'Browser has browser_extract_reviews_summary');
   assert(names.includes('browser_screenshot'), 'Browser has browser_screenshot');
+  assert(names.includes('browser_eval'), 'Browser has browser_eval');
+  assert(names.includes('browser_dom_snapshot'), 'Browser has browser_dom_snapshot');
+  assert(names.includes('browser_page_state'), 'Browser has browser_page_state');
+  assert(names.includes('browser_network_watch'), 'Browser has browser_network_watch');
+  assert(names.includes('browser_wait'), 'Browser has browser_wait');
+  assert(names.includes('browser_batch'), 'Browser has browser_batch');
+  assert(names.includes('browser_compare_products'), 'Browser has browser_compare_products');
   assert(names.includes('browser_scroll'), 'Browser has browser_scroll');
   assert(names.includes('browser_read_page'), 'Browser has browser_read_page');
   assert(!names.includes('shell_exec'), 'Browser does NOT have shell_exec');
   assert(!names.includes('gui_interact'), 'Browser does NOT have gui_interact');
-  assertEq(tools.length, 8, 'Browser has exactly 8 tools');
+  assertEq(tools.length, 28, 'Browser has exactly 28 tools');
 }
 
 section('getToolsForGroup — full');
@@ -65,6 +77,7 @@ section('getToolsForGroup — full');
   const names = tools.map(t => t.name);
   // Should have core + browser + extra
   assert(names.includes('shell_exec'), 'Full has shell_exec (from core)');
+  assert(names.includes('calendar_manage'), 'Full has calendar_manage (from core)');
   assert(names.includes('file_read'), 'Full has file_read (from core)');
   assert(names.includes('browser_search'), 'Full has browser_search (from browser)');
   assert(names.includes('browser_navigate'), 'Full has browser_navigate (from browser)');
@@ -106,6 +119,7 @@ section('filterTools — remove gui_interact and app_control');
   assert(!names.includes('app_control'), 'app_control removed');
   assert(!names.includes('dbus_control'), 'dbus_control removed');
   assert(names.includes('shell_exec'), 'shell_exec still present');
+  assert(names.includes('calendar_manage'), 'calendar_manage still present');
   assert(names.includes('browser_search'), 'browser_search still present');
   assertEq(filtered.length, tools.length - 3, 'Exactly 3 tools removed');
 }
@@ -124,6 +138,7 @@ section('filterTools — remove non-existent tool');
 section('isKnownTool');
 {
   assert(isKnownTool('shell_exec'), 'shell_exec is known (streaming)');
+  assert(isKnownTool('calendar_manage'), 'calendar_manage is known');
   assert(isKnownTool('file_read'), 'file_read is known');
   assert(isKnownTool('browser_search'), 'browser_search is known');
   assert(isKnownTool('gui_interact'), 'gui_interact is known');
@@ -162,6 +177,18 @@ section('Tool schemas — shell_exec has command param');
   assert(props.command !== undefined, 'shell_exec has command property');
   assertEq(props.command.type, 'string', 'command is string type');
   assert((shellExec.input_schema as any).required.includes('command'), 'command is required');
+}
+
+section('Tool schemas — calendar_manage has action enum');
+{
+  const tools = getToolsForGroup('core');
+  const calendarManage = tools.find(t => t.name === 'calendar_manage')!;
+  const props = (calendarManage.input_schema as any).properties;
+  assert(props.action !== undefined, 'calendar_manage has action property');
+  assert(Array.isArray(props.action.enum), 'calendar_manage action has enum values');
+  assert(props.action.enum.includes('add'), 'calendar_manage action includes add');
+  assert(props.action.enum.includes('update'), 'calendar_manage action includes update');
+  assert(props.action.enum.includes('delete'), 'calendar_manage action includes delete');
 }
 
 section('Tool schemas — gui_interact has action enum');

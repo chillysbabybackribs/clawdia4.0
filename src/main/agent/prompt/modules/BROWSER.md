@@ -12,10 +12,12 @@ The dynamic prompt includes an [Authenticated sites] block listing every site th
 ## Multi-Step Task Patterns
 
 **Forms & submissions:**
-1. Navigate to the page.
-2. Click each field → type value → move to next field.
-3. Explicitly click the submit button. Typing alone does not submit.
-4. Read the result page to confirm success. Look for confirmation text, not just absence of error.
+1. Check dynamic prompt for a **site harness**. If one exists for this form: `browser_run_harness` fills all fields in 2-5 seconds with zero LLM cost.
+2. If no harness: `browser_detect_form` to discover fields and get CSS selectors.
+3. For each field: `browser_fill_field` (native browser input, works everywhere — React, Web Components, rich text editors).
+4. Explicitly click the submit button. Typing alone does not submit.
+5. Read the result page to confirm success. Look for confirmation text, not just absence of error.
+6. On first success: `browser_register_harness` to save the form for zero-cost replay next time.
 
 **Pagination:**
 - Check for "Next", page number links, or [END OF PAGE] before assuming content is missing.

@@ -39,6 +39,14 @@ PATTERN: /https?:\/\//i  (URL present)
   → promptModules: ['research'] if /(compare|vs|best|recommend|analyze|report)/i
   → model: 'sonnet'
 
+### Rule 1b: Coordination / parallel-agent intent
+PATTERN: /(agent_spawn|spawn .* (agent|sub-agent|worker)|sub-agent|parallel|coordinator|swarm|workstream)/i
+  → toolGroup: 'full'
+  → promptModules: preserve any browser/research modules already matched
+  → model: 'sonnet'
+
+Reason: coordination requests need `agent_spawn`, which is not present in the browser-only group.
+
 ### Rule 2: Explicit filesystem/code intent
 PATTERN: /(read|write|edit|create|delete|move|copy|rename).*file/i
    OR: /(src\/|\.ts|\.tsx|\.js|\.py|\.rs|\.go|\.java|\.cpp|\.c$|\.h$|package\.json|Cargo\.toml)/i

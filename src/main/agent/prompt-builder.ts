@@ -63,6 +63,9 @@ export function buildDynamicPrompt(opts: {
   recallContext?: string;
   siteContext?: string;
   playbookContext?: string;
+  harnessContext?: string;
+  executionSketchContext?: string;
+  executionGraphContext?: string;
   desktopContext?: string;
   executionConstraint?: string;
   shortcutContext?: string;
@@ -136,6 +139,15 @@ export function buildDynamicPrompt(opts: {
 
   // Playbook — learned navigation sequence for this task
   if (opts.playbookContext) lines.push('', opts.playbookContext);
+
+  // Site harnesses — deterministic form fill sequences for current page
+  if (opts.harnessContext) lines.push('', opts.harnessContext);
+
+  // Execution sketch for compound browser tasks
+  if (opts.executionSketchContext) lines.push('', opts.executionSketchContext);
+
+  // Execution graph scaffold for future task-to-agent compilation
+  if (opts.executionGraphContext) lines.push('', opts.executionGraphContext);
 
   if (opts.browserUrl) lines.push(`BROWSER: ${opts.browserUrl}`);
 

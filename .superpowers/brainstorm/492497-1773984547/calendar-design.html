@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Calendar Design Mockups</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0a0a0d;
+    color: #e0e0e4;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    padding: 24px;
+    min-height: 100vh;
+  }
+  h2 { font-size: 15px; font-weight: 500; color: #fff; margin-bottom: 6px; letter-spacing: 0.02em; }
+  .subtitle { font-size: 12px; color: #666; margin-bottom: 28px; }
+
+  .options { display: flex; gap: 20px; flex-wrap: wrap; }
+  .option {
+    flex: 1; min-width: 300px; max-width: 380px;
+    border: 1.5px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    background: rgba(255,255,255,0.02);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    overflow: hidden;
+  }
+  .option:hover { border-color: rgba(255,80,97,0.4); background: rgba(255,80,97,0.03); }
+  .option.selected { border-color: #FF5061; background: rgba(255,80,97,0.06); }
+
+  .option-label {
+    padding: 10px 14px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: #666;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .option-label .letter {
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.06);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 700; color: #aaa;
+  }
+  .option.selected .option-label .letter {
+    background: #FF5061;
+    color: #fff;
+  }
+
+  .mockup-area { padding: 14px; }
+
+  /* ── Shared calendar shell ── */
+  .cal-shell {
+    background: #0d0d10;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.06);
+    font-size: 12px;
+  }
+
+  /* ── Option A: Minimal Flat ── */
+  .cal-a .cal-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+  .cal-a .month-name { font-size: 13px; font-weight: 500; color: #fff; letter-spacing: 0.02em; }
+  .cal-a .nav-btn {
+    width: 24px; height: 24px;
+    border-radius: 6px;
+    background: rgba(255,255,255,0.05);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; border: none; color: #aaa;
+    font-size: 11px;
+  }
+  .cal-a .weekdays {
+    display: grid; grid-template-columns: repeat(7,1fr);
+    padding: 10px 12px 4px;
+  }
+  .cal-a .weekday {
+    text-align: center; font-size: 10px; font-weight: 600;
+    color: rgba(255,255,255,0.25); text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .cal-a .days {
+    display: grid; grid-template-columns: repeat(7,1fr);
+    padding: 0 12px 12px; gap: 2px;
+  }
+  .cal-a .day {
+    aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+    border-radius: 6px; font-size: 12px; color: rgba(255,255,255,0.5);
+    cursor: pointer;
+  }
+  .cal-a .day:hover { background: rgba(255,255,255,0.06); color: #fff; }
+  .cal-a .day.today { color: #FF5061; font-weight: 600; }
+  .cal-a .day.today::after {
+    content: ''; position: absolute;
+    bottom: 3px; left: 50%; transform: translateX(-50%);
+    width: 3px; height: 3px; border-radius: 50%; background: #FF5061;
+  }
+  .cal-a .day { position: relative; }
+  .cal-a .day.other-month { color: rgba(255,255,255,0.15); }
+  .cal-a .day.selected { background: #FF5061; color: #fff; font-weight: 600; }
+
+  /* ── Option B: Glassmorphism ── */
+  .cal-b-wrap {
+    background: linear-gradient(135deg, rgba(20,20,28,0.95) 0%, rgba(12,12,18,0.98) 100%);
+    backdrop-filter: blur(20px);
+    border-radius: 16px;
+    border: 1px solid rgba(255,255,255,0.07);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.04);
+    overflow: hidden;
+  }
+  .cal-b .cal-header {
+    padding: 16px 18px 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    display: flex; align-items: center; justify-content: space-between;
+    background: linear-gradient(to bottom, rgba(255,255,255,0.02), transparent);
+  }
+  .cal-b .month-name { font-size: 14px; font-weight: 600; color: #fff; }
+  .cal-b .year { font-size: 11px; color: rgba(255,255,255,0.3); margin-left: 6px; }
+  .cal-b .nav-pair { display: flex; gap: 4px; }
+  .cal-b .nav-btn {
+    width: 26px; height: 26px; border-radius: 7px;
+    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; color: rgba(255,255,255,0.4); font-size: 11px;
+  }
+  .cal-b .weekdays {
+    display: grid; grid-template-columns: repeat(7,1fr);
+    padding: 10px 14px 4px;
+  }
+  .cal-b .weekday {
+    text-align: center; font-size: 10px; font-weight: 500;
+    color: rgba(255,255,255,0.2); letter-spacing: 0.06em;
+  }
+  .cal-b .days {
+    display: grid; grid-template-columns: repeat(7,1fr);
+    padding: 2px 14px 14px; gap: 3px;
+  }
+  .cal-b .day {
+    aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+    border-radius: 8px; font-size: 12px; color: rgba(255,255,255,0.45);
+    cursor: pointer; transition: all 0.1s;
+  }
+  .cal-b .day:hover { background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.8); }
+  .cal-b .day.today {
+    background: rgba(255,80,97,0.15);
+    color: #FF5061; font-weight: 700;
+    box-shadow: 0 0 12px rgba(255,80,97,0.2);
+  }
+  .cal-b .day.selected {
+    background: #FF5061;
+    color: #fff; font-weight: 700;
+    box-shadow: 0 4px 16px rgba(255,80,97,0.4);
+  }
+  .cal-b .day.other-month { color: rgba(255,255,255,0.12); }
+
+  /* ── Option C: Structured with week numbers ── */
+  .cal-c .cal-header {
+    padding: 12px 14px 8px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .cal-c .month-name { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: #fff; }
+  .cal-c .nav-row { display: flex; gap: 3px; }
+  .cal-c .nav-btn {
+    width: 22px; height: 22px; border-radius: 4px;
+    background: transparent; border: 1px solid rgba(255,255,255,0.1);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; color: rgba(255,255,255,0.4); font-size: 10px;
+  }
+  .cal-c .grid-area { padding: 8px 12px 12px; }
+  .cal-c .weekdays {
+    display: grid; grid-template-columns: 24px repeat(7,1fr);
+    margin-bottom: 4px;
+  }
+  .cal-c .weekday {
+    text-align: center; font-size: 9px; font-weight: 700;
+    color: rgba(255,255,255,0.2); text-transform: uppercase; letter-spacing: 0.1em;
+  }
+  .cal-c .week-row {
+    display: grid; grid-template-columns: 24px repeat(7,1fr);
+    gap: 2px; margin-bottom: 2px;
+  }
+  .cal-c .week-num {
+    font-size: 9px; color: rgba(255,255,255,0.18); display: flex;
+    align-items: center; justify-content: center;
+  }
+  .cal-c .day {
+    aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+    border-radius: 5px; font-size: 11px; color: rgba(255,255,255,0.45);
+    cursor: pointer;
+  }
+  .cal-c .day:hover { background: rgba(255,255,255,0.07); color: #fff; }
+  .cal-c .day.today { color: #FF5061; font-weight: 700; border: 1px solid rgba(255,80,97,0.4); }
+  .cal-c .day.selected { background: #FF5061; color: #fff; font-weight: 700; }
+  .cal-c .day.other-month { color: rgba(255,255,255,0.14); }
+
+  /* ── Trigger preview ── */
+  .trigger-preview {
+    background: rgba(255,255,255,0.03);
+    border-radius: 8px;
+    padding: 6px 10px;
+    margin-top: 10px;
+    display: flex; align-items: center; gap: 8px;
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+  .trigger-chip {
+    font-size: 12px; color: rgba(255,255,255,0.8);
+    cursor: pointer; padding: 2px 4px; border-radius: 4px;
+    transition: background 0.1s;
+  }
+  .trigger-chip:hover { background: rgba(255,255,255,0.07); }
+  .trigger-label { font-size: 10px; color: rgba(255,255,255,0.25); }
+
+  footer { margin-top: 28px; font-size: 11px; color: #444; text-align: center; }
+</style>
+</head>
+<body>
+
+<h2>Calendar Design Options</h2>
+<p class="subtitle">Click an option to select it — these show how the calendar will look when opened from the chat header</p>
+
+<div class="options">
+
+  <!-- Option A: Minimal Flat -->
+  <div class="option" id="opt-a" onclick="select('a', this)">
+    <div class="option-label">
+      <span>A &nbsp;·&nbsp; Minimal Flat</span>
+      <div class="letter">A</div>
+    </div>
+    <div class="mockup-area">
+      <!-- Trigger preview -->
+      <div class="trigger-preview">
+        <span class="trigger-chip">Thu, Mar 20</span>
+        <span class="trigger-label">← click in header</span>
+      </div>
+      <!-- Calendar -->
+      <div style="margin-top: 10px;">
+        <div class="cal-shell cal-a">
+          <div class="cal-header">
+            <div class="nav-btn">‹</div>
+            <div class="month-name">March 2026</div>
+            <div class="nav-btn">›</div>
+          </div>
+          <div class="weekdays">
+            <div class="weekday">S</div><div class="weekday">M</div><div class="weekday">T</div>
+            <div class="weekday">W</div><div class="weekday">T</div><div class="weekday">F</div><div class="weekday">S</div>
+          </div>
+          <div class="days">
+            <div class="day other-month">22</div><div class="day other-month">23</div><div class="day other-month">24</div><div class="day other-month">25</div><div class="day other-month">26</div><div class="day other-month">27</div><div class="day other-month">28</div>
+            <div class="day other-month">1</div><div class="day">2</div><div class="day">3</div><div class="day">4</div><div class="day">5</div><div class="day">6</div><div class="day">7</div>
+            <div class="day">8</div><div class="day">9</div><div class="day">10</div><div class="day">11</div><div class="day">12</div><div class="day">13</div><div class="day">14</div>
+            <div class="day">15</div><div class="day">16</div><div class="day">17</div><div class="day">18</div><div class="day">19</div><div class="day today">20</div><div class="day">21</div>
+            <div class="day">22</div><div class="day">23</div><div class="day">24</div><div class="day selected">25</div><div class="day">26</div><div class="day">27</div><div class="day">28</div>
+            <div class="day">29</div><div class="day">30</div><div class="day">31</div><div class="day other-month">1</div><div class="day other-month">2</div><div class="day other-month">3</div><div class="day other-month">4</div>
+          </div>
+        </div>
+      </div>
+      <p style="font-size:10px;color:#555;margin-top:8px;">Clean, no decoration. Dates only. Fast, subtle.</p>
+    </div>
+  </div>
+
+  <!-- Option B: Glassmorphism -->
+  <div class="option" id="opt-b" onclick="select('b', this)">
+    <div class="option-label">
+      <span>B &nbsp;·&nbsp; Glassmorphism</span>
+      <div class="letter">B</div>
+    </div>
+    <div class="mockup-area">
+      <div class="trigger-preview">
+        <span class="trigger-chip">Thu, Mar 20</span>
+        <span class="trigger-label">← click in header</span>
+      </div>
+      <div style="margin-top: 10px;">
+        <div class="cal-b-wrap cal-b">
+          <div class="cal-header">
+            <div>
+              <span class="month-name">March</span><span class="year">2026</span>
+            </div>
+            <div class="nav-pair">
+              <div class="nav-btn">‹</div>
+              <div class="nav-btn">›</div>
+            </div>
+          </div>
+          <div class="weekdays">
+            <div class="weekday">Su</div><div class="weekday">Mo</div><div class="weekday">Tu</div>
+            <div class="weekday">We</div><div class="weekday">Th</div><div class="weekday">Fr</div><div class="weekday">Sa</div>
+          </div>
+          <div class="days">
+            <div class="day other-month">22</div><div class="day other-month">23</div><div class="day other-month">24</div><div class="day other-month">25</div><div class="day other-month">26</div><div class="day other-month">27</div><div class="day other-month">28</div>
+            <div class="day other-month">1</div><div class="day">2</div><div class="day">3</div><div class="day">4</div><div class="day">5</div><div class="day">6</div><div class="day">7</div>
+            <div class="day">8</div><div class="day">9</div><div class="day">10</div><div class="day">11</div><div class="day">12</div><div class="day">13</div><div class="day">14</div>
+            <div class="day">15</div><div class="day">16</div><div class="day">17</div><div class="day">18</div><div class="day">19</div><div class="day today">20</div><div class="day">21</div>
+            <div class="day">22</div><div class="day">23</div><div class="day">24</div><div class="day selected">25</div><div class="day">26</div><div class="day">27</div><div class="day">28</div>
+            <div class="day">29</div><div class="day">30</div><div class="day">31</div><div class="day other-month">1</div><div class="day other-month">2</div><div class="day other-month">3</div><div class="day other-month">4</div>
+          </div>
+        </div>
+      </div>
+      <p style="font-size:10px;color:#555;margin-top:8px;">Layered depth, glow on today, shadow on selected. Premium feel.</p>
+    </div>
+  </div>
+
+  <!-- Option C: Structured with week numbers -->
+  <div class="option" id="opt-c" onclick="select('c', this)">
+    <div class="option-label">
+      <span>C &nbsp;·&nbsp; Structured + Week #s</span>
+      <div class="letter">C</div>
+    </div>
+    <div class="mockup-area">
+      <div class="trigger-preview">
+        <span class="trigger-chip">Thu, Mar 20</span>
+        <span class="trigger-label">← click in header</span>
+      </div>
+      <div style="margin-top: 10px;">
+        <div class="cal-shell cal-c">
+          <div class="cal-header">
+            <div class="month-name">March 2026</div>
+            <div class="nav-row">
+              <div class="nav-btn">‹</div>
+              <div class="nav-btn">›</div>
+            </div>
+          </div>
+          <div class="grid-area">
+            <div class="weekdays">
+              <div class="weekday"></div>
+              <div class="weekday">S</div><div class="weekday">M</div><div class="weekday">T</div>
+              <div class="weekday">W</div><div class="weekday">T</div><div class="weekday">F</div><div class="weekday">S</div>
+            </div>
+            <div class="week-row">
+              <div class="week-num">8</div>
+              <div class="day other-month">22</div><div class="day other-month">23</div><div class="day other-month">24</div><div class="day other-month">25</div><div class="day other-month">26</div><div class="day other-month">27</div><div class="day other-month">28</div>
+            </div>
+            <div class="week-row">
+              <div class="week-num">9</div>
+              <div class="day other-month">1</div><div class="day">2</div><div class="day">3</div><div class="day">4</div><div class="day">5</div><div class="day">6</div><div class="day">7</div>
+            </div>
+            <div class="week-row">
+              <div class="week-num">10</div>
+              <div class="day">8</div><div class="day">9</div><div class="day">10</div><div class="day">11</div><div class="day">12</div><div class="day">13</div><div class="day">14</div>
+            </div>
+            <div class="week-row">
+              <div class="week-num">11</div>
+              <div class="day">15</div><div class="day">16</div><div class="day">17</div><div class="day">18</div><div class="day">19</div><div class="day today">20</div><div class="day">21</div>
+            </div>
+            <div class="week-row">
+              <div class="week-num">12</div>
+              <div class="day">22</div><div class="day">23</div><div class="day">24</div><div class="day selected">25</div><div class="day">26</div><div class="day">27</div><div class="day">28</div>
+            </div>
+            <div class="week-row">
+              <div class="week-num">13</div>
+              <div class="day">29</div><div class="day">30</div><div class="day">31</div><div class="day other-month">1</div><div class="day other-month">2</div><div class="day other-month">3</div><div class="day other-month">4</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p style="font-size:10px;color:#555;margin-top:8px;">Week numbers on left, compact grid. Useful, structured.</p>
+    </div>
+  </div>
+
+</div>
+
+<footer>All three: dark theme · white text · #FF5061 accent · rendered in the chat panel, browser hidden</footer>
+
+<script>
+  function select(id, el) {
+    document.querySelectorAll('.option').forEach(o => o.classList.remove('selected'));
+    el.classList.add('selected');
+    // record for .events
+    if (window.__recordChoice) window.__recordChoice(id, el.querySelector('.option-label span').textContent.trim());
+  }
+</script>
+</body>
+</html>

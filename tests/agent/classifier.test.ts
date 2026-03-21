@@ -21,6 +21,11 @@ describe('classify() — tool group routing', () => {
     expect(classify('go to https://github.com').toolGroup).toBe('browser');
   });
 
+  it('routes coordination-style browser tasks to full group so agent_spawn is available', () => {
+    expect(classify('spawn 2 parallel sub-agents to browse example.com and compare results').toolGroup).toBe('full');
+    expect(classify('use agent_spawn to coordinate two workers on browser tasks').toolGroup).toBe('full');
+  });
+
   it('routes filesystem tasks to core group', () => {
     expect(classify('read file src/main/main.ts').toolGroup).toBe('core');
     expect(classify('edit package.json to add a dependency').toolGroup).toBe('core');

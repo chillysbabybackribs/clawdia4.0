@@ -1,0 +1,43 @@
+<h2>Three approaches for the calendar CLI + live update</h2>
+<p class="subtitle">All use SQLite + CLIanything — the difference is how the UI stays live</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>CLI → SQLite → IPC Poll</h3>
+      <p>The CLI writes events to SQLite. The Electron main process polls the DB every few seconds and pushes updates to the renderer via an existing IPC channel. Calendar UI re-renders on each push.</p>
+      <br>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Simple — no file watchers or sockets</li><li>Polling interval tunable (1–5s)</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Slight lag (up to poll interval)</li><li>Constant background work even when idle</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>CLI → SQLite → File Watcher → IPC Push <span style="color:#FF5061;font-size:0.75em;margin-left:8px;">★ Recommended</span></h3>
+      <p>The CLI writes to SQLite. The main process watches the DB file with <code>fs.watch</code>. On change, it reads the new events and pushes them to the renderer instantly via IPC. Zero polling.</p>
+      <br>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Instant updates — no lag</li><li>Zero overhead when nothing changes</li><li>Fits cleanly into existing IPC pattern</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li><code>fs.watch</code> can fire multiple times per write — needs debounce (trivial)</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>CLI → SQLite → Named Pipe / Unix Socket</h3>
+      <p>The CLI writes to SQLite then sends a signal over a Unix socket. The main process listens on the socket and immediately triggers a UI refresh.</p>
+      <br>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Truly instant, no debounce needed</li><li>Clean separation of concerns</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>More complex — socket lifecycle, cleanup</li><li>Overkill for this use case</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>

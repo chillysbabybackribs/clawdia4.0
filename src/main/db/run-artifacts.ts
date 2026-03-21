@@ -4,7 +4,7 @@ import type { RunArtifact } from '../../shared/types';
 interface RunArtifactRow {
   id: number;
   run_id: string;
-  kind: 'execution_plan';
+  kind: 'execution_plan' | 'execution_graph_scaffold' | 'execution_graph_state';
   title: string;
   body: string;
   created_at: string;
@@ -20,7 +20,7 @@ export function listRunArtifacts(runId: string): RunArtifact[] {
 
 export function upsertRunArtifact(
   runId: string,
-  kind: 'execution_plan',
+  kind: 'execution_plan' | 'execution_graph_scaffold' | 'execution_graph_state',
   title: string,
   body: string,
 ): RunArtifact {

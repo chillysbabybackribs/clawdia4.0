@@ -19,12 +19,29 @@ function assertEq<T>(actual: T, expected: T, label: string): void {
 
 import { classify } from '../src/main/agent/classifier';
 import { applyAgentProfileOverride, parseManualAgentProfileOverride } from '../src/main/agent/agent-profile-override';
+import { buildClaudeCodeDelegationPrompt } from '../src/main/agent/claude-code';
 
 section('parseManualAgentProfileOverride');
 {
   const parsed = parseManualAgentProfileOverride('/filesystem-agent find the exact file containing hello world');
   assertEq(parsed.forcedAgentProfile, 'filesystem', 'Parses filesystem override');
   assertEq(parsed.cleanedMessage, 'find the exact file containing hello world', 'Strips slash command');
+
+  const claude = parseManualAgentProfileOverride('/claude-code review this repo for TypeScript errors');
+  assertEq(claude.forcedAgentProfile, undefined, 'Claude Code slash command does not force an agent profile');
+  assertEq(
+    claude.cleanedMessage,
+    buildClaudeCodeDelegationPrompt('review this repo for TypeScript errors', 'read_only'),
+    'Claude Code slash command rewrites to standardized read-only delegation prompt',
+  );
+
+  const claudeEdit = parseManualAgentProfileOverride('/claude-code-edit fix the failing tests');
+  assertEq(claudeEdit.forcedAgentProfile, undefined, 'Claude Code edit slash command does not force an agent profile');
+  assertEq(
+    claudeEdit.cleanedMessage,
+    buildClaudeCodeDelegationPrompt('fix the failing tests', 'edit'),
+    'Claude Code edit slash command rewrites to write-enabled delegation prompt',
+  );
 
   const unknown = parseManualAgentProfileOverride('/unknown-agent test');
   assertEq(unknown.forcedAgentProfile, undefined, 'Unknown command is ignored');

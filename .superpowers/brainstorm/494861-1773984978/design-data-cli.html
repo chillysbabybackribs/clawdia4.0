@@ -1,0 +1,60 @@
+<h2>Data Model & CLI Commands</h2>
+<p class="subtitle">What gets stored and what the AI can call</p>
+
+<div class="mockup">
+  <div class="mockup-header">calendar_events table (calendar.sqlite)</div>
+  <div class="mockup-body" style="font-family:monospace;font-size:12px;line-height:1.9;padding:16px;">
+    <div style="color:rgba(255,255,255,0.4);margin-bottom:8px;">-- schema</div>
+    <div style="color:#a8d8a8;">id          TEXT PRIMARY KEY  -- uuid</div>
+    <div style="color:#a8d8a8;">title       TEXT NOT NULL</div>
+    <div style="color:#a8d8a8;">date        TEXT NOT NULL      -- ISO 8601: 2026-03-21</div>
+    <div style="color:#a8d8a8;">start_time  TEXT              -- HH:MM, nullable (all-day if null)</div>
+    <div style="color:#a8d8a8;">duration    INTEGER           -- minutes, nullable</div>
+    <div style="color:#a8d8a8;">notes       TEXT              -- optional free text</div>
+    <div style="color:#a8d8a8;">created_at  TEXT NOT NULL</div>
+    <div style="color:#a8d8a8;">updated_at  TEXT NOT NULL</div>
+  </div>
+</div>
+
+<div class="mockup" style="margin-top:20px;">
+  <div class="mockup-header">CLI commands — clawdia-cal</div>
+  <div class="mockup-body" style="font-family:monospace;font-size:12px;line-height:2;padding:16px;">
+
+    <div style="color:#FF5061;margin-bottom:2px;">add</div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.7);">clawdia-cal add "Title" --date 2026-03-21 [--time 10:00] [--duration 60] [--notes "..."]</div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.4);font-size:11px;">→ prints JSON: {"id":"...","title":"...","date":"..."}</div>
+    <br>
+
+    <div style="color:#FF5061;margin-bottom:2px;">list</div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.7);">clawdia-cal list [--date 2026-03-21] [--from 2026-03-01] [--to 2026-03-31]</div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.4);font-size:11px;">→ prints JSON array of events (no args = today)</div>
+    <br>
+
+    <div style="color:#FF5061;margin-bottom:2px;">update</div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.7);">clawdia-cal update &lt;id&gt; [--title "..."] [--date ...] [--time ...] [--duration ...] [--notes "..."]</div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.4);font-size:11px;">→ prints updated event JSON</div>
+    <br>
+
+    <div style="color:#FF5061;margin-bottom:2px;">delete</div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.7);">clawdia-cal delete &lt;id&gt;</div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.4);font-size:11px;">→ prints {"deleted":true,"id":"..."}</div>
+    <br>
+
+    <div style="color:#FF5061;margin-bottom:2px;">get</div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.7);">clawdia-cal get &lt;id&gt;</div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.4);font-size:11px;">→ prints single event JSON</div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:24px;">
+  <h3>AI context injection</h3>
+  <p style="font-size:13px;color:rgba(255,255,255,0.6);">
+    Each time the AI starts a run, the system prompt is prefixed with today's events via <code>clawdia-cal list</code> (no args = today). This gives it passive awareness — it knows your schedule without you having to tell it.
+  </p>
+  <p style="font-size:13px;color:rgba(255,255,255,0.6);margin-top:8px;">
+    Example injection: <br>
+    <span style="font-family:monospace;color:rgba(255,255,255,0.4);font-size:11px;">Today is Friday 2026-03-20. You have 2 events: 10:00 Team standup (30m), 14:00 Design review (60m).</span>
+  </p>
+</div>
+
+<p style="margin-top:20px;font-size:12px;color:rgba(255,255,255,0.4);">Does the data model and CLI surface look right?</p>

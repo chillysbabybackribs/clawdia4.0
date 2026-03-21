@@ -55,6 +55,14 @@ function formatDateTime(ts: number): string {
 
 function formatEventLabel(event: RunEvent): string {
   switch (event.kind) {
+    case 'graph_execution_started': return 'Graph execution started';
+    case 'graph_node_started': return `Graph node started: ${event.payload.label || event.payload.nodeId || 'node'}`;
+    case 'graph_node_completed': return `Graph node completed: ${event.payload.label || event.payload.nodeId || 'node'}`;
+    case 'graph_node_retry_scheduled': return `Graph node retry scheduled: ${event.payload.nodeId || 'node'}`;
+    case 'graph_verification_completed': return `Graph verification ${event.payload.passed ? 'passed' : 'completed'}`;
+    case 'graph_execution_fallback': return 'Graph execution fell back';
+    case 'graph_merge_started': return 'Graph merge started';
+    case 'graph_merge_completed': return 'Graph merge completed';
     case 'run_started': return 'Run started';
     case 'run_classified': return `Classified as ${event.payload.toolGroup || 'task'}`;
     case 'model_selected': return `Model selected: ${event.payload.modelId || 'unknown'}`;
@@ -94,6 +102,39 @@ function formatEventLabel(event: RunEvent): string {
 }
 
 function formatEventDetail(event: RunEvent): string {
+  if (event.kind === 'graph_execution_started') {
+    const workers = Array.isArray(event.payload.workerNodeIds) ? event.payload.workerNodeIds.length : 0;
+    return `${workers} worker node${workers === 1 ? '' : 's'} planned`;
+  }
+  if (event.kind === 'graph_node_started' || event.kind === 'graph_node_completed') {
+    const attempt = event.payload.attempt ? `Attempt ${event.payload.attempt}` : '';
+    const tools = Array.isArray(event.payload.toolCalls) && event.payload.toolCalls.length > 0
+      ? event.payload.toolCalls.join(', ')
+      : '';
+    return [attempt, tools].filter(Boolean).join(' · ');
+  }
+  if (event.kind === 'graph_node_retry_scheduled') {
+    const failedChecks = Array.isArray(event.payload.failedChecks) ? event.payload.failedChecks : [];
+    return failedChecks.slice(0, 3).map((check: any) => `${check.name}: ${check.detail}`).join(' · ');
+  }
+  if (event.kind === 'graph_verification_completed') {
+    const failedNodeIds = Array.isArray(event.payload.failedNodeIds) ? event.payload.failedNodeIds : [];
+    return [
+      event.payload.retryRecommended ? 'Retry recommended' : event.payload.passed ? 'All checks passed' : 'Verification failed',
+      failedNodeIds.length ? `Failed nodes: ${failedNodeIds.join(', ')}` : '',
+      event.payload.afterRetry ? 'After retry' : '',
+    ].filter(Boolean).join(' · ');
+  }
+  if (event.kind === 'graph_execution_fallback') {
+    const failedNodeIds = Array.isArray(event.payload.failedNodeIds) ? event.payload.failedNodeIds : [];
+    return failedNodeIds.length ? `Failed nodes: ${failedNodeIds.join(', ')}` : 'Graph path returned to the classic loop';
+  }
+  if (event.kind === 'graph_merge_started' || event.kind === 'graph_merge_completed') {
+    return [
+      event.payload.mergeNodeId ? `Merge node: ${event.payload.mergeNodeId}` : '',
+      event.payload.responseLength ? `${event.payload.responseLength} chars` : '',
+    ].filter(Boolean).join(' · ');
+  }
   if (event.kind === 'tool_progress') {
     const chunk = String(event.payload.chunk || '').trim();
     return chunk ? chunk.slice(0, 180) : 'Streaming output';
@@ -140,6 +181,76 @@ function formatEventDetail(event: RunEvent): string {
     return `${mode}${reason ? ` · ${reason}` : ''}`.trim();
   }
   return '';
+}
+
+function parseGraphStateArtifact(artifact: RunArtifact): any | null {
+  if (artifact.kind !== 'execution_graph_state') return null;
+  try {
+    return JSON.parse(artifact.body);
+  } catch {
+    return null;
+  }
+}
+
+function GraphStateArtifactView({ artifact }: { artifact: RunArtifact }) {
+  const snapshot = parseGraphStateArtifact(artifact);
+  if (!snapshot) {
+    return (
+      <pre className="mt-3 overflow-x-auto rounded-lg border border-white/[0.04] bg-[#0f0f13] px-3 py-2 font-mono text-[11px] leading-[1.55] text-text-secondary whitespace-pre-wrap">
+        {artifact.body}
+      </pre>
+    );
+  }
+
+  const statusTone = snapshot.status === 'merged'
+    ? 'text-[#ff7a00] bg-[#ff7a00]/12'
+    : snapshot.status === 'fallback'
+      ? 'text-red-300 bg-red-400/10'
+      : 'text-blue-300 bg-blue-400/10';
+
+  return (
+    <div className="mt-3 rounded-lg border border-white/[0.04] bg-[#0f0f13] px-3 py-3">
+      <div className="flex flex-wrap items-center gap-2 text-2xs text-text-secondary">
+        <span className={`px-2 py-1 rounded-md ${statusTone}`}>{snapshot.status}</span>
+        <span className="px-2 py-1 rounded-md bg-white/[0.04]">{snapshot.nodeCount} nodes</span>
+        {snapshot.verification && (
+          <span className="px-2 py-1 rounded-md bg-white/[0.04]">
+            verification: {snapshot.verification.passed ? 'passed' : snapshot.verification.retryRecommended ? 'retrying' : 'failed'}
+          </span>
+        )}
+      </div>
+
+      <div className="mt-3 flex flex-col gap-2">
+        {(snapshot.nodes || []).map((node: any) => (
+          <div key={node.nodeId} className="rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-2">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[13px] text-text-primary">{node.label}</div>
+                <div className="mt-1 text-2xs text-text-muted">
+                  {node.executorKind} · {node.contract} · attempt {node.attempt || 0}
+                </div>
+              </div>
+              <span className="text-2xs px-2 py-0.5 rounded-full bg-white/[0.06] text-text-secondary">
+                {node.status}
+              </span>
+            </div>
+
+            {Array.isArray(node.toolCalls) && node.toolCalls.length > 0 && (
+              <div className="mt-2 text-[12px] text-text-secondary break-words">
+                Tools: {node.toolCalls.join(', ')}
+              </div>
+            )}
+
+            {Array.isArray(node.verificationErrors) && node.verificationErrors.length > 0 && (
+              <div className="mt-2 text-[12px] text-red-300 whitespace-pre-wrap break-words">
+                {node.verificationErrors.join('\n')}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function formatProviderModel(provider?: string, model?: string): string | null {
@@ -354,9 +465,13 @@ function RunDetail({
                   </div>
                 </div>
 
-                <pre className="mt-3 overflow-x-auto rounded-lg border border-white/[0.04] bg-[#0f0f13] px-3 py-2 font-mono text-[11px] leading-[1.55] text-text-secondary whitespace-pre-wrap">
-                  {artifact.body}
-                </pre>
+                {artifact.kind === 'execution_graph_state' ? (
+                  <GraphStateArtifactView artifact={artifact} />
+                ) : (
+                  <pre className="mt-3 overflow-x-auto rounded-lg border border-white/[0.04] bg-[#0f0f13] px-3 py-2 font-mono text-[11px] leading-[1.55] text-text-secondary whitespace-pre-wrap">
+                    {artifact.body}
+                  </pre>
+                )}
               </div>
             ))}
           </div>

@@ -1,8 +1,8 @@
 # Core System Prompt — Clawdia 4.0
 # ═══════════════════════════════════
-# This file is the STATIC identity block. It is cached via Anthropic's
-# prompt caching (cache_control: ephemeral) and reused across every API
-# call in a session. Changes here bust the cache for all users.
+# This file is the STATIC identity block. It is sent as the first system
+# prompt on every API call and cached where the provider supports it.
+# Changes here take effect on the next cold start.
 #
 # Token budget: ~800 tokens. Every word must earn its place.
 # ═══════════════════════════════════

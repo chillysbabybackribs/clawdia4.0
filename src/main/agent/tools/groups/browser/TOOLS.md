@@ -1,7 +1,7 @@
 # Tool Definitions — Browser Group
 # ═══════════════════════════════════
-# Browser tools operate the Playwright browser visible in the right panel.
-# The user can see every navigation. Also includes headless extraction.
+# Browser tools operate the Electron Chromium browser visible in the right panel.
+# The user can see every navigation. Also includes DOM-based extraction.
 # ═══════════════════════════════════
 
 
@@ -96,21 +96,134 @@ input_schema:
 
 name: browser_extract
 description: |
-  Extract structured data from the current page using a JSON schema.
-  Returns data matching the schema shape. Use for pulling prices, tables,
-  product details, or any structured information from a page. More
-  reliable than parsing raw page text.
+  Extract targeted structured data from the current page. Pass a natural
+  language instruction describing what to extract: "the pricing table",
+  "all navigation links", "form fields", "product prices". More efficient
+  than parsing raw browser_read_page output for specific data.
 
 input_schema:
   type: object
   properties:
-    schema:
-      type: object
-      description: JSON schema describing the data to extract (e.g. { "prices": [{ "model": "string", "input": "string", "output": "string" }] })
     instruction:
       type: string
-      description: Natural language instruction for what to extract
+      description: What to extract — be specific (e.g. "pricing table", "form fields", "navigation links")
   required: [instruction]
+
+
+## browser_focus_field
+
+name: browser_focus_field
+description: |
+  Explicitly focus a form field by CSS selector, scrolling it into view
+  first. Use before browser_type when you need to guarantee the correct
+  field is active. Returns focus confirmation or error. More reliable
+  than clicking for form fields.
+
+input_schema:
+  type: object
+  properties:
+    selector:
+      type: string
+      description: CSS selector of the field to focus (e.g. "#email", "input[name=username]", "[aria-label=Search]")
+  required: [selector]
+
+
+## browser_detect_form
+
+name: browser_detect_form
+description: |
+  Detect forms on the current page and return their structure with stable
+  CSS selectors for each field. Use before filling complex forms — returns
+  field names, types, placeholders, and reliable selectors (by id/name/aria)
+  instead of fragile element indices. Also returns the submit button selector.
+
+input_schema:
+  type: object
+  properties:
+    instruction:
+      type: string
+      description: Optional hint to match a specific form (e.g. "login", "search", "signup"). Leave empty to detect all forms.
+  required: []
+
+
+## browser_fill_field
+
+name: browser_fill_field
+description: |
+  Fill a single form field using native browser input events. This is
+  the most reliable way to type into ANY form field: React inputs, Web
+  Components (Reddit, GitHub), rich text editors (Lexical, ProseMirror),
+  and contenteditable divs. Uses real Chromium input pipeline — identical
+  to human typing. Automatically scrolls into view, clicks to focus, clears
+  existing text, types char-by-char, and verifies the result.
+  
+  PREFER THIS over browser_click + browser_type for all form filling.
+  For Web Components, pass the outer element selector — shadow DOM drilling
+  is automatic.
+
+input_schema:
+  type: object
+  properties:
+    selector:
+      type: string
+      description: CSS selector for the field (e.g. "input[name=email]", "[name=title]", "div[name=body]")
+    text:
+      type: string
+      description: Text to type into the field
+  required: [selector, text]
+
+
+## browser_run_harness
+
+name: browser_run_harness
+description: |
+  Execute a stored site harness for deterministic, zero-cost form filling.
+  Harnesses are pre-compiled form definitions with exact CSS selectors.
+  They execute via native browser input without any LLM calls — 2-5 seconds total.
+  
+  Check the dynamic prompt for available harnesses on the current site.
+  If no harness exists, fill manually with browser_detect_form +
+  browser_fill_field, then call browser_register_harness to save it.
+
+input_schema:
+  type: object
+  properties:
+    domain:
+      type: string
+      description: Site domain (e.g. "reddit.com")
+    action:
+      type: string
+      description: Harness action name (e.g. "create-post")
+    fields:
+      type: object
+      description: Field name → value map (e.g. {"title": "My post", "body": "Hello"})
+    submit:
+      type: boolean
+      description: Click submit button after filling (default false)
+  required: [domain, action, fields]
+
+
+## browser_register_harness
+
+name: browser_register_harness
+description: |
+  Register a new site harness after successfully filling a form. Saves the
+  form structure (field selectors, types, submit button) so next time the
+  same form can be filled deterministically via browser_run_harness.
+  Call after successfully filling a form with browser_detect_form +
+  browser_fill_field.
+
+input_schema:
+  type: object
+  properties:
+    harness:
+      type: object
+      description: |
+        Harness definition with: domain, actionName, urlPattern,
+        fields (array of {name, selector, fieldType, required}),
+        submit ({selector, text}),
+        verify ({successUrlPattern?, errorSelector?})
+  required: [harness]
 
 
 ## browser_screenshot
@@ -119,8 +232,8 @@ name: browser_screenshot
 description: |
   Capture a screenshot of the current browser viewport. Returns the image.
   Use when you need to see visual layout, identify icon-only buttons, or
-  verify that an action succeeded visually. Follow up with coordinate-based
-  browser_click if you identify a target element in the screenshot.
+  verify that an action succeeded visually. After reviewing the screenshot,
+  use browser_click with an element index or CSS selector to interact.
 
 input_schema:
   type: object

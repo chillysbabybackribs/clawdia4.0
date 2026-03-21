@@ -25,7 +25,7 @@ import type { AgentProfile } from '../../shared/types';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { createTab, switchTab, closeTab, getTabList, getCurrentUrl, getVisibleText } from '../browser/manager';
+import { createTab, switchTab, closeTab, getTabList, getCurrentUrl, getVisibleText, type BrowserTarget } from '../browser/manager';
 import {
   executeBrowserSearch,
   executeBrowserNavigate,
@@ -91,6 +91,20 @@ export interface ExecuteSavedPlaybookResult {
   response: string;
 }
 
+export interface ExecuteSavedPlaybookOptions {
+  exactOnly?: boolean;
+  target?: BrowserTarget;
+}
+
+export interface PlaybookCandidateMatch {
+  playbook: Playbook;
+  score: number;
+  matchType: 'exact' | 'fuzzy';
+}
+
+const PLAYBOOK_AUTOSAVE_SKIP_TASK_RE = /\bagent_spawn\b|\bspawn\b.*\b(agent|sub-agent|worker)s?\b|\bsub-agent\b|\bparallel\b|\bworkers?\b|\bcoordinator\b|\bswarm\b|\btest\b|\bvalidate\b|\bevaluation\b|\bevaluate whether\b|\bnetwork watch\b|\bdom snapshot\b|\bbrowser_eval\b|\bbrowser_dom_snapshot\b|\bbrowser_network_watch\b/i;
+const PLAYBOOK_AUTOSAVE_SKIP_TOOL_RE = /^(browser_eval|browser_dom_snapshot|browser_network_watch)$/;
+
 // ═══════════════════════════════════
 // Recording — Called after successful browser tasks
 // ═══════════════════════════════════
@@ -125,11 +139,19 @@ export function savePlaybook(
 
   // Determine the domain from the first navigate call or the primary URL
   let domain = '';
+  const navigationDomains = browserCalls
+    .filter(tc => tc.name === 'browser_navigate' && typeof tc.input?.url === 'string')
+    .map(tc => extractDomain(String(tc.input.url)))
+    .filter(Boolean);
+
   if (primaryUrl) {
-    domain = extractDomain(primaryUrl);
-  } else {
-    const firstNav = browserCalls.find(tc => tc.name === 'browser_navigate');
-    if (firstNav?.input?.url) domain = extractDomain(firstNav.input.url);
+    const primaryDomain = extractDomain(primaryUrl);
+    if (primaryDomain && (navigationDomains.length === 0 || navigationDomains.includes(primaryDomain))) {
+      domain = primaryDomain;
+    }
+  }
+  if (!domain && navigationDomains.length > 0) {
+    domain = navigationDomains[navigationDomains.length - 1];
   }
   if (!domain) return null;
 
@@ -218,6 +240,28 @@ export function savePlaybook(
     avgRuntimeMs: runtimeMs,
     notes,
   };
+}
+
+export function shouldAutoSavePlaybook(
+  taskDescription: string,
+  toolCalls: Array<{ name: string; input: Record<string, any>; summary: string }>,
+): boolean {
+  if (PLAYBOOK_AUTOSAVE_SKIP_TASK_RE.test(taskDescription)) return false;
+  if (toolCalls.some(call => PLAYBOOK_AUTOSAVE_SKIP_TOOL_RE.test(call.name))) return false;
+
+  const primaryActionCount = toolCalls.filter(call =>
+    [
+      'browser_navigate',
+      'browser_click',
+      'browser_type',
+      'browser_extract',
+      'browser_scroll',
+      'browser_fill_field',
+      'browser_run_harness',
+    ].includes(call.name),
+  ).length;
+
+  return primaryActionCount >= 2;
 }
 
 const BLOODHOUND_DEFAULT_THRESHOLD = 0.85;
@@ -371,9 +415,28 @@ export function writeBloodhoundExecutorArtifacts(
 export async function executeSavedBloodhoundPlaybook(
   taskDescription: string,
   url?: string,
+  opts?: ExecuteSavedPlaybookOptions,
 ): Promise<ExecuteSavedPlaybookResult | null> {
-  const playbook = findPlaybook(taskDescription, url);
+  const playbook = opts?.exactOnly
+    ? findExactPlaybook(taskDescription, url)
+    : findPlaybook(taskDescription, url);
   if (!playbook || playbook.agentProfile !== 'bloodhound') return null;
+  return executeSavedBloodhoundPlaybookByPlaybook(playbook, opts?.target);
+}
+
+export async function executeSavedBloodhoundPlaybookById(
+  playbookId: number,
+  opts?: ExecuteSavedPlaybookOptions,
+): Promise<ExecuteSavedPlaybookResult | null> {
+  const playbook = findPlaybookById(playbookId);
+  if (!playbook || playbook.agentProfile !== 'bloodhound') return null;
+  return executeSavedBloodhoundPlaybookByPlaybook(playbook, opts?.target);
+}
+
+async function executeSavedBloodhoundPlaybookByPlaybook(
+  playbook: Playbook,
+  target?: BrowserTarget,
+): Promise<ExecuteSavedPlaybookResult | null> {
   const compiledSteps = compileBloodhoundExecutorSteps(playbook.steps);
   if (containsTemplatePlaceholder(compiledSteps)) {
     console.warn(`[Playbook] Skipping executor "${playbook.taskPattern}" on ${playbook.domain} because it contains unresolved template placeholders.`);
@@ -390,12 +453,12 @@ export async function executeSavedBloodhoundPlaybook(
   }
 
   const priorActiveTabId = getTabList().find(tab => tab.isActive)?.id;
-  const tempTabId = createTab();
+  const replayTarget = target || { tabId: createTab() };
   let keepResultTab = false;
   try {
-    const replay = await replayStepsInActiveTab(playbook.steps);
-    const finalUrl = getCurrentUrl();
-    const finalText = (await getVisibleText()).trim();
+    const replay = await replayStepsInActiveTab(playbook.steps, replayTarget);
+    const finalUrl = getCurrentUrl(replayTarget);
+    const finalText = (await getVisibleText(replayTarget)).trim();
     const domainOk = !playbook.domain || extractDomain(finalUrl) === playbook.domain;
     const contentOk = finalText.length >= 40;
 
@@ -419,8 +482,8 @@ export async function executeSavedBloodhoundPlaybook(
       ].join('\n'),
     };
   } finally {
-    if (!keepResultTab && getTabList().some(tab => tab.id === tempTabId)) closeTab(tempTabId);
-    if (!keepResultTab && priorActiveTabId && getTabList().some(tab => tab.id === priorActiveTabId)) switchTab(priorActiveTabId);
+    if (!target && !keepResultTab && replayTarget.tabId && getTabList().some(tab => tab.id === replayTarget.tabId)) closeTab(replayTarget.tabId);
+    if (!target && !keepResultTab && priorActiveTabId && getTabList().some(tab => tab.id === priorActiveTabId)) switchTab(priorActiveTabId);
   }
 }
 
@@ -623,6 +686,103 @@ export function findPlaybook(taskDescription: string, url?: string): Playbook | 
   return pickBestFuzzyPlaybook(rows.map(rowToPlaybook), pattern);
 }
 
+export function findExactPlaybook(taskDescription: string, url?: string): Playbook | null {
+  const pattern = normalizeTaskPattern(taskDescription);
+  if (!pattern) return null;
+
+  const db = getDb();
+
+  if (url) {
+    const domain = extractDomain(url);
+    const row = db.prepare(`
+      SELECT * FROM browser_playbooks
+      WHERE domain = ? AND task_pattern = ?
+      AND success_count > fail_count
+      ORDER BY success_count DESC
+      LIMIT 1
+    `).get(domain, pattern) as any;
+    if (row) return rowToPlaybook(row);
+  }
+
+  const rows = db.prepare(`
+    SELECT * FROM browser_playbooks
+    WHERE task_pattern = ?
+    AND success_count > fail_count
+    ORDER BY success_count DESC
+    LIMIT 10
+  `).all(pattern) as any[];
+  if (rows.length === 0) return null;
+
+  const playbooks = rows.map(rowToPlaybook);
+  const uniqueDomains = new Set(playbooks.map((playbook) => playbook.domain));
+  return uniqueDomains.size === 1 ? playbooks[0] : null;
+}
+
+export function findPlaybookCandidate(
+  taskDescription: string,
+  url?: string,
+  opts?: { minScore?: number },
+): PlaybookCandidateMatch | null {
+  const exact = findExactPlaybook(taskDescription, url);
+  if (exact) {
+    return {
+      playbook: exact,
+      score: 1,
+      matchType: 'exact',
+    };
+  }
+
+  const pattern = normalizeTaskPattern(taskDescription);
+  if (!pattern) return null;
+
+  const db = getDb();
+  const minScore = opts?.minScore ?? 0.72;
+  let candidates: Playbook[] = [];
+
+  if (url) {
+    const domain = extractDomain(url);
+    const domainRows = db.prepare(`
+      SELECT * FROM browser_playbooks
+      WHERE domain = ?
+      AND success_count > fail_count
+      ORDER BY success_count DESC
+      LIMIT 25
+    `).all(domain) as any[];
+    candidates = domainRows.map(rowToPlaybook);
+  }
+
+  if (candidates.length === 0) {
+    const rows = db.prepare(`
+      SELECT * FROM browser_playbooks
+      WHERE success_count > fail_count
+      ORDER BY success_count DESC
+      LIMIT 50
+    `).all() as any[];
+    candidates = rows.map(rowToPlaybook);
+  }
+
+  let best: PlaybookCandidateMatch | null = null;
+  const normalizedQuery = normalizeTaskPattern(pattern);
+  for (const playbook of candidates) {
+    const normalizedStoredPattern = normalizeTaskPattern(playbook.taskPattern);
+    const executorPattern = buildExecutorIntentPattern(playbook);
+    const score = Math.max(
+      scorePatternSimilarity(normalizedQuery, normalizedStoredPattern),
+      scorePatternSimilarity(normalizedQuery, executorPattern),
+    );
+    if (score < minScore) continue;
+    if (!best || score > best.score || (score === best.score && playbook.successCount > best.playbook.successCount)) {
+      best = {
+        playbook,
+        score,
+        matchType: 'fuzzy',
+      };
+    }
+  }
+
+  return best;
+}
+
 /**
  * Find all playbooks for a given domain.
  * Useful for showing the LLM what it already knows about a site.
@@ -655,6 +815,7 @@ export function getPlaybookPrompt(taskDescription: string, url?: string): string
     playbook.agentProfile === 'bloodhound'
       ? `[BLOODHOUND EXECUTOR — validated browser workflow for "${playbook.taskPattern}" on ${playbook.domain}]`
       : `[PLAYBOOK — learned navigation for "${playbook.taskPattern}" on ${playbook.domain}]`,
+    `Playbook ID: ${playbook.id}.`,
     playbook.agentProfile === 'bloodhound'
       ? `Validation: ${(playbook.successRate * 100).toFixed(0)}% success across ${playbook.validationRuns} run(s); avg ${playbook.avgStepCount.toFixed(1)} steps, avg ${Math.round(playbook.avgRuntimeMs / 1000)}s runtime.`
       : `This sequence has worked ${playbook.successCount} time(s). Suggested steps:`,
@@ -786,6 +947,10 @@ export function normalizeTaskPattern(task: string): string {
     'learn', 'save', 'saved', 'executor', 'fastest', 'reliable', 'fresh', 'tab',
     'there', 'way', 'using', 'build', 'design', 'create', 'open', 'navigate',
     'direct', 'best', 'from',
+    'agent', 'agents', 'sub-agent', 'subagents', 'worker', 'workers', 'coordinator', 'swarm',
+    'browser', 'context', 'contexts', 'eval', 'expression', 'exact', 'final', 'step', 'steps',
+    'return', 'report', 'state', 'isolated', 'isolation', 'compare', 'complete', 'confirm',
+    'tool', 'tools', 'only', 'task', 'tasks', 'flow', 'buffer',
   ]);
 
   const words = cleaned.match(/\b[a-z][a-z0-9-]*\b/g) || [];
@@ -856,9 +1021,9 @@ function sanitizeInput(input: Record<string, any>): Record<string, any> {
   return clean;
 }
 
-async function replayStepsInActiveTab(steps: PlaybookStep[]): Promise<{ ok: boolean; reason?: string }> {
+async function replayStepsInActiveTab(steps: PlaybookStep[], target?: BrowserTarget): Promise<{ ok: boolean; reason?: string }> {
   for (const step of steps) {
-    const result = await executeReplayStep(step);
+    const result = await executeReplayStep(step, target);
     if (isReplayFailure(result)) {
       return { ok: false, reason: `${step.tool} failed: ${result.slice(0, 200)}` };
     }
@@ -999,15 +1164,25 @@ function scoreCandidate(steps: PlaybookStep[], successRate: number, avgRuntimeMs
   return successRate * 1000 - scoreSteps(steps) * 12 - avgRuntimeMs / 250;
 }
 
-async function executeReplayStep(step: PlaybookStep): Promise<string> {
+function applyReplayTarget(step: PlaybookStep, target?: BrowserTarget): Record<string, any> {
+  if (!target) return step.input;
+  const input = { ...step.input };
+  if (target.runId) input.__runId = target.runId;
+  if (target.tabId) input.tabId = target.tabId;
+  if (target.frameId) input.frame_id = target.frameId;
+  return input;
+}
+
+async function executeReplayStep(step: PlaybookStep, target?: BrowserTarget): Promise<string> {
+  const input = applyReplayTarget(step, target);
   switch (step.tool) {
-    case 'browser_search': return executeBrowserSearch(step.input);
-    case 'browser_navigate': return executeBrowserNavigate(step.input);
-    case 'browser_read_page': return executeBrowserReadPage(step.input);
-    case 'browser_click': return executeBrowserClick(step.input);
-    case 'browser_type': return executeBrowserType(step.input);
-    case 'browser_extract': return executeBrowserExtract(step.input);
-    case 'browser_scroll': return executeBrowserScroll(step.input);
+    case 'browser_search': return executeBrowserSearch(input);
+    case 'browser_navigate': return executeBrowserNavigate(input);
+    case 'browser_read_page': return executeBrowserReadPage(input);
+    case 'browser_click': return executeBrowserClick(input);
+    case 'browser_type': return executeBrowserType(input);
+    case 'browser_extract': return executeBrowserExtract(input);
+    case 'browser_scroll': return executeBrowserScroll(input);
     default: return `[Error: unsupported replay tool] ${step.tool}`;
   }
 }
@@ -1038,6 +1213,16 @@ function rowToPlaybook(row: any): Playbook {
     lastUsed: row.last_used,
     createdAt: row.created_at,
   };
+}
+
+function findPlaybookById(playbookId: number): Playbook | null {
+  const db = getDb();
+  const row = db.prepare(`
+    SELECT * FROM browser_playbooks
+    WHERE id = ?
+    LIMIT 1
+  `).get(playbookId) as any;
+  return row ? rowToPlaybook(row) : null;
 }
 
 function clampRate(value: number): number {

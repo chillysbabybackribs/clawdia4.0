@@ -67,10 +67,17 @@ const RECALL_STOP_WORDS = new Set([
 function extractRecallKeywords(message: string): string[] {
   return message
     .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/-/g, ' ')
+    .replace(/[^a-z0-9\s]/g, '')
     .split(/\s+/)
     .filter(w => w.length >= 2 && !RECALL_STOP_WORDS.has(w))
     .slice(0, 10);
+}
+
+function buildFtsQuery(keywords: string[]): string {
+  return keywords
+    .map(keyword => `"${keyword.replace(/"/g, '""')}"`)
+    .join(' OR ');
 }
 
 // ═══════════════════════════════════
@@ -90,7 +97,7 @@ export function searchPastConversations(
   const keywords = extractRecallKeywords(query);
   if (keywords.length === 0) return [];
 
-  const ftsQuery = keywords.join(' OR ');
+  const ftsQuery = buildFtsQuery(keywords);
 
   try {
     // Search user messages via FTS, then grab the assistant response that followed

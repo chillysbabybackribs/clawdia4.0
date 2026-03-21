@@ -1,5 +1,6 @@
 import type { AgentProfile } from '../../shared/types';
 import type { TaskProfile } from './classifier';
+import { parseClaudeCodeSlashCommand } from './claude-code';
 
 const SLASH_PROFILE_MAP: Record<string, AgentProfile> = {
   '/filesystem-agent': 'filesystem',
@@ -12,6 +13,11 @@ export function parseManualAgentProfileOverride(message: string): {
   cleanedMessage: string;
   forcedAgentProfile?: AgentProfile;
 } {
+  const claudeCodePrompt = parseClaudeCodeSlashCommand(message);
+  if (claudeCodePrompt !== null) {
+    return { cleanedMessage: claudeCodePrompt };
+  }
+
   const trimmed = message.trim();
   if (!trimmed.startsWith('/')) return { cleanedMessage: message };
 
@@ -68,6 +74,138 @@ export function applyAgentProfileOverride(
       ...baseProfile,
       agentProfile: 'ytdlp',
       toolGroup: 'browser',
+      promptModules,
+      model: 'sonnet',
+      isGreeting: false,
+    };
+  }
+
+  // ── Swarm agent profiles ──────────────────────────────────────────────────
+
+  if (forcedAgentProfile === 'coordinator') {
+    promptModules.add('filesystem');
+    promptModules.add('browser');
+    return {
+      ...baseProfile,
+      agentProfile: 'coordinator',
+      toolGroup: 'full',
+      promptModules,
+      model: 'sonnet',
+      isGreeting: false,
+    };
+  }
+
+  if (forcedAgentProfile === 'scout') {
+    promptModules.add('browser');
+    promptModules.delete('filesystem');
+    return {
+      ...baseProfile,
+      agentProfile: 'scout',
+      toolGroup: 'browser',
+      promptModules,
+      model: 'haiku',
+      isGreeting: false,
+    };
+  }
+
+  if (forcedAgentProfile === 'builder') {
+    promptModules.add('filesystem');
+    promptModules.delete('bloodhound');
+    return {
+      ...baseProfile,
+      agentProfile: 'builder',
+      toolGroup: 'core',
+      promptModules,
+      model: 'sonnet',
+      isGreeting: false,
+    };
+  }
+
+  if (forcedAgentProfile === 'analyst') {
+    promptModules.add('filesystem');
+    promptModules.delete('bloodhound');
+    return {
+      ...baseProfile,
+      agentProfile: 'analyst',
+      toolGroup: 'core',
+      promptModules,
+      model: 'sonnet',
+      isGreeting: false,
+    };
+  }
+
+  if (forcedAgentProfile === 'writer') {
+    promptModules.delete('filesystem');
+    promptModules.delete('bloodhound');
+    return {
+      ...baseProfile,
+      agentProfile: 'writer',
+      toolGroup: 'core',
+      promptModules,
+      model: 'haiku',
+      isGreeting: false,
+    };
+  }
+
+  if (forcedAgentProfile === 'reviewer') {
+    promptModules.add('filesystem');
+    promptModules.delete('bloodhound');
+    return {
+      ...baseProfile,
+      agentProfile: 'reviewer',
+      toolGroup: 'core',
+      promptModules,
+      model: 'haiku',
+      isGreeting: false,
+    };
+  }
+
+  if (forcedAgentProfile === 'data') {
+    promptModules.add('filesystem');
+    promptModules.delete('bloodhound');
+    return {
+      ...baseProfile,
+      agentProfile: 'data',
+      toolGroup: 'core',
+      promptModules,
+      model: 'sonnet',
+      isGreeting: false,
+    };
+  }
+
+  if (forcedAgentProfile === 'devops') {
+    promptModules.add('filesystem');
+    promptModules.delete('bloodhound');
+    return {
+      ...baseProfile,
+      agentProfile: 'devops',
+      toolGroup: 'core',
+      promptModules,
+      model: 'sonnet',
+      isGreeting: false,
+    };
+  }
+
+  if (forcedAgentProfile === 'security') {
+    promptModules.add('filesystem');
+    promptModules.delete('bloodhound');
+    return {
+      ...baseProfile,
+      agentProfile: 'security',
+      toolGroup: 'core',
+      promptModules,
+      model: 'sonnet',
+      isGreeting: false,
+    };
+  }
+
+  if (forcedAgentProfile === 'synthesizer') {
+    promptModules.add('filesystem');
+    promptModules.delete('bloodhound');
+    return {
+      ...baseProfile,
+      agentProfile: 'synthesizer',
+      toolGroup: 'core',
       promptModules,
       model: 'sonnet',
       isGreeting: false,

@@ -1,11 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import type { Message, ToolCall, FeedItem, ProcessInfo, RunApproval, RunHumanIntervention, AgentProfile, WorkflowStage } from '../../shared/types';
-import { DEFAULT_PROVIDER, getModelById, PROVIDERS, type ProviderId } from '../../shared/model-registry';
+import type { Message, ToolCall, FeedItem, ProcessInfo, RunApproval, RunHumanIntervention, MessageAttachment } from '../../shared/types';
 import InputBar from './InputBar';
 import StatusLine from './StatusLine';
 import ToolActivity, { type ToolStreamMap } from './ToolActivity';
 import MarkdownRenderer from './MarkdownRenderer';
 import TerminalLogStrip from './TerminalLogStrip';
+import SwarmPanel from './SwarmPanel';
 
 
 interface ChatPanelProps {
@@ -245,53 +245,6 @@ function CalendarTrigger({ open, onToggle }: { open: boolean; onToggle: () => vo
   );
 }
 
-function AgentBadge({ profile }: { profile: AgentProfile }) {
-  const label = profile === 'filesystem'
-    ? 'Filesystem Agent'
-    : profile === 'bloodhound'
-      ? 'Bloodhound'
-      : 'General Agent';
-  return (
-    <span className="px-2.5 py-1 rounded-md border border-white/[0.08] bg-white/[0.04] text-[11px] font-medium tracking-wide text-text-primary/85">
-      {label}
-    </span>
-  );
-}
-
-function ToolBadge({ toolName }: { toolName: string }) {
-  return (
-    <span className="px-2 py-1 rounded-md border border-white/[0.06] bg-white/[0.025] text-[11px] text-text-secondary">
-      {toolName}
-    </span>
-  );
-}
-
-function ProviderBadge({ provider, model }: { provider: ProviderId; model: string }) {
-  const providerLabel = PROVIDERS.find((item) => item.id === provider)?.label || provider;
-  const modelLabel = getModelById(model)?.label || model;
-  return (
-    <span className="px-2.5 py-1 rounded-md border border-white/[0.08] bg-white/[0.03] text-[11px] text-text-secondary">
-      {providerLabel} · {modelLabel}
-    </span>
-  );
-}
-
-function WorkflowBadge({ stage }: { stage: WorkflowStage }) {
-  const label = {
-    starting: 'Starting',
-    planning: 'Planning',
-    executing: 'Executing',
-    reviewing: 'Reviewing',
-    completed: 'Completed',
-  }[stage];
-
-  return (
-    <span className="px-2.5 py-1 rounded-md border border-white/[0.08] bg-white/[0.03] text-[11px] text-text-secondary">
-      Workflow · {label}
-    </span>
-  );
-}
-
 /** Copy button with checkmark feedback */
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -339,6 +292,66 @@ function CopyButton({ text }: { text: string }) {
         </svg>
       )}
     </button>
+  );
+}
+
+function formatAttachmentSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function AttachmentGallery({ attachments }: { attachments: MessageAttachment[] }) {
+  if (attachments.length === 0) return null;
+  const images = attachments.filter((attachment) => attachment.kind === 'image' && attachment.dataUrl);
+  const files = attachments.filter((attachment) => attachment.kind !== 'image' || !attachment.dataUrl);
+  const openAttachment = async (attachment: MessageAttachment) => {
+    if (!attachment.path) return;
+    await (window as any).clawdia?.chat.openAttachment(attachment.path);
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      {images.length > 0 && (
+        <div className="flex flex-col gap-2">
+          {images.map((attachment) => (
+            <button
+              key={attachment.id}
+              type="button"
+              onClick={() => openAttachment(attachment)}
+              disabled={!attachment.path}
+              className={`overflow-hidden rounded-2xl border border-white/[0.10] bg-white/[0.03] max-w-[420px] text-left transition-colors ${
+                attachment.path ? 'cursor-pointer hover:bg-white/[0.05]' : 'cursor-default'
+              }`}
+            >
+              <img src={attachment.dataUrl} alt={attachment.name} className="block w-full max-h-[320px] object-cover" />
+              <div className="px-3 py-2.5 border-t border-white/[0.06]">
+                <div className="text-[12px] text-text-primary truncate">{attachment.name}</div>
+                <div className="mt-0.5 text-[11px] text-text-secondary/80">{formatAttachmentSize(attachment.size)}</div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+      {files.length > 0 && (
+        <div className="flex flex-col gap-2">
+          {files.map((attachment) => (
+            <button
+              key={attachment.id}
+              type="button"
+              onClick={() => openAttachment(attachment)}
+              disabled={!attachment.path}
+              className={`rounded-xl border border-white/[0.10] bg-white/[0.03] px-3 py-2.5 max-w-[420px] text-left transition-colors ${
+                attachment.path ? 'cursor-pointer hover:bg-white/[0.05]' : 'cursor-default'
+              }`}
+            >
+              <div className="text-[12px] text-text-primary break-all">{attachment.name}</div>
+              <div className="mt-0.5 text-[11px] text-text-secondary/80">{formatAttachmentSize(attachment.size)}</div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -413,7 +426,12 @@ function UserMessage({ message }: { message: Message }) {
   return (
     <div className="flex flex-col items-end gap-1 animate-slide-up">
       <div className="max-w-[85%] rounded-2xl rounded-br-md px-4 py-2.5 bg-neutral-700/60 text-white backdrop-blur-sm">
-        <div className="text-[1rem] leading-relaxed whitespace-pre-wrap">{message.content}</div>
+        {message.attachments && message.attachments.length > 0 && (
+          <div className={message.content.trim() ? 'mb-3' : ''}>
+            <AttachmentGallery attachments={message.attachments} />
+          </div>
+        )}
+        {message.content.trim() && <div className="text-[1rem] leading-relaxed whitespace-pre-wrap">{message.content}</div>}
       </div>
       <span className="text-[11px] text-text-secondary/70 mr-1">{message.timestamp}</span>
     </div>
@@ -433,11 +451,6 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
   const [workflowPlanDraft, setWorkflowPlanDraft] = useState('');
   const [isWorkflowPlanStreaming, setIsWorkflowPlanStreaming] = useState(false);
   const [loadedConversationId, setLoadedConversationId] = useState<string | null>(null);
-  const [attachedAgentProfile, setAttachedAgentProfile] = useState<AgentProfile | null>(null);
-  const [attachedSpecializedTool, setAttachedSpecializedTool] = useState<string | null>(null);
-  const [attachedWorkflowStage, setAttachedWorkflowStage] = useState<WorkflowStage | null>(null);
-  const [activeProvider, setActiveProvider] = useState<ProviderId>(DEFAULT_PROVIDER);
-  const [activeModel, setActiveModel] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   // Flat append-only feed — each item appended once, never moved
   const feedRef = useRef<FeedItem[]>([]);
@@ -624,18 +637,6 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
   }, [flushStreamUpdate]);
 
   useEffect(() => {
-    const api = (window as any).clawdia;
-    if (!api) return;
-    Promise.all([
-      api.settings.getProvider(),
-      api.settings.getModel(),
-    ]).then(([provider, model]: [ProviderId, string]) => {
-      setActiveProvider(provider || DEFAULT_PROVIDER);
-      setActiveModel(model || '');
-    }).catch(() => {});
-  }, []);
-
-  useEffect(() => {
     if (!loadConversationId) return;
     const api = (window as any).clawdia;
     if (!api) return;
@@ -728,9 +729,6 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
 
     const syncPendingApproval = async (processes: ProcessInfo[]) => {
       const attachedProcess = processes.find((proc) => proc.isAttached);
-      setAttachedAgentProfile(attachedProcess?.agentProfile || null);
-      setAttachedSpecializedTool(attachedProcess?.lastSpecializedTool || null);
-      setAttachedWorkflowStage(attachedProcess?.workflowStage || null);
 
       const attachedBlocked = processes.find((proc) => proc.isAttached && proc.status === 'awaiting_approval');
       if (!attachedBlocked) {
@@ -799,14 +797,14 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
     };
   }, [handleStreamEndEvent, handleStreamTextChunk, handleThinkingEvent, handleWorkflowPlanResetEvent, handleWorkflowPlanTextEvent, handleWorkflowPlanEndEvent, handleToolActivityEvent, handleToolStreamEvent]);
 
-  const handleSend = useCallback(async (text: string) => {
+  const handleSend = useCallback(async (text: string, attachments: MessageAttachment[] = []) => {
     const api = (window as any).clawdia;
     if (!api) return;
 
     isUserScrolledUpRef.current = false;
 
     const userMsg: Message = {
-      id: `user-${Date.now()}`, role: 'user', content: text,
+      id: `user-${Date.now()}`, role: 'user', content: text, attachments,
       timestamp: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
     };
     setMessages(prev => [...prev, userMsg]);
@@ -829,7 +827,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
     }, 100);
 
     try {
-      const result = await api.chat.send(text);
+      const result = await api.chat.send(text, attachments);
 
       const finalFeed = [...feedRef.current].map(item =>
         item.kind === 'text' ? { ...item, isStreaming: false } : item
@@ -967,11 +965,6 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
     setPendingHumanInterventions([]);
   }, []);
 
-  const handleModelContextChange = useCallback((provider: ProviderId, model: string) => {
-    setActiveProvider(provider);
-    setActiveModel(model);
-  }, []);
-
   const workflowPlanApproval = pendingApprovals.find((approval) => approval.actionType === 'workflow_plan');
   const visiblePlanText = workflowPlanApproval?.request?.plan
     ? String(workflowPlanApproval.request.plan)
@@ -982,10 +975,6 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
     <div className="flex flex-col h-full">
       <header className="drag-region flex items-center gap-2 px-4 h-[44px] flex-shrink-0 bg-surface-1 border-b border-border-subtle shadow-[inset_0_-1px_6px_rgba(0,0,0,0.2),0_2px_8px_rgba(0,0,0,0.3)] relative z-10">
         <CalendarTrigger open={calendarOpen} onToggle={onToggleCalendar} />
-        {attachedAgentProfile && <AgentBadge profile={attachedAgentProfile} />}
-        {attachedSpecializedTool && <ToolBadge toolName={attachedSpecializedTool} />}
-        {attachedWorkflowStage && <WorkflowBadge stage={attachedWorkflowStage} />}
-        {activeModel && <ProviderBadge provider={activeProvider} model={activeModel} />}
         <div className="flex-1 drag-region" />
         <button onClick={onOpenSettings} title="Settings" className="no-drag flex items-center justify-center w-8 h-8 rounded-lg text-text-secondary hover:text-text-primary hover:bg-white/[0.06] transition-all cursor-pointer">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -1013,18 +1002,6 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
               onOpenReview={() => pendingApprovalRunId && onOpenPendingApproval?.(pendingApprovalRunId)}
             />
           )}
-          {pendingHumanRunId && pendingHumanInterventions[0] && (
-            <div className="flex justify-start animate-slide-up">
-              <div className="max-w-[92%] px-1 py-1 text-text-primary">
-                <HumanInterventionBanner
-                  intervention={pendingHumanInterventions[0]}
-                  onResume={handleHumanResume}
-                  onCancelRun={handleCancelRun}
-                  onOpenReview={() => onOpenPendingApproval?.(pendingHumanRunId)}
-                />
-              </div>
-            </div>
-          )}
           {pendingApprovalRunId && nonWorkflowApproval && (
             <div className="flex justify-start animate-slide-up">
               <div className="max-w-[92%] px-1 py-1 text-text-primary">
@@ -1042,6 +1019,8 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
         </div>
       </div>
 
+      <SwarmPanel />
+
       {(() => {
         const terminalLines = Object.values(streamMap).flat();
         return (isStreaming || terminalLines.length > 0) ? (
@@ -1057,7 +1036,6 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
         onPause={handlePause}
         onResume={handleResume}
         onAddContext={handleAddContext}
-        onModelContextChange={handleModelContextChange}
       />
 
     </div>

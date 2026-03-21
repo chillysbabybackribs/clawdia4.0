@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Rebuild main if needed
+[ ! -f "$PROJECT_ROOT/dist/main/main.js" ] && cd "$PROJECT_ROOT" && npx tsc -p tsconfig.main.json
+# Recompile CLI if source is newer
+[ "$SCRIPT_DIR/clawdia-cli.ts" -nt "$SCRIPT_DIR/clawdia-cli.cjs" ] && \
+  "$PROJECT_ROOT/node_modules/.bin/esbuild" "$SCRIPT_DIR/clawdia-cli.ts" --bundle=false --platform=node --target=node20 --format=cjs --outfile="$SCRIPT_DIR/clawdia-cli.cjs"
+exec node --require "$SCRIPT_DIR/electron-loader.cjs" "$SCRIPT_DIR/clawdia-cli.cjs" "$@"

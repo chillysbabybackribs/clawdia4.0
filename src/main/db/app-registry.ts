@@ -120,6 +120,20 @@ const TASK_RULES: TaskRoutingRule[] = [
 
 const SEED_PROFILES: AppProfile[] = [
   {
+    appId: 'claude',
+    displayName: 'Claude Code',
+    binaryPath: 'claude',
+    availableSurfaces: ['native_cli'],
+    nativeCli: {
+      command: 'claude',
+      supportsBatch: true,
+      helpSummary: 'Use non-interactive print mode: claude -p --dangerously-skip-permissions "<prompt>". Prefer direct prompts over interactive sessions.',
+    },
+    windowMatcher: 'Claude|claude',
+    confidence: 0.95,
+    lastScanned: new Date().toISOString(),
+  },
+  {
     appId: 'gimp',
     displayName: 'GIMP',
     binaryPath: 'gimp',
@@ -234,30 +248,39 @@ const SEED_PROFILES: AppProfile[] = [
 
 export function seedRegistry(): void {
   const db = getDb();
-
-  // Skip if already populated — avoids 10 INSERT queries on every startup
-  const count = (db.prepare('SELECT COUNT(*) as cnt FROM app_registry').get() as any)?.cnt || 0;
-  if (count > 0) {
-    console.log(`[Registry] Already seeded (${count} profiles)`);
-    return;
-  }
-
   const insert = db.prepare(`
     INSERT OR IGNORE INTO app_registry (id, profile_json, last_scanned)
     VALUES (?, ?, ?)
   `);
 
+  let inserted = 0;
   for (const profile of SEED_PROFILES) {
-    insert.run(profile.appId, JSON.stringify(profile), profile.lastScanned);
+    const result = insert.run(profile.appId, JSON.stringify(profile), profile.lastScanned);
+    inserted += Number(result.changes || 0);
   }
-  console.log(`[Registry] Seeded ${SEED_PROFILES.length} app profiles`);
+
+  const count = (db.prepare('SELECT COUNT(*) as cnt FROM app_registry').get() as any)?.cnt || 0;
+  if (inserted > 0) {
+    console.log(`[Registry] Seeded ${inserted} missing profile(s) (${count} total)`);
+  } else {
+    console.log(`[Registry] Already seeded (${count} profiles)`);
+  }
 }
 
 export function getAppProfile(appId: string): AppProfile | null {
   const db = getDb();
   const row = db.prepare('SELECT profile_json FROM app_registry WHERE id = ?').get(appId) as any;
-  if (!row) return null;
-  try { return JSON.parse(row.profile_json); } catch { return null; }
+  if (row) {
+    try { return JSON.parse(row.profile_json); } catch { return null; }
+  }
+
+  const seeded = SEED_PROFILES.find((profile) => profile.appId === appId) || null;
+  if (seeded) {
+    updateAppProfile(seeded);
+    return seeded;
+  }
+
+  return null;
 }
 
 export function updateAppProfile(profile: AppProfile): void {
@@ -414,6 +437,9 @@ const binaryCache: Record<string, boolean> = {};
  * This is the fast path called on every desktop-classified message.
  */
 export function extractAppName(message: string): string | null {
+  const normalized = message.toLowerCase();
+  if (/\bclaude(?:\s+code|-code)\b/.test(normalized)) return 'claude';
+
   const candidates = extractCandidateWords(message);
 
   // 1. Check programmatic aliases first
@@ -659,8 +685,28 @@ This CLI controls ${profile.displayName} WITHOUT the GUI. It is faster, more rel
     }
     case 'native_cli': {
       const help = profile.nativeCli?.helpSummary || '';
-      constraint = `[EXECUTION PLAN] Use shell_exec with "${profile.nativeCli?.command || appId}" CLI. ${help}. Prefer headless/batch mode. If the task requires interacting with a running window (menus, dialogs, typing), use gui_interact macros instead of raw xdotool.`;
-      reasoning = `${profile.displayName} has native CLI. Using headless mode. GUI available as fallback.`;
+      if (appId === 'claude') {
+        constraint = `[EXECUTION PLAN — MANDATORY] Use shell_exec to invoke Claude Code in non-interactive unrestricted mode. Do NOT use app_control, gui_interact, or dbus_control for this task.
+
+Required command pattern:
+- claude -p --dangerously-skip-permissions "<prompt>"
+
+Rules:
+- Treat the user's request as the Claude prompt payload.
+- Run Claude from the relevant repo directory before asking it to inspect or edit code.
+- Default to read-only analysis unless the prompt explicitly says "Mode: write-enabled" or the user used /claude-code-edit.
+- In read-only mode, do not ask Claude to edit files, apply patches, commit, or launch long-running processes.
+- Never ask Claude to start Vite, Electron, nodemon, watch mode, dev servers, or background processes unless the user explicitly asks for that exact behavior.
+- Keep prompts explicit about scope: read-only review, explanation, patch, or fix.
+- After Claude finishes, independently verify the result yourself with file inspection, diffs, or tests.
+- Do not interrupt the user with approval requests for Claude Code during this testing path unless the command itself fails.
+- If you need a machine-readable answer, prefer: claude -p --output-format json --dangerously-skip-permissions "<prompt>"`;
+        reasoning = 'Claude Code task routed to native CLI with read-only default and explicit write mode.';
+        disallowedTools.push('gui_interact', 'app_control', 'dbus_control');
+      } else {
+        constraint = `[EXECUTION PLAN] Use shell_exec with "${profile.nativeCli?.command || appId}" CLI. ${help}. Prefer headless/batch mode. If the task requires interacting with a running window (menus, dialogs, typing), use gui_interact macros instead of raw xdotool.`;
+        reasoning = `${profile.displayName} has native CLI. Using headless mode. GUI available as fallback.`;
+      }
       break;
     }
     case 'dbus': {
@@ -858,12 +904,11 @@ export function getHarnessGuidance(appId: string): HarnessGuidance {
     alreadySuggested,
     installSteps: [
       `[CLI-Anything] No pre-built harness for "${appId}".`,
-      `To build one (requires Claude Code + CLI-Anything plugin):`,
+      `Harness generation is disabled unless the user explicitly asks for a CLI-Anything harness.`,
+      `If requested later, the explicit build path is:`,
       `  /plugin marketplace add HKUDS/CLI-Anything`,
       `  /plugin install cli-anything`,
       `  /cli-anything ${normalizedId}`,
-      `This analyzes the app's source and generates a structured CLI.`,
-      `After build: cd ${normalizedId}/agent-harness && pip install -e .`,
     ].join('\n'),
   };
 }

@@ -14,7 +14,7 @@
 
 ## Combined Rules (Filesystem + Browser + Shell)
 
-You have full access to the local filesystem, a persistent bash shell, and a Playwright browser visible to the user.
+You have full access to the local filesystem, a persistent bash shell, and an Electron Chromium browser visible to the user.
 
 **Tool selection priority:**
 1. If the user mentions a URL or "search/look up/find online" → browser tools first.

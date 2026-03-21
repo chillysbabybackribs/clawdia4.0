@@ -1,0 +1,191 @@
+<h2>How do agents live in the UI?</h2>
+<p class="subtitle">Same sidebar space. Three different ways to display and launch specialist agents.</p>
+
+<div class="cards">
+
+  <!-- Option A: Sidebar list -->
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#0d0d0d;padding:0;overflow:hidden;height:480px;">
+      <div style="width:100%;height:100%;display:flex;font-family:'SF Mono',monospace;font-size:10px;color:#ccc;">
+        <div style="width:100%;background:#0d0d0d;border-right:1px solid #1a1a1a;display:flex;flex-direction:column;">
+          <!-- top -->
+          <div style="padding:12px 12px 8px;border-bottom:1px solid #1a1a1a;display:flex;justify-content:space-between;align-items:center;">
+            <span style="color:#444;font-size:9px;letter-spacing:2px;text-transform:uppercase;">CLAWDIA</span>
+            <span style="color:#333;font-size:14px;cursor:pointer;">+</span>
+          </div>
+          <!-- master agent -->
+          <div style="padding:8px 10px;border-bottom:1px solid #1a1a1a;">
+            <div style="background:#111;border:1px solid #2a2a2a;border-radius:6px;padding:9px 10px;cursor:pointer;">
+              <div style="color:#e0e0e0;font-size:11px;font-weight:600;margin-bottom:2px;">Clawdia</div>
+              <div style="color:#555;font-size:9px;">Master · All tools · Your model</div>
+            </div>
+          </div>
+          <!-- agents label -->
+          <div style="padding:8px 12px 4px;font-size:8px;letter-spacing:2px;color:#333;text-transform:uppercase;">Agents</div>
+          <!-- agent list -->
+          <div style="padding:0 10px;display:flex;flex-direction:column;gap:2px;overflow-y:auto;flex:1;">
+            <div style="padding:8px 10px;border-radius:5px;cursor:pointer;display:flex;align-items:center;gap:8px;border:1px solid transparent;" onmouseover="this.style.background='#161616'" onmouseout="this.style.background='transparent'">
+              <div style="width:8px;height:8px;border-radius:2px;background:#f87171;flex-shrink:0;"></div>
+              <div>
+                <div style="color:#ccc;font-size:10px;">Bloodhound</div>
+                <div style="color:#444;font-size:8px;">Map · automate · learn</div>
+              </div>
+            </div>
+            <div style="padding:8px 10px;border-radius:5px;cursor:pointer;display:flex;align-items:center;gap:8px;" onmouseover="this.style.background='#161616'" onmouseout="this.style.background='transparent'">
+              <div style="width:8px;height:8px;border-radius:2px;background:#4ade80;flex-shrink:0;"></div>
+              <div>
+                <div style="color:#ccc;font-size:10px;">Filesystem</div>
+                <div style="color:#444;font-size:8px;">Files · dirs · search</div>
+              </div>
+            </div>
+            <div style="padding:8px 10px;border-radius:5px;cursor:pointer;display:flex;align-items:center;gap:8px;" onmouseover="this.style.background='#161616'" onmouseout="this.style.background='transparent'">
+              <div style="width:8px;height:8px;border-radius:2px;background:#facc15;flex-shrink:0;"></div>
+              <div>
+                <div style="color:#ccc;font-size:10px;">YT Extractor</div>
+                <div style="color:#444;font-size:8px;">Download · save · index</div>
+              </div>
+            </div>
+            <div style="padding:8px 10px;border-radius:5px;cursor:pointer;display:flex;align-items:center;gap:8px;" onmouseover="this.style.background='#161616'" onmouseout="this.style.background='transparent'">
+              <div style="width:8px;height:8px;border-radius:2px;background:#60a5fa;flex-shrink:0;"></div>
+              <div>
+                <div style="color:#ccc;font-size:10px;">Browser Scout</div>
+                <div style="color:#444;font-size:8px;">Research · extract · navigate</div>
+              </div>
+            </div>
+            <div style="padding:8px 10px;border-radius:5px;cursor:pointer;display:flex;align-items:center;gap:8px;" onmouseover="this.style.background='#161616'" onmouseout="this.style.background='transparent'">
+              <div style="width:8px;height:8px;border-radius:2px;background:#c084fc;flex-shrink:0;"></div>
+              <div>
+                <div style="color:#ccc;font-size:10px;">Doc Writer</div>
+                <div style="color:#444;font-size:8px;">Draft · format · save</div>
+              </div>
+            </div>
+            <!-- add new -->
+            <div style="padding:8px 10px;border-radius:5px;cursor:pointer;display:flex;align-items:center;gap:8px;margin-top:4px;border:1px dashed #222;">
+              <div style="width:8px;height:8px;border-radius:2px;background:#222;flex-shrink:0;"></div>
+              <div style="color:#333;font-size:10px;">+ New agent</div>
+            </div>
+          </div>
+          <!-- runs -->
+          <div style="border-top:1px solid #1a1a1a;padding:8px 10px;">
+            <div style="font-size:8px;letter-spacing:2px;color:#333;text-transform:uppercase;margin-bottom:6px;">Active</div>
+            <div style="padding:6px 8px;border-radius:4px;background:#111;border-left:2px solid #facc15;margin-bottom:2px;">
+              <div style="color:#ccc;font-size:9px;">Extracting @mkbhd...</div>
+              <div style="color:#facc15;font-size:8px;">YT Extractor · running</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A — Sidebar List</h3>
+      <p>Agents live in the sidebar as a scrollable list. Master agent at top, specialists below, + New at the bottom. Active runs pinned at the bottom. Simple, scannable, always visible.</p>
+    </div>
+  </div>
+
+  <!-- Option B: Modal/Drawer -->
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#0d0d0d;padding:0;overflow:hidden;height:480px;position:relative;">
+      <!-- base sidebar -->
+      <div style="width:100%;height:100%;font-family:'SF Mono',monospace;font-size:10px;color:#ccc;background:#0d0d0d;">
+        <div style="padding:12px;border-bottom:1px solid #1a1a1a;display:flex;justify-content:space-between;align-items:center;">
+          <span style="color:#444;font-size:9px;letter-spacing:2px;text-transform:uppercase;">CLAWDIA</span>
+          <!-- agents button -->
+          <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:9px;color:#888;">Agents ↑</div>
+        </div>
+        <div style="padding:8px 10px;">
+          <div style="color:#444;font-size:8px;letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;">Active</div>
+          <div style="padding:6px 8px;border-radius:4px;background:#111;border-left:2px solid #facc15;margin-bottom:2px;">
+            <div style="color:#ccc;font-size:9px;">Extracting @mkbhd...</div>
+            <div style="color:#facc15;font-size:8px;">YT Extractor · running</div>
+          </div>
+        </div>
+        <div style="padding:8px 10px;">
+          <div style="color:#444;font-size:8px;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px;">History</div>
+          <div style="padding:5px 6px;color:#444;font-size:9px;">what is your api pricing</div>
+          <div style="padding:5px 6px;color:#444;font-size:9px;">which model are...</div>
+          <div style="padding:5px 6px;color:#444;font-size:9px;">search the browser...</div>
+        </div>
+      </div>
+      <!-- drawer overlay -->
+      <div style="position:absolute;bottom:0;left:0;right:0;background:#111;border-top:1px solid #2a2a2a;padding:12px;border-radius:8px 8px 0 0;">
+        <div style="font-size:8px;letter-spacing:2px;color:#444;text-transform:uppercase;margin-bottom:10px;">Choose Agent</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+          <div style="background:#0d0d0d;border:1px solid #222;border-radius:6px;padding:8px;cursor:pointer;">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+              <div style="width:6px;height:6px;border-radius:1px;background:#e0e0e0;"></div>
+              <div style="color:#ccc;font-size:10px;font-weight:600;">Clawdia</div>
+            </div>
+            <div style="color:#444;font-size:8px;">Master agent</div>
+          </div>
+          <div style="background:#0d0d0d;border:1px solid #222;border-radius:6px;padding:8px;cursor:pointer;">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+              <div style="width:6px;height:6px;border-radius:1px;background:#f87171;"></div>
+              <div style="color:#ccc;font-size:10px;font-weight:600;">Bloodhound</div>
+            </div>
+            <div style="color:#444;font-size:8px;">Map · automate</div>
+          </div>
+          <div style="background:#0d0d0d;border:1px solid #222;border-radius:6px;padding:8px;cursor:pointer;">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+              <div style="width:6px;height:6px;border-radius:1px;background:#facc15;"></div>
+              <div style="color:#ccc;font-size:10px;font-weight:600;">YT Extractor</div>
+            </div>
+            <div style="color:#444;font-size:8px;">Download · index</div>
+          </div>
+          <div style="background:#0d0d0d;border:1px solid #1a1a1a;border-radius:6px;padding:8px;cursor:pointer;border-style:dashed;">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+              <div style="width:6px;height:6px;border-radius:1px;background:#333;"></div>
+              <div style="color:#444;font-size:10px;">+ New</div>
+            </div>
+            <div style="color:#333;font-size:8px;">Create agent</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B — Drawer / Pop-up</h3>
+      <p>Sidebar stays minimal — just active runs and history. An "Agents" button opens a drawer from the bottom showing all specialists. Out of the way until you need it.</p>
+    </div>
+  </div>
+
+  <!-- Option C: Chat-integrated -->
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#0d0d0d;padding:0;overflow:hidden;height:480px;">
+      <div style="width:100%;height:100%;font-family:'SF Mono',monospace;font-size:10px;color:#ccc;display:flex;flex-direction:column;">
+        <!-- minimal sidebar -->
+        <div style="padding:12px;border-bottom:1px solid #1a1a1a;">
+          <span style="color:#444;font-size:9px;letter-spacing:2px;text-transform:uppercase;">CLAWDIA</span>
+        </div>
+        <!-- active runs -->
+        <div style="padding:8px 10px;flex:1;">
+          <div style="color:#444;font-size:8px;letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;">Active</div>
+          <div style="padding:6px 8px;border-radius:4px;background:#111;border-left:2px solid #facc15;margin-bottom:2px;">
+            <div style="color:#ccc;font-size:9px;">Extracting @mkbhd...</div>
+            <div style="color:#facc15;font-size:8px;">YT Extractor</div>
+          </div>
+        </div>
+        <!-- bottom: input with @ mention -->
+        <div style="border-top:1px solid #1a1a1a;padding:10px;">
+          <div style="color:#444;font-size:8px;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;">New Task</div>
+          <!-- agent pills -->
+          <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;">
+            <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:3px;padding:3px 7px;font-size:8px;color:#888;cursor:pointer;">@clawdia</div>
+            <div style="background:#2e1a1a;border:1px solid #4a2a2a;border-radius:3px;padding:3px 7px;font-size:8px;color:#f87171;cursor:pointer;">@bloodhound</div>
+            <div style="background:#1a2e1a;border:1px solid #2a4a2a;border-radius:3px;padding:3px 7px;font-size:8px;color:#4ade80;cursor:pointer;">@filesystem</div>
+            <div style="background:#2e2a1a;border:1px solid #4a4a2a;border-radius:3px;padding:3px 7px;font-size:8px;color:#facc15;cursor:pointer;">@yt-extractor</div>
+            <div style="background:#1a1a1a;border:1px dashed #333;border-radius:3px;padding:3px 7px;font-size:8px;color:#444;cursor:pointer;">+ agent</div>
+          </div>
+          <!-- input -->
+          <div style="background:#111;border:1px solid #222;border-radius:5px;padding:8px 10px;display:flex;align-items:center;gap:6px;">
+            <div style="color:#facc15;font-size:9px;">@yt-extractor</div>
+            <div style="color:#555;font-size:9px;">extract all videos from tiktok.com/...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C — @mention in Chat</h3>
+      <p>Agents live as @mentions above the input bar. Click a pill to route the task to that specialist. Sidebar stays ultra-minimal — just active runs. The chat input IS the launcher.</p>
+    </div>
+  </div>
+
+</div>

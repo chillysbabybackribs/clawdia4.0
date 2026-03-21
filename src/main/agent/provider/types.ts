@@ -50,6 +50,7 @@ export type NormalizedAssistantContentBlock =
 
 export type NormalizedMessageContentBlock =
   | NormalizedTextBlock
+  | NormalizedImageBlock
   | NormalizedToolUseBlock
   | NormalizedToolResultBlock;
 

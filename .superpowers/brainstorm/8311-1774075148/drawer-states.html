@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clawdia — Drawer States</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #080810; color: #ccc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 24px; }
+
+  h2 { font-size: 16px; color: #eee; margin-bottom: 6px; }
+  .subtitle { font-size: 13px; color: #555; margin-bottom: 24px; }
+
+  .scene-label { font-size: 11px; color: #FF5061; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 10px; font-weight: 700; }
+
+  .app-shell {
+    display: flex;
+    height: 340px;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid #1e1e2e;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    margin-bottom: 32px;
+  }
+
+  /* ── Icon Rail ── */
+  .rail {
+    width: 48px;
+    background: #0e0e16;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 12px 0;
+    gap: 4px;
+    border-right: 1px solid #1a1a28;
+    flex-shrink: 0;
+  }
+  .rail-brand {
+    width: 28px; height: 28px;
+    background: #FF5061;
+    border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 900; color: white;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+  }
+  .rail-sep { width: 20px; height: 1px; background: #1e1e2a; margin: 4px 0; flex-shrink: 0; }
+  .rail-icon {
+    width: 34px; height: 34px;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px;
+    cursor: pointer;
+    flex-shrink: 0;
+    position: relative;
+    transition: background 0.15s;
+  }
+  .rail-icon.active { background: #1e1e2e; }
+  .rail-icon.active::before {
+    content: '';
+    position: absolute;
+    left: -1px;
+    top: 50%; transform: translateY(-50%);
+    width: 3px; height: 18px;
+    background: #FF5061;
+    border-radius: 0 2px 2px 0;
+  }
+  .rail-icon.dim { opacity: 0.35; }
+  .rail-spacer { flex: 1; }
+
+  /* ── Drawer ── */
+  .drawer {
+    width: 188px;
+    background: #0f0f18;
+    border-right: 1px solid #1a1a28;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .drawer-header {
+    padding: 14px 12px 8px;
+    border-bottom: 1px solid #1a1a28;
+  }
+  .drawer-title {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: #FF5061;
+    margin-bottom: 4px;
+  }
+  .drawer-desc {
+    font-size: 11px;
+    color: #666;
+    line-height: 1.45;
+  }
+  .drawer-section {
+    padding: 10px 12px 6px;
+  }
+  .drawer-section-label {
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: #3a3a55;
+    margin-bottom: 6px;
+  }
+  .drawer-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    padding: 5px 7px;
+    border-radius: 6px;
+    margin-bottom: 2px;
+    cursor: pointer;
+    background: transparent;
+    transition: background 0.1s;
+  }
+  .drawer-item:hover { background: #171724; }
+  .drawer-item-icon { font-size: 12px; flex-shrink: 0; margin-top: 1px; }
+  .drawer-item-text { font-size: 11px; color: #777; line-height: 1.3; }
+  .drawer-item-text strong { color: #aaa; display: block; font-size: 11px; font-weight: 500; }
+
+  .drawer-new-btn {
+    margin: 8px 12px 0;
+    background: #FF5061;
+    border: none;
+    border-radius: 6px;
+    color: white;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 7px 0;
+    cursor: pointer;
+    text-align: center;
+    letter-spacing: 0.3px;
+  }
+
+  .drawer-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: #1a1a2e;
+    border: 1px solid #2a2a45;
+    border-radius: 20px;
+    padding: 2px 8px;
+    font-size: 9px;
+    color: #6cf;
+    margin-right: 4px;
+    margin-bottom: 4px;
+  }
+
+  .process-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 7px;
+    border-radius: 6px;
+    margin-bottom: 2px;
+    background: #141420;
+  }
+  .process-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .process-dot.running { background: #FF5061; box-shadow: 0 0 6px rgba(255,80,97,0.6); }
+  .process-dot.done { background: #4caf50; opacity: 0.7; }
+  .process-dot.waiting { background: #ffb74d; }
+  .process-text { font-size: 10px; color: #777; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .process-time { font-size: 9px; color: #444; flex-shrink: 0; }
+
+  .history-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 7px;
+    border-radius: 5px;
+    margin-bottom: 1px;
+    cursor: pointer;
+  }
+  .history-row:hover { background: #171724; }
+  .history-dot { width: 5px; height: 5px; border-radius: 50%; background: #2a2a40; flex-shrink: 0; }
+  .history-text { font-size: 10px; color: #666; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .history-time { font-size: 9px; color: #333; flex-shrink: 0; }
+
+  .slash-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 7px;
+    border-radius: 6px;
+    margin-bottom: 2px;
+    background: #121220;
+    border: 1px solid #1e1e30;
+    cursor: pointer;
+  }
+  .slash-cmd { font-size: 10px; color: #FF5061; font-family: monospace; font-weight: 600; flex-shrink: 0; }
+  .slash-desc { font-size: 10px; color: #555; flex: 1; }
+
+  /* ── Chat ── */
+  .chat-area {
+    flex: 1;
+    background: #0c0c14;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .chat-header {
+    height: 38px;
+    background: #0e0e18;
+    border-bottom: 1px solid #1a1a28;
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .chat-header-left { font-size: 11px; color: #444; }
+  .chat-header-right { display: flex; gap: 6px; }
+  .chat-header-btn { width: 22px; height: 22px; background: #1a1a26; border-radius: 5px; }
+  .chat-messages { flex: 1; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .msg-user { align-self: flex-end; background: #1e1e2e; border-radius: 10px 10px 2px 10px; padding: 7px 10px; font-size: 11px; color: #bbb; max-width: 75%; }
+  .msg-ai { align-self: flex-start; background: #131320; border-radius: 10px 10px 10px 2px; padding: 7px 10px; font-size: 11px; color: #888; max-width: 80%; line-height: 1.4; }
+  .msg-tool { align-self: flex-start; background: #0f0f1c; border: 1px solid #1e1e30; border-radius: 6px; padding: 5px 9px; font-size: 10px; color: #555; font-family: monospace; }
+  .chat-input-row {
+    padding: 10px 12px;
+    border-top: 1px solid #1a1a28;
+    flex-shrink: 0;
+  }
+  .chat-input { background: #141420; border: 1px solid #222235; border-radius: 8px; height: 34px; width: 100%; }
+
+  /* ── Browser ── */
+  .browser-area {
+    width: 200px;
+    background: #0a0a12;
+    border-left: 1px solid #1a1a28;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+  .browser-bar {
+    height: 32px;
+    background: #0e0e18;
+    border-bottom: 1px solid #1a1a28;
+    display: flex;
+    align-items: center;
+    padding: 0 8px;
+    gap: 5px;
+  }
+  .browser-url { flex: 1; background: #1a1a26; border-radius: 4px; height: 20px; font-size: 9px; color: #444; display: flex; align-items: center; padding: 0 6px; }
+  .browser-content { flex: 1; display: flex; align-items: center; justify-content: center; }
+  .browser-placeholder { font-size: 10px; color: #2a2a40; text-align: center; line-height: 1.5; }
+
+  /* Navigation tabs */
+  .tabs { display: flex; gap: 8px; margin-bottom: 20px; }
+  .tab {
+    padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer;
+    border: 1px solid #1e1e2e; color: #666; background: transparent;
+    transition: all 0.15s;
+  }
+  .tab.active { background: #FF5061; border-color: #FF5061; color: white; font-weight: 600; }
+  .tab:hover:not(.active) { border-color: #2e2e45; color: #999; }
+
+  .scene { display: none; }
+  .scene.visible { display: block; }
+</style>
+</head>
+<body>
+
+<h2>Icon Rail → Drawer → Chat → Browser</h2>
+<p class="subtitle">Click tabs below to see how the drawer changes based on which rail icon is active.</p>
+
+<div class="tabs">
+  <div class="tab active" onclick="show('chat')">💬 Chat & History</div>
+  <div class="tab" onclick="show('agents')">⚡ Agents</div>
+  <div class="tab" onclick="show('browser')">🌐 Browser</div>
+  <div class="tab" onclick="show('files')">📁 Files</div>
+  <div class="tab" onclick="show('desktop')">🖥 Desktop</div>
+</div>
+
+<!-- ══════════════ CHAT ══════════════ -->
+<div class="scene visible" id="scene-chat">
+  <div class="scene-label">Rail: Chat selected</div>
+  <div class="app-shell">
+    <div class="rail">
+      <div class="rail-brand">C</div>
+      <div class="rail-sep"></div>
+      <div class="rail-icon active" title="Chat">💬</div>
+      <div class="rail-icon dim" title="Agents">⚡</div>
+      <div class="rail-icon dim" title="Browser">🌐</div>
+      <div class="rail-icon dim" title="Files">📁</div>
+      <div class="rail-icon dim" title="Desktop">🖥</div>
+      <div class="rail-spacer"></div>
+      <div class="rail-icon dim" title="Settings">⚙</div>
+    </div>
+    <div class="drawer">
+      <div class="drawer-header">
+        <div class="drawer-title">Conversations</div>
+        <div class="drawer-desc">Your chat history and active sessions.</div>
+      </div>
+      <div style="padding: 8px 12px 4px;">
+        <div class="drawer-new-btn">+ New Agent</div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-label">Active Now</div>
+        <div class="process-row">
+          <div class="process-dot running"></div>
+          <div class="process-text">Research competitor pricing</div>
+          <div class="process-time">4m</div>
+        </div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-label">History</div>
+        <div class="history-row"><div class="history-dot"></div><div class="history-text">how do i run airflow locally</div><div class="history-time">2h</div></div>
+        <div class="history-row"><div class="history-dot"></div><div class="history-text">i want to play w...</div><div class="history-time">5h</div></div>
+        <div class="history-row"><div class="history-dot"></div><div class="history-text">can we build a...</div><div class="history-time">15h</div></div>
+        <div class="history-row" style="opacity:0.5"><div class="history-dot"></div><div class="history-text">304 more...</div><div class="history-time"></div></div>
+      </div>
+    </div>
+    <div class="chat-area">
+      <div class="chat-header">
+        <div class="chat-header-left">Claude Sonnet 4.6</div>
+        <div class="chat-header-right"><div class="chat-header-btn"></div><div class="chat-header-btn"></div></div>
+      </div>
+      <div class="chat-messages">
+        <div class="msg-user">Download that YouTube video I sent</div>
+        <div class="msg-tool">⬇ yt-dlp running...</div>
+        <div class="msg-ai">Done — saved to ~/Downloads/video.mp4 (1.2 GB)</div>
+      </div>
+      <div class="chat-input-row"><div class="chat-input"></div></div>
+    </div>
+    <div class="browser-area">
+      <div class="browser-bar"><div class="browser-url">youtube.com</div></div>
+      <div class="browser-content"><div class="browser-placeholder">Browser<br>running<br>in background</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ AGENTS ══════════════ -->
+<div class="scene" id="scene-agents">
+  <div class="scene-label">Rail: Agents selected</div>
+  <div class="app-shell">
+    <div class="rail">
+      <div class="rail-brand">C</div>
+      <div class="rail-sep"></div>
+      <div class="rail-icon dim">💬</div>
+      <div class="rail-icon active">⚡</div>
+      <div class="rail-icon dim">🌐</div>
+      <div class="rail-icon dim">📁</div>
+      <div class="rail-icon dim">🖥</div>
+      <div class="rail-spacer"></div>
+      <div class="rail-icon dim">⚙</div>
+    </div>
+    <div class="drawer">
+      <div class="drawer-header">
+        <div class="drawer-title">Agents</div>
+        <div class="drawer-desc">Spawn parallel agents. Each runs independently in the background.</div>
+      </div>
+      <div style="padding: 8px 12px 4px;">
+        <div class="drawer-new-btn">+ Spawn Agent</div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-label">Running (2)</div>
+        <div class="process-row">
+          <div class="process-dot running"></div>
+          <div class="process-text">Bloodhound: scrape leads</div>
+          <div class="process-time">12m</div>
+        </div>
+        <div class="process-row">
+          <div class="process-dot waiting"></div>
+          <div class="process-text">Filesystem: cleanup ~/Downloads</div>
+          <div class="process-time">3m</div>
+        </div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-label">Profiles</div>
+        <div class="slash-row"><span class="slash-cmd">/bloodhound</span><span class="slash-desc">automate web tasks</span></div>
+        <div class="slash-row"><span class="slash-cmd">/filesystem</span><span class="slash-desc">manage local files</span></div>
+        <div class="slash-row"><span class="slash-cmd">/extractor</span><span class="slash-desc">download media</span></div>
+        <div class="slash-row"><span class="slash-cmd">/general</span><span class="slash-desc">full capabilities</span></div>
+      </div>
+    </div>
+    <div class="chat-area">
+      <div class="chat-header">
+        <div class="chat-header-left">Claude Sonnet 4.6</div>
+        <div class="chat-header-right"><div class="chat-header-btn"></div><div class="chat-header-btn"></div></div>
+      </div>
+      <div class="chat-messages">
+        <div class="msg-user">Run 3 agents in parallel to research these competitors</div>
+        <div class="msg-tool">⚡ Spawning swarm: scout × 3</div>
+        <div class="msg-ai">All 3 agents running. I'll surface results when they complete.</div>
+      </div>
+      <div class="chat-input-row"><div class="chat-input"></div></div>
+    </div>
+    <div class="browser-area">
+      <div class="browser-bar"><div class="browser-url">competitor.com</div></div>
+      <div class="browser-content"><div class="browser-placeholder">Agent<br>browsing<br>autonomously</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ BROWSER ══════════════ -->
+<div class="scene" id="scene-browser">
+  <div class="scene-label">Rail: Browser selected</div>
+  <div class="app-shell">
+    <div class="rail">
+      <div class="rail-brand">C</div>
+      <div class="rail-sep"></div>
+      <div class="rail-icon dim">💬</div>
+      <div class="rail-icon dim">⚡</div>
+      <div class="rail-icon active">🌐</div>
+      <div class="rail-icon dim">📁</div>
+      <div class="rail-icon dim">🖥</div>
+      <div class="rail-spacer"></div>
+      <div class="rail-icon dim">⚙</div>
+    </div>
+    <div class="drawer">
+      <div class="drawer-header">
+        <div class="drawer-title">Browser</div>
+        <div class="drawer-desc">Your real sessions. No API keys needed — Claude uses your existing logins.</div>
+      </div>
+      <div style="padding: 8px 12px;">
+        <div class="drawer-tag">🔐 No API key required</div>
+        <div class="drawer-tag" style="color: #8f8; border-color: rgba(100,220,100,0.3);">✓ Authenticated sessions</div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-label">Try asking</div>
+        <div class="drawer-item"><div class="drawer-item-icon">📧</div><div class="drawer-item-text"><strong>"Check my Gmail and summarize unread"</strong></div></div>
+        <div class="drawer-item"><div class="drawer-item-icon">📊</div><div class="drawer-item-text"><strong>"Pull last month from my bank"</strong></div></div>
+        <div class="drawer-item"><div class="drawer-item-icon">✈️</div><div class="drawer-item-text"><strong>"Book the cheapest flight to NYC"</strong></div></div>
+        <div class="drawer-item"><div class="drawer-item-icon">🔗</div><div class="drawer-item-text"><strong>"Post this update to LinkedIn"</strong></div></div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-label">Activate</div>
+        <div class="slash-row"><span class="slash-cmd">/bloodhound</span><span class="slash-desc">for web automation</span></div>
+      </div>
+    </div>
+    <div class="chat-area">
+      <div class="chat-header">
+        <div class="chat-header-left">Claude Sonnet 4.6</div>
+        <div class="chat-header-right"><div class="chat-header-btn"></div><div class="chat-header-btn"></div></div>
+      </div>
+      <div class="chat-messages">
+        <div class="msg-user">Log into my bank and show me last month's transactions</div>
+        <div class="msg-tool">🌐 Navigating to bank.com...</div>
+        <div class="msg-tool">🔐 Using your saved session</div>
+        <div class="msg-ai">Found 47 transactions. Top categories: Food $840, Transport $320...</div>
+      </div>
+      <div class="chat-input-row"><div class="chat-input"></div></div>
+    </div>
+    <div class="browser-area">
+      <div class="browser-bar"><div class="browser-url">bank.com/dashboard</div></div>
+      <div class="browser-content"><div class="browser-placeholder">Live<br>browser<br>session</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ FILES ══════════════ -->
+<div class="scene" id="scene-files">
+  <div class="scene-label">Rail: Files selected</div>
+  <div class="app-shell">
+    <div class="rail">
+      <div class="rail-brand">C</div>
+      <div class="rail-sep"></div>
+      <div class="rail-icon dim">💬</div>
+      <div class="rail-icon dim">⚡</div>
+      <div class="rail-icon dim">🌐</div>
+      <div class="rail-icon active">📁</div>
+      <div class="rail-icon dim">🖥</div>
+      <div class="rail-spacer"></div>
+      <div class="rail-icon dim">⚙</div>
+    </div>
+    <div class="drawer">
+      <div class="drawer-header">
+        <div class="drawer-title">Files</div>
+        <div class="drawer-desc">Full read/write access to your entire filesystem.</div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-label">Try asking</div>
+        <div class="drawer-item"><div class="drawer-item-icon">🗂</div><div class="drawer-item-text"><strong>"Reorganize my Downloads folder"</strong></div></div>
+        <div class="drawer-item"><div class="drawer-item-icon">🔍</div><div class="drawer-item-text"><strong>"Find all PDFs from 2024"</strong></div></div>
+        <div class="drawer-item"><div class="drawer-item-icon">📝</div><div class="drawer-item-text"><strong>"Summarize this 200-page doc"</strong></div></div>
+        <div class="drawer-item"><div class="drawer-item-icon">🧹</div><div class="drawer-item-text"><strong>"Find and remove duplicates"</strong></div></div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-label">Activate</div>
+        <div class="slash-row"><span class="slash-cmd">/filesystem</span><span class="slash-desc">for file operations</span></div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-label">Recent file activity</div>
+        <div class="process-row">
+          <div class="process-dot done"></div>
+          <div class="process-text">Reorganized ~/Documents</div>
+          <div class="process-time">1h</div>
+        </div>
+      </div>
+    </div>
+    <div class="chat-area">
+      <div class="chat-header">
+        <div class="chat-header-left">Claude Sonnet 4.6</div>
+        <div class="chat-header-right"><div class="chat-header-btn"></div><div class="chat-header-btn"></div></div>
+      </div>
+      <div class="chat-messages">
+        <div class="msg-user">Find all duplicate images in my Pictures folder</div>
+        <div class="msg-tool">📁 Scanning ~/Pictures... (2,847 files)</div>
+        <div class="msg-tool">🔍 Comparing hashes...</div>
+        <div class="msg-ai">Found 143 duplicates (4.2 GB recoverable). Want me to move them to Trash?</div>
+      </div>
+      <div class="chat-input-row"><div class="chat-input"></div></div>
+    </div>
+    <div class="browser-area">
+      <div class="browser-bar"><div class="browser-url">localhost</div></div>
+      <div class="browser-content"><div class="browser-placeholder">Browser<br>panel</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ DESKTOP ══════════════ -->
+<div class="scene" id="scene-desktop">
+  <div class="scene-label">Rail: Desktop selected</div>
+  <div class="app-shell">
+    <div class="rail">
+      <div class="rail-brand">C</div>
+      <div class="rail-sep"></div>
+      <div class="rail-icon dim">💬</div>
+      <div class="rail-icon dim">⚡</div>
+      <div class="rail-icon dim">🌐</div>
+      <div class="rail-icon dim">📁</div>
+      <div class="rail-icon active">🖥</div>
+      <div class="rail-spacer"></div>
+      <div class="rail-icon dim">⚙</div>
+    </div>
+    <div class="drawer">
+      <div class="drawer-header">
+        <div class="drawer-title">Desktop</div>
+        <div class="drawer-desc">Control any app on your computer via natural language.</div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-label">Try asking</div>
+        <div class="drawer-item"><div class="drawer-item-icon">🎵</div><div class="drawer-item-text"><strong>"Open Spotify and play lo-fi"</strong></div></div>
+        <div class="drawer-item"><div class="drawer-item-icon">📧</div><div class="drawer-item-text"><strong>"Open Thunderbird and draft a reply"</strong></div></div>
+        <div class="drawer-item"><div class="drawer-item-icon">🖼</div><div class="drawer-item-text"><strong>"Screenshot and annotate this window"</strong></div></div>
+        <div class="drawer-item"><div class="drawer-item-icon">⚙️</div><div class="drawer-item-text"><strong>"Change my display brightness to 60%"</strong></div></div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-label">Capabilities</div>
+        <div class="drawer-item"><div class="drawer-item-icon">🖱</div><div class="drawer-item-text">Click, type, scroll in any GUI app</div></div>
+        <div class="drawer-item"><div class="drawer-item-icon">🔔</div><div class="drawer-item-text">System notifications &amp; D-Bus control</div></div>
+        <div class="drawer-item"><div class="drawer-item-icon">💻</div><div class="drawer-item-text">Run shell commands &amp; scripts</div></div>
+      </div>
+    </div>
+    <div class="chat-area">
+      <div class="chat-header">
+        <div class="chat-header-left">Claude Sonnet 4.6</div>
+        <div class="chat-header-right"><div class="chat-header-btn"></div><div class="chat-header-btn"></div></div>
+      </div>
+      <div class="chat-messages">
+        <div class="msg-user">Open VS Code and show me all TODO comments in this project</div>
+        <div class="msg-tool">🖥 Launching VS Code...</div>
+        <div class="msg-tool">🔍 Running: grep -rn "TODO" ./src</div>
+        <div class="msg-ai">Found 23 TODOs across 11 files. Most in auth/ and api/ directories.</div>
+      </div>
+      <div class="chat-input-row"><div class="chat-input"></div></div>
+    </div>
+    <div class="browser-area">
+      <div class="browser-bar"><div class="browser-url">localhost</div></div>
+      <div class="browser-content"><div class="browser-placeholder">Browser<br>panel</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+function show(id) {
+  document.querySelectorAll('.scene').forEach(s => s.classList.remove('visible'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('scene-' + id).classList.add('visible');
+  event.target.classList.add('active');
+}
+</script>
+
+</body>
+</html>

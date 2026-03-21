@@ -11,6 +11,10 @@ import type {
 
 interface GeminiPart {
   text?: string;
+  inlineData?: {
+    mimeType: string;
+    data: string;
+  };
   functionCall?: {
     id?: string;
     name: string;
@@ -102,6 +106,11 @@ export function toGeminiContents(messages: NormalizedMessage[]): Array<{ role: '
             },
           };
         }
+        if (block.type === 'image') {
+          return {
+            text: `[image:${block.source.media_type}]`,
+          };
+        }
         return {
           text: stringifyToolResultContent(block.content),
         };
@@ -126,8 +135,19 @@ export function toGeminiContents(messages: NormalizedMessage[]): Array<{ role: '
     }
 
     const parts = msg.content
-      .filter((block): block is Extract<NormalizedMessageContentBlock, { type: 'text' }> => block.type === 'text')
-      .map((block) => ({ text: block.text }));
+      .map((block) => {
+        if (block.type === 'text') return { text: block.text };
+        if (block.type === 'image') {
+          return {
+            inlineData: {
+              mimeType: block.source.media_type,
+              data: block.source.data,
+            },
+          };
+        }
+        return null;
+      })
+      .filter((block): block is NonNullable<typeof block> => block !== null);
     out.push({ role: 'user', parts });
   }
 

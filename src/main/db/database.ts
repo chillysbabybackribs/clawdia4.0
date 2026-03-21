@@ -4,7 +4,7 @@
  * 
  * Tables:
  *   conversations    — id, title, created_at, updated_at (v1)
- *   messages         — id, conversation_id, role, content, tool_calls, created_at (v1)
+ *   messages         — id, conversation_id, role, content, tool_calls, attachments_json, created_at (v1, v21 attachments)
  *   messages_fts     — FTS5 on messages for cross-conversation recall (v6)
  *   user_memory      — id, category, key, value, source, confidence, created_at (v2)
  *   user_memory_fts  — FTS5 virtual table for relevance search (v2)
@@ -23,6 +23,9 @@
  *   filesystem_extractions_fts — lexical index over extracted local text (v18)
  *   runs.provider/model — execution backend metadata (v19)
  *   runs.workflow_stage + run_artifacts — workflow planning state (v20)
+ *   messages.attachments_json — uploaded image/file metadata for chat messages (v21)
+ *   run_artifacts.kind widened for execution_graph_scaffold (v22)
+ *   run_artifacts.kind widened for execution_graph_state (v23)
  */
 
 import Database from 'better-sqlite3';
@@ -534,5 +537,73 @@ function runMigrations(db: Database.Database): void {
     `);
   }
 
-  console.log(`[DB] Schema at version ${Math.max(currentVersion, 20)}`);
+  if (currentVersion < 21) {
+    console.log('[DB] Running migration v21: message attachments');
+    db.exec(`
+      ALTER TABLE messages ADD COLUMN attachments_json TEXT;
+      INSERT INTO schema_version (version) VALUES (21);
+    `);
+  }
+
+  if (currentVersion < 22) {
+    console.log('[DB] Running migration v22: widen run_artifacts kinds');
+    db.exec(`
+      ALTER TABLE run_artifacts RENAME TO run_artifacts_old;
+
+      CREATE TABLE IF NOT EXISTS run_artifacts (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id      TEXT NOT NULL,
+        kind        TEXT NOT NULL CHECK(kind IN ('execution_plan', 'execution_graph_scaffold')),
+        title       TEXT NOT NULL,
+        body        TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+
+      INSERT INTO run_artifacts (id, run_id, kind, title, body, created_at, updated_at)
+      SELECT id, run_id, kind, title, body, created_at, updated_at
+      FROM run_artifacts_old;
+
+      DROP TABLE run_artifacts_old;
+
+      CREATE INDEX IF NOT EXISTS idx_run_artifacts_run_id
+        ON run_artifacts(run_id, id ASC);
+      CREATE INDEX IF NOT EXISTS idx_run_artifacts_kind
+        ON run_artifacts(kind, updated_at DESC);
+
+      INSERT INTO schema_version (version) VALUES (22);
+    `);
+  }
+
+  if (currentVersion < 23) {
+    console.log('[DB] Running migration v23: widen run_artifacts kinds for graph state');
+    db.exec(`
+      ALTER TABLE run_artifacts RENAME TO run_artifacts_old;
+
+      CREATE TABLE IF NOT EXISTS run_artifacts (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id      TEXT NOT NULL,
+        kind        TEXT NOT NULL CHECK(kind IN ('execution_plan', 'execution_graph_scaffold', 'execution_graph_state')),
+        title       TEXT NOT NULL,
+        body        TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+
+      INSERT INTO run_artifacts (id, run_id, kind, title, body, created_at, updated_at)
+      SELECT id, run_id, kind, title, body, created_at, updated_at
+      FROM run_artifacts_old;
+
+      DROP TABLE run_artifacts_old;
+
+      CREATE INDEX IF NOT EXISTS idx_run_artifacts_run_id
+        ON run_artifacts(run_id, id ASC);
+      CREATE INDEX IF NOT EXISTS idx_run_artifacts_kind
+        ON run_artifacts(kind, updated_at DESC);
+
+      INSERT INTO schema_version (version) VALUES (23);
+    `);
+  }
+
+  console.log(`[DB] Schema at version ${Math.max(currentVersion, 23)}`);
 }

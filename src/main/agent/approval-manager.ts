@@ -12,6 +12,9 @@ import { setProcessStatus } from './process-manager';
 
 type ApprovalDecision = 'approved' | 'denied' | 'revise';
 
+const BROWSER_EVAL_DENY_RE = /\b(?:window\.open|document\.write|location\s*=|location\.(?:assign|replace)|history\.(?:back|forward|go)|navigator\.clipboard\.write(?:Text)?|showOpenFilePicker|showSaveFilePicker|showDirectoryPicker)\b/i;
+const BROWSER_EVAL_APPROVAL_RE = /\b(?:document\.cookie|cookieStore|localStorage|sessionStorage|indexedDB|caches|navigator\.clipboard\.read(?:Text)?|fetch|XMLHttpRequest|WebSocket|EventSource)\b/i;
+
 const pending = new Map<number, { runId: string; resolve: (decision: ApprovalDecision) => void }>();
 
 export interface ApprovalRequirement {
@@ -91,6 +94,38 @@ export function maybeRequireApproval(
     }
     if (/\b(?:apt|apt-get)\s+(?:install|remove|upgrade)\b/i.test(command)) {
       return approval('system_package_change', command, `Approval required before changing system packages: ${truncate(command, 120)}`, { command });
+    }
+  }
+
+  if (toolName === 'browser_eval') {
+    const expression = String(input.expression || '').trim();
+    if (!expression) return null;
+
+    if (BROWSER_EVAL_DENY_RE.test(expression)) {
+      const summary = 'browser_eval blocked: expression attempts navigation, window mutation, clipboard write, or file picker access.';
+      return {
+        effect: 'deny',
+        actionType: 'policy:browser_eval',
+        target: inferTarget(toolName, input),
+        summary,
+        reason: summary,
+        request: {
+          toolName,
+          expression: truncate(expression, 240),
+        },
+      };
+    }
+
+    if (BROWSER_EVAL_APPROVAL_RE.test(expression)) {
+      return approval(
+        'browser_eval_sensitive',
+        inferTarget(toolName, input),
+        'Approval required before browser_eval reads cookies, storage, clipboard, or network-bound browser APIs.',
+        {
+          toolName,
+          expression: truncate(expression, 240),
+        },
+      );
     }
   }
 
@@ -264,6 +299,9 @@ function inferTarget(toolName: string, input: Record<string, any>): string {
   if (toolName === 'fs_apply_plan') {
     const moves = Array.isArray(input.moves) ? input.moves.length : 0;
     return `${moves} filesystem move${moves === 1 ? '' : 's'}`;
+  }
+  if (toolName === 'browser_eval') {
+    return truncate(String(input.expression || toolName), 120);
   }
   return toolName;
 }

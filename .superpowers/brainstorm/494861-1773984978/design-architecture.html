@@ -1,0 +1,73 @@
+<h2>Architecture Design</h2>
+<p class="subtitle">AI ↔ Calendar integration — full system overview</p>
+
+<div class="mockup">
+  <div class="mockup-header">Data & Control Flow</div>
+  <div class="mockup-body" style="font-family:monospace;font-size:12px;line-height:1.9;padding:16px;">
+    <div style="color:#FF5061;font-weight:700;">AI (shell_exec via CLIanything)</div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.7);">↓ calls: <span style="color:#a8d8a8;">clawdia-cal add "Team standup" 2026-03-21 10:00 60</span></div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.7);">↓ calls: <span style="color:#a8d8a8;">clawdia-cal list --date 2026-03-21</span></div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.7);">↓ calls: <span style="color:#a8d8a8;">clawdia-cal delete &lt;id&gt;</span></div>
+    <br>
+    <div style="color:#FF5061;font-weight:700;">clawdia-cal CLI  <span style="color:rgba(255,255,255,0.3);font-size:11px;">(new: scripts/clawdia-cal)</span></div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.7);">↓ reads/writes → <span style="color:#a8d8a8;">~/.config/Clawdia/calendar.sqlite</span></div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.5);font-size:11px;">(separate file from data.sqlite — clean isolation)</div>
+    <br>
+    <div style="color:#FF5061;font-weight:700;">Electron Main Process</div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.7);">↓ fs.watch on calendar.sqlite → debounce 150ms</div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.7);">↓ reads events → pushes via IPC: <span style="color:#a8d8a8;">calendar:events-changed</span></div>
+    <br>
+    <div style="color:#FF5061;font-weight:700;">Calendar.tsx (renderer)</div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.7);">↓ listens on <span style="color:#a8d8a8;">window.clawdia.calendar.onEventsChanged</span></div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.7);">↓ renders event dots on calendar days</div>
+    <div style="padding-left:16px;color:rgba(255,255,255,0.7);">↓ shows event list on selected date</div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:24px;">
+  <h3>New files</h3>
+  <table style="width:100%;border-collapse:collapse;font-size:12px;font-family:monospace;">
+    <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
+      <td style="padding:8px 12px;color:#FF5061;">scripts/clawdia-cal</td>
+      <td style="padding:8px 12px;color:rgba(255,255,255,0.6);">Node.js CLI — add/list/update/delete/get commands</td>
+    </tr>
+    <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
+      <td style="padding:8px 12px;color:#FF5061;">src/main/db/calendar.ts</td>
+      <td style="padding:8px 12px;color:rgba(255,255,255,0.6);">SQLite access layer — calendar_events table</td>
+    </tr>
+    <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
+      <td style="padding:8px 12px;color:#FF5061;">src/main/calendar-watcher.ts</td>
+      <td style="padding:8px 12px;color:rgba(255,255,255,0.6);">fs.watch + debounce + IPC push</td>
+    </tr>
+  </table>
+
+  <h3 style="margin-top:20px;">Modified files</h3>
+  <table style="width:100%;border-collapse:collapse;font-size:12px;font-family:monospace;">
+    <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
+      <td style="padding:8px 12px;color:#a8d8a8;">src/shared/ipc-channels.ts</td>
+      <td style="padding:8px 12px;color:rgba(255,255,255,0.6);">Add CALENDAR_EVENTS_CHANGED, CALENDAR_LIST</td>
+    </tr>
+    <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
+      <td style="padding:8px 12px;color:#a8d8a8;">src/main/preload.ts</td>
+      <td style="padding:8px 12px;color:rgba(255,255,255,0.6);">Add window.clawdia.calendar.* methods</td>
+    </tr>
+    <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
+      <td style="padding:8px 12px;color:#a8d8a8;">src/main/main.ts</td>
+      <td style="padding:8px 12px;color:rgba(255,255,255,0.6);">Register IPC handlers, start calendar watcher</td>
+    </tr>
+    <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
+      <td style="padding:8px 12px;color:#a8d8a8;">src/renderer/components/Calendar.tsx</td>
+      <td style="padding:8px 12px;color:rgba(255,255,255,0.6);">Add event dots, event list for selected date, live subscription</td>
+    </tr>
+    <tr style="border-bottom:1px solid rgba(255,255,255,0.08);">
+      <td style="padding:8px 12px;color:#a8d8a8;">src/renderer/components/ChatPanel.tsx</td>
+      <td style="padding:8px 12px;color:rgba(255,255,255,0.6);">Wire calendar toggle button + render Calendar panel</td>
+    </tr>
+    <tr>
+      <td style="padding:8px 12px;color:#a8d8a8;">src/main/agent/tool-builder.ts</td>
+      <td style="padding:8px 12px;color:rgba(255,255,255,0.6);">Register clawdia-cal in CLIanything tool description</td>
+    </tr>
+  </table>
+</div>
+
+<p style="margin-top:20px;font-size:12px;color:rgba(255,255,255,0.4);">Does this architecture look right? Any changes before we go deeper?</p>

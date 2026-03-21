@@ -11,7 +11,15 @@ import type {
 
 interface OpenAIChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content?: string | null;
+  content?: string | Array<{
+    type: 'text';
+    text: string;
+  } | {
+    type: 'image_url';
+    image_url: {
+      url: string;
+    };
+  }> | null;
   tool_call_id?: string;
   tool_calls?: Array<{
     id: string;
@@ -142,10 +150,22 @@ export function toOpenAIMessages(messages: NormalizedMessage[], instructions: st
     }
 
     const text = msg.content
-      .filter((block): block is Extract<NormalizedMessageContentBlock, { type: 'text' }> => block.type === 'text')
-      .map((block) => block.text)
-      .join('');
-    out.push({ role: 'user', content: text });
+      .map((block) => {
+        if (block.type === 'text') return { type: 'text' as const, text: block.text };
+        if (block.type === 'image') {
+          return {
+            type: 'image_url' as const,
+            image_url: {
+              url: `data:${block.source.media_type};base64,${block.source.data}`,
+            },
+          };
+        }
+        return null;
+      })
+      .filter((block): block is NonNullable<typeof block> => block !== null);
+
+    if (text.length === 1 && text[0].type === 'text') out.push({ role: 'user', content: text[0].text });
+    else if (text.length > 0) out.push({ role: 'user', content: text });
   }
 
   return out;

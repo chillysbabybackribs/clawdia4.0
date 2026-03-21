@@ -2,7 +2,7 @@
  * Clawdia 4.0 — Main Process
  */
 
-import { app, BrowserWindow, ipcMain, Menu, shell, session } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron';
 import { execSync } from 'child_process';
 import * as fsSync from 'fs';
 import * as path from 'path';
@@ -11,13 +11,14 @@ import { IPC, IPC_EVENTS } from '../shared/ipc-channels';
 import { runAgentLoop, cancelLoop, pauseLoop, resumeLoop, addContext } from './agent/loop';
 import { parseManualAgentProfileOverride } from './agent/agent-profile-override';
 import {
-  initProcessManager, registerProcess, completeProcess, routeEvent,
+  initProcessManager,
   detachCurrent, attachTo, cancelProcess as cancelProc, dismissProcess,
-  listProcesses, getAttachedId, recordToolCall,
+  getAttachedId,
 } from './agent/process-manager';
+import * as processManager from './agent/process-manager';
 import { approveRunApproval, denyRunApproval, listApprovalsForRun, reviseRunApproval } from './agent/approval-manager';
 import { listHumanInterventionsForRun, resolveHumanIntervention } from './agent/human-intervention-manager';
-import { listPolicyProfiles, seedPolicyProfiles } from './db/policies';
+import * as policies from './db/policies';
 import { scheduleAutoGraduation } from './db/executor-auto-graduation';
 import { resetGuiStateForNewConversation } from './agent/executors/desktop-executors';
 import { destroyShell } from './agent/executors/core-executors';
@@ -54,6 +55,7 @@ import {
   createTab, switchTab, closeTab, getTabList,
   matchUrlHistory,
 } from './browser/manager';
+import { getBrowserSession } from './browser/session';
 import { startCalendarWatcher, stopCalendarWatcher } from './calendar-watcher';
 import { initAgentSpawnExecutor } from './agent/agent-spawn-executor';
 import { calendarList } from './db/calendar';
@@ -120,7 +122,13 @@ function createWindow(): void {
   });
 
   getDb();
-  seedPolicyProfiles();
+  try {
+    const seed = typeof policies.seedPolicyProfiles === 'function' ? policies.seedPolicyProfiles : null;
+    if (!seed) console.warn('[Policies] Seed skipped: seedPolicyProfiles export unavailable');
+    else seed();
+  } catch (error) {
+    console.warn('[Policies] Seed failed:', error);
+  }
   scheduleAutoGraduation();
   setupIpcHandlers();
 
@@ -166,7 +174,7 @@ function setupIpcHandlers(): void {
 
     const { cleanedMessage, forcedAgentProfile } = parseManualAgentProfileOverride(synthesizedMessage);
     if (!cleanedMessage.trim()) {
-      return { error: 'Agent override commands require a prompt, for example: /filesystem-agent find the exact file containing "..." or /bloodhound learn the fastest route to GitHub notifications' };
+      return { error: 'Slash commands require a prompt, for example: /filesystem-agent find the exact file containing "..." , /bloodhound learn the fastest route to GitHub notifications, /claude-code review this repo for TypeScript errors, or /claude-code-edit fix the failing tests in this repo' };
     }
 
     if (!activeConversationId) {
@@ -179,7 +187,7 @@ function setupIpcHandlers(): void {
     // detach/background is wired. For now, still register so the
     // infrastructure works, but mark as attached (won't show in sidebar
     // as "completed" since it's the foreground task).
-    const processId = registerProcess(conversationId, cleanedMessage, provider, getSelectedModel(provider));
+    const processId = processManager.registerProcess(conversationId, cleanedMessage, provider, getSelectedModel(provider));
 
     addMessage(conversationId, 'user', message.trim(), undefined, safeAttachments);
     const history = getAnthropicHistory(conversationId);
@@ -193,23 +201,23 @@ function setupIpcHandlers(): void {
         forcedAgentProfile,
         apiKey,
         model: getSelectedModel(provider),
-        onStreamText: (chunk) => routeEvent(processId, IPC_EVENTS.CHAT_STREAM_TEXT, chunk),
-        onProgress: (text) => routeEvent(processId, IPC_EVENTS.CHAT_STREAM_TEXT, text),
-        onThinking: (thought) => routeEvent(processId, IPC_EVENTS.CHAT_THINKING, thought),
+        onStreamText: (chunk) => processManager.routeEvent(processId, IPC_EVENTS.CHAT_STREAM_TEXT, chunk),
+        onProgress: (text) => processManager.routeEvent(processId, IPC_EVENTS.CHAT_STREAM_TEXT, text),
+        onThinking: (thought) => processManager.routeEvent(processId, IPC_EVENTS.CHAT_THINKING, thought),
         onToolActivity: (activity) => {
-          recordToolCall(processId);
-          routeEvent(processId, IPC_EVENTS.CHAT_TOOL_ACTIVITY, activity);
+          processManager.recordToolCall(processId);
+          processManager.routeEvent(processId, IPC_EVENTS.CHAT_TOOL_ACTIVITY, activity);
         },
-        onToolStream: (payload) => routeEvent(processId, IPC_EVENTS.CHAT_TOOL_STREAM, payload),
-        onWorkflowPlanReset: () => routeEvent(processId, IPC_EVENTS.CHAT_WORKFLOW_PLAN_RESET, {}),
-        onWorkflowPlanText: (chunk) => routeEvent(processId, IPC_EVENTS.CHAT_WORKFLOW_PLAN_TEXT, chunk),
-        onWorkflowPlanEnd: () => routeEvent(processId, IPC_EVENTS.CHAT_WORKFLOW_PLAN_END, {}),
-        onStreamEnd: () => routeEvent(processId, IPC_EVENTS.CHAT_STREAM_END, {}),
+        onToolStream: (payload) => processManager.routeEvent(processId, IPC_EVENTS.CHAT_TOOL_STREAM, payload),
+        onWorkflowPlanReset: () => processManager.routeEvent(processId, IPC_EVENTS.CHAT_WORKFLOW_PLAN_RESET, {}),
+        onWorkflowPlanText: (chunk) => processManager.routeEvent(processId, IPC_EVENTS.CHAT_WORKFLOW_PLAN_TEXT, chunk),
+        onWorkflowPlanEnd: () => processManager.routeEvent(processId, IPC_EVENTS.CHAT_WORKFLOW_PLAN_END, {}),
+        onStreamEnd: () => processManager.routeEvent(processId, IPC_EVENTS.CHAT_STREAM_END, {}),
         initialUserContent,
       });
 
       const finalStatus = result.response?.startsWith('[Cancelled by user]') ? 'cancelled' : 'completed';
-      completeProcess(processId, finalStatus);
+      processManager.completeProcess(processId, finalStatus);
 
       if (result.response) {
         addMessage(conversationId, 'assistant', result.response, result.toolCalls);
@@ -224,7 +232,7 @@ function setupIpcHandlers(): void {
         conversationId,
       };
     } catch (err: any) {
-      completeProcess(processId, 'failed', err.message);
+      processManager.completeProcess(processId, 'failed', err.message);
       console.error('[Main] Agent loop error:', err);
       return { error: err.message || 'Unknown error', runId: processId };
     }
@@ -342,7 +350,7 @@ function setupIpcHandlers(): void {
   });
 
   // ── Process management ──
-  ipcMain.handle(IPC.PROCESS_LIST, async () => listProcesses());
+  ipcMain.handle(IPC.PROCESS_LIST, async () => processManager.listProcesses());
   ipcMain.handle(IPC.PROCESS_DETACH, async () => {
     const id = detachCurrent();
     return { ok: !!id, detachedId: id };
@@ -399,7 +407,7 @@ function setupIpcHandlers(): void {
     const intervention = resolveHumanIntervention(interventionId);
     return { ok: !!intervention, intervention };
   });
-  ipcMain.handle(IPC.POLICY_LIST, async () => listPolicyProfiles());
+  ipcMain.handle(IPC.POLICY_LIST, async () => policies.listPolicyProfiles());
   ipcMain.handle(IPC.CALENDAR_LIST, (_event, from?: string, to?: string) => {
     return calendarList(from && to ? { from, to } : {});
   });
@@ -481,21 +489,23 @@ function setupIpcHandlers(): void {
 
   // ── Browser session management ──
   ipcMain.handle('browser:list-sessions', async () => {
-    const cookies = await session.defaultSession.cookies.get({});
+    const cookies = await getBrowserSession().cookies.get({});
     const domains = new Set<string>();
     for (const cookie of cookies) {
-      const domain = cookie.domain.replace(/^\./, '').toLowerCase();
+      const domain = String(cookie.domain || '').replace(/^\./, '').toLowerCase();
       if (domain) domains.add(domain);
     }
     return Array.from(domains).sort();
   });
 
   ipcMain.handle('browser:clear-session', async (_event, domain: string) => {
-    const cookies = await session.defaultSession.cookies.get({ domain });
+    const browserSession = getBrowserSession();
+    const cookies = await browserSession.cookies.get({ domain });
     for (const cookie of cookies) {
-      const cookieDomain = cookie.domain.replace(/^\./, '');
+      const cookieDomain = String(cookie.domain || '').replace(/^\./, '');
+      if (!cookieDomain) continue;
       const url = `https://${cookieDomain}${cookie.path || '/'}`;
-      await session.defaultSession.cookies.remove(url, cookie.name);
+      await browserSession.cookies.remove(url, cookie.name);
     }
   });
 }

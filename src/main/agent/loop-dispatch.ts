@@ -15,8 +15,8 @@ import { recordSurfaceDeviation, type ExecutionPlan } from '../db/app-registry';
 import { appendRunEvent } from '../db/run-events';
 import { buildTextDiff, createRunChange } from '../db/run-changes';
 import { maybeRequireApproval, recordPolicyBlocked, requestApproval, waitForApproval } from './approval-manager';
-import { requestHumanIntervention, waitForHumanIntervention } from './human-intervention-manager';
 import { guardFileMutation, noteFileMutationSuccess, noteFileRead } from './file-lock-manager';
+import { spawnSwarm } from './agent-spawn-executor';
 import { SCREENSHOT_PREFIX } from './executors/browser-executors';
 import { noteProcessSpecializedTool } from './process-manager';
 import { getUnrestrictedMode } from '../store';
@@ -29,6 +29,16 @@ import * as fs from 'fs';
 const SEQUENTIAL_TOOLS = new Set([
   'gui_interact', 'app_control', 'dbus_control', 'shell_exec',
 ]);
+
+function isSequentialTool(toolName: string): boolean {
+  if (SEQUENTIAL_TOOLS.has(toolName)) return true;
+  // Browser workers operate against one active tab unless they explicitly manage tabs.
+  // Running stateful browser tools in parallel on the same worker causes tab clobbering
+  // and non-deterministic reads. Keep browser_search parallel-safe, but serialize the
+  // rest of the browser tool surface by default.
+  if (toolName.startsWith('browser_') && toolName !== 'browser_search') return true;
+  return false;
+}
 
 /**
  * Partition tool-use blocks into ordered batches for parallel dispatch.
@@ -46,7 +56,7 @@ export function partitionIntoBatches(
   const seenNames: string[] = [];
 
   for (const block of blocks) {
-    const isSeq = SEQUENTIAL_TOOLS.has(block.name);
+    const isSeq = isSequentialTool(block.name);
     const inputStr = JSON.stringify(block.input).toLowerCase();
     const referencesPrev = seenNames.some(n => inputStr.includes(n.toLowerCase()));
 
@@ -70,7 +80,9 @@ const TOOL_RESULT_CAPS: Record<string, number> = {
   shell_exec: 10_000, file_read: 20_000, file_write: 500, file_edit: 500,
   directory_tree: 5_000, fs_quote_lookup: 8_000, fs_folder_summary: 8_000, fs_reorg_plan: 12_000, fs_duplicate_scan: 12_000, fs_apply_plan: 12_000, browser_search: 5_000, browser_navigate: 10_000,
   browser_read_page: 10_000, browser_click: 5_000, browser_type: 500,
-  browser_extract: 10_000, browser_screenshot: 1_000, browser_scroll: 10_000,
+  browser_extract: 10_000, browser_screenshot: 1_000, browser_eval: 8_000,
+  browser_dom_snapshot: 12_000, browser_network_watch: 8_000, browser_scroll: 10_000,
+  browser_tab_new: 200, browser_tab_switch: 200, browser_tab_close: 200, browser_tab_list: 2_000,
   create_document: 500,
   memory_search: 3_000, memory_store: 500, recall_context: 5_000,
   app_control: 10_000, gui_interact: 5_000, dbus_control: 8_000,
@@ -190,30 +202,8 @@ export async function dispatchTools(
         result,
       );
 
-      if (humanIntervention && ctx.runId) {
-        const intervention = requestHumanIntervention(ctx.runId, {
-          interventionType: humanIntervention.type,
-          target: humanIntervention.target,
-          summary: humanIntervention.summary,
-          instructions: humanIntervention.instructions,
-          request: {
-            toolName: toolUse.name,
-            toolUseId: toolUse.id,
-            input: toolUse.input as Record<string, any>,
-            detectedFrom: humanIntervention.detectedFrom,
-          },
-        });
-
-        ctx.onToolActivity?.({
-          name: toolUse.name,
-          status: 'needs_human',
-          detail: intervention.summary,
-        });
-
-        const decision = await waitForHumanIntervention(intervention.id);
-        result = decision === 'dismissed'
-          ? `[Human intervention dismissed] ${intervention.summary}`
-          : `[Human intervention completed] ${intervention.summary}`;
+      if (humanIntervention) {
+        result = `[Error] ${humanIntervention.summary}`;
       }
 
       // Mid-loop escalation: upgrade tool group if a known tool was missing
@@ -333,6 +323,20 @@ export async function dispatchTools(
   return toolResults;
 }
 
+function withBrowserRunContext(
+  toolUse: NormalizedToolUseBlock,
+  ctx: DispatchContext,
+): NormalizedToolUseBlock {
+  if (!ctx.runId || !toolUse.name.startsWith('browser_')) return toolUse;
+  return {
+    ...toolUse,
+    input: {
+      ...(toolUse.input as Record<string, any>),
+      __runId: ctx.runId,
+    },
+  };
+}
+
 async function executeApprovedTool(
   toolUse: NormalizedToolUseBlock,
   ctx: DispatchContext,
@@ -356,7 +360,22 @@ async function executeApprovedTool(
       }
     : undefined;
 
-  return executeTool(toolUse.name, toolUse.input as any, chunkCb);
+  // ── agent_spawn: needs runId from ctx, handled here before generic dispatch ──
+  if (toolUse.name === 'agent_spawn') {
+    const input = toolUse.input as { tasks: Array<{ role: string; goal: string; context?: string }> };
+    const swarmResult = await spawnSwarm(ctx.runId ?? `swarm-${Date.now()}`, input.tasks ?? []);
+    const summary = [
+      `Swarm complete: ${swarmResult.agentCount} agents, ${swarmResult.totalToolCalls} tool calls, ${Math.round(swarmResult.durationMs / 1000)}s`,
+      '',
+      ...swarmResult.results.map((r, i) =>
+        `## Agent ${i + 1} [${r.role}]\nGoal: ${r.goal}\n\n${r.result}`,
+      ),
+    ].join('\n');
+    return summary;
+  }
+
+  const resolvedToolUse = withBrowserRunContext(toolUse, ctx);
+  return executeTool(resolvedToolUse.name, resolvedToolUse.input as any, chunkCb);
 }
 
 async function executeGuardedTool(
@@ -395,37 +414,7 @@ async function executeGuardedTool(
       },
     });
 
-    const intervention = requestHumanIntervention(ctx.runId!, {
-      interventionType: 'conflict_resolution',
-      target: guard.path,
-      summary: guard.summary,
-      instructions: guard.instructions,
-      request: {
-        toolName: toolUse.name,
-        toolUseId: toolUse.id,
-        path: guard.path,
-        ownerRunId: guard.ownerRunId,
-        expectedRevision: guard.expectedRevision,
-        currentRevision: guard.currentRevision,
-        reason: guard.kind,
-      },
-    });
-
-    ctx.onToolActivity?.({
-      name: toolUse.name,
-      status: 'needs_human',
-      detail: intervention.summary,
-    });
-
-    const decision = await waitForHumanIntervention(intervention.id);
-    if (decision !== 'resolved') {
-      return `[Human intervention dismissed] ${intervention.summary}`;
-    }
-
-    guard = guardFileMutation(ctx.runId!, input.path);
-    if (!guard.ok) {
-      return `[File conflict unresolved] ${guard.summary}`;
-    }
+    return `[Error] ${guard.summary}`;
   }
 
   appendRunEvent(ctx.runId!, {

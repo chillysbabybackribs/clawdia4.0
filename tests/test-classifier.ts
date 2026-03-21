@@ -64,6 +64,19 @@ section('Browser tasks → browser group');
   }
 }
 
+section('Coordination-style browser tasks → full group');
+{
+  for (const msg of [
+    'spawn 2 parallel sub-agents to browse example.com and compare the results',
+    'use agent_spawn to coordinate two browser workers',
+    'run a browser swarm in parallel across two sites',
+  ]) {
+    const p = classify(msg);
+    assertEq(p.toolGroup, 'full', `"${msg.slice(0, 50)}..." → full`);
+    assert(p.promptModules.has('browser'), `"${msg.slice(0, 50)}..." → keeps browser module`);
+  }
+}
+
 // ════════════════════════════════════════════════════════
 // FILESYSTEM/CODE TASKS
 // ════════════════════════════════════════════════════════

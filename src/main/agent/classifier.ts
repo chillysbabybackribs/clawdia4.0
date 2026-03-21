@@ -22,6 +22,7 @@ const YTDLP_RE = /\b(download|grab|save|extract|rip)\b.*(video|clip|audio|youtub
 const BLOODHOUND_RE = /\bbloodhound\b|executor designer|build (?:an |a )?executor|design (?:an |a )?executor|automate (?:this|that|the)\b|figure out how to automate|learn (?:this|that|the) (?:site|app|workflow)|create (?:an |a )?(?:playbook|workflow automation)/i;
 
 const BROWSER_RE = /https?:\/\/|search\b|look\s?up|google|browse|find online|navigate to|go to .*(site|page|url)|open.*website|check.*site|what.*price|how much.*cost|latest news|github|gitlab|linkedin|reddit|pull requests?|notifications?|inbox|messages?|saved posts?|review requests?/i;
+const COORDINATION_RE = /\bagent_spawn\b|\bspawn\b.*\b(agent|sub-agent|worker)s?\b|\bsub-agent\b|\bparallel\b|\bworkers?\b|\bcoordinator\b|\bswarm\b|\bworkstreams?\b/i;
 
 const RESEARCH_RE = /compare|vs\b|best\b|recommend|analyze|report|pricing/i;
 
@@ -32,7 +33,7 @@ const DOCUMENT_RE = /(?:create|generate|make|write|draft|prepare|export).*(?:doc
 
 // Expanded to cover: open-source creative apps, proprietary apps, media control,
 // GUI interaction phrases, and common desktop actions
-const DESKTOP_APP_RE = /gimp|blender|inkscape|libreoffice|audacity|obs\b|kdenlive|shotcut|vlc|firefox|chrome|spotify|discord|slack|steam|figma|zoom|thunderbird|nautilus|thunar|dolphin|terminal|vscode|vs code|visual studio code|sublime|atom|krita|darktable|rawtherapee|openshot|pitivi|handbrake|transmission|qbittorrent|telegram|signal|teams|skype|(launch|open|start|run|control|close|quit|interact).*app|play.*music|pause.*music|next.*track|prev.*track|volume\b|take.*screenshot|click.*button|type.*into|press.*key|dbus\b|xdotool|wmctrl|gui\b.*interact|desktop.*control|window.*manage|list.*windows/i;
+const DESKTOP_APP_RE = /gimp|blender|inkscape|libreoffice|audacity|obs\b|kdenlive|shotcut|vlc|firefox|chrome|spotify|discord|slack|steam|figma|zoom|thunderbird|nautilus|thunar|dolphin|terminal|vscode|vs code|visual studio code|claude code|claude-code|sublime|atom|krita|darktable|rawtherapee|openshot|pitivi|handbrake|transmission|qbittorrent|telegram|signal|teams|skype|(launch|open|start|run|control|close|quit|interact).*app|play.*music|pause.*music|next.*track|prev.*track|volume\b|take.*screenshot|click.*button|type.*into|press.*key|dbus\b|xdotool|wmctrl|gui\b.*interact|desktop.*control|window.*manage|list.*windows/i;
 
 const SELF_RE = /clawdia|your (code|source|memory|data|settings|config)|this app|clear (my|your|all) (data|history|memory)|reset/i;
 
@@ -55,6 +56,7 @@ export function classify(message: string): TaskProfile {
 
   // Collect all matching modules
   const matchesBrowser = BROWSER_RE.test(trimmed);
+  const matchesCoordination = COORDINATION_RE.test(trimmed);
   const matchesBloodhound = BLOODHOUND_RE.test(trimmed);
   const matchesCoding = CODING_RE.test(trimmed);
   const matchesFilesystemAgent = FILESYSTEM_AGENT_RE.test(trimmed);
@@ -79,8 +81,12 @@ export function classify(message: string): TaskProfile {
       : 'general';
 
   // Count domain matches for multi-domain detection
-  const domainMatches = [matchesBrowser, matchesCoding || matchesFilesystemAgent, matchesDocument, matchesDesktopApp, matchesSelf]
+  const domainMatches = [matchesBrowser || matchesCoordination, matchesCoding || matchesFilesystemAgent, matchesDocument, matchesDesktopApp, matchesSelf]
     .filter(Boolean).length;
+
+  if (matchesCoordination) {
+    return { agentProfile, toolGroup: 'full', promptModules: modules, model: 'sonnet', isGreeting: false };
+  }
 
   // Rule 6: Multi-domain → full
   // Two+ domain signals = cross-domain task, regardless of message length

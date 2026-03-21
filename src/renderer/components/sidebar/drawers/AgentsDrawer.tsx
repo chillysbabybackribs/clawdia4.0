@@ -12,6 +12,8 @@ const PROFILES = [
   { cmd: '/bloodhound', desc: 'web automation' },
   { cmd: '/filesystem', desc: 'file operations' },
   { cmd: '/ytdlp', desc: 'download media' },
+  { cmd: '/claude-code', desc: 'Claude read-only' },
+  { cmd: '/claude-code-edit', desc: 'Claude edit mode' },
   { cmd: '/general', desc: 'full capabilities' },
 ];
 

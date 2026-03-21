@@ -57,7 +57,46 @@ export interface BrowserTab {
   active: boolean;
 }
 
-export type AgentProfile = 'general' | 'filesystem' | 'bloodhound' | 'ytdlp';
+export type AgentProfile =
+  | 'general'
+  | 'filesystem'
+  | 'bloodhound'
+  | 'ytdlp'
+  // Swarm agent profiles
+  | 'coordinator'
+  | 'scout'
+  | 'builder'
+  | 'analyst'
+  | 'writer'
+  | 'reviewer'
+  | 'data'
+  | 'devops'
+  | 'security'
+  | 'synthesizer';
+
+// ─── Swarm Types ───────────────────────────────────────────────────────────────
+
+export type SwarmAgentStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+
+export interface SwarmAgent {
+  id: string;               // unique sub-agent id
+  role: AgentProfile;       // which profile is running
+  goal: string;             // short description of what this agent is doing
+  status: SwarmAgentStatus;
+  startedAt?: number;
+  completedAt?: number;
+  toolCallCount: number;
+  result?: string;          // truncated result summary
+  error?: string;
+}
+
+export interface SwarmState {
+  runId: string;            // parent run id
+  totalAgents: number;
+  agents: SwarmAgent[];
+  startedAt: number;
+  completedAt?: number;
+}
 export type WorkflowStage = 'starting' | 'planning' | 'executing' | 'reviewing' | 'completed';
 
 export interface ProcessInfo {
@@ -99,7 +138,7 @@ export interface RunSummary {
 export interface RunArtifact {
   id: number;
   runId: string;
-  kind: 'execution_plan';
+  kind: 'execution_plan' | 'execution_graph_scaffold' | 'execution_graph_state';
   title: string;
   body: string;
   createdAt: string;

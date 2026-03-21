@@ -1,0 +1,57 @@
+<h2>Live Update & AI Context Injection</h2>
+<p class="subtitle">How changes flow from CLI → UI, and how the AI stays aware</p>
+
+<div class="mockup">
+  <div class="mockup-header">Live update sequence</div>
+  <div class="mockup-body" style="font-family:monospace;font-size:12px;line-height:2;padding:16px;">
+    <div style="color:#FF5061;">1. AI calls: clawdia-cal add "Standup" --date 2026-03-21 --time 10:00 --duration 30</div>
+    <div style="padding-left:20px;color:rgba(255,255,255,0.6);">→ CLI writes row to calendar.sqlite</div>
+    <div style="padding-left:20px;color:rgba(255,255,255,0.6);">→ CLI exits with JSON output (AI reads it)</div>
+    <br>
+    <div style="color:#FF5061;">2. calendar-watcher.ts detects file change</div>
+    <div style="padding-left:20px;color:rgba(255,255,255,0.6);">→ fs.watch fires on calendar.sqlite</div>
+    <div style="padding-left:20px;color:rgba(255,255,255,0.6);">→ debounce 150ms (handles double-fire)</div>
+    <div style="padding-left:20px;color:rgba(255,255,255,0.6);">→ reads all events for visible month range</div>
+    <div style="padding-left:20px;color:rgba(255,255,255,0.6);">→ mainWindow.webContents.send('calendar:events-changed', events)</div>
+    <br>
+    <div style="color:#FF5061;">3. Calendar.tsx receives push</div>
+    <div style="padding-left:20px;color:rgba(255,255,255,0.6);">→ window.clawdia.calendar.onEventsChanged(cb)</div>
+    <div style="padding-left:20px;color:rgba(255,255,255,0.6);">→ setEvents(events) → re-render dots + list</div>
+    <div style="padding-left:20px;color:rgba(255,255,255,0.6);font-size:11px;color:rgba(255,255,255,0.35);">Total latency: &lt;200ms from CLI exit to UI update</div>
+  </div>
+</div>
+
+<div class="mockup" style="margin-top:20px;">
+  <div class="mockup-header">AI context injection — system prompt prefix</div>
+  <div class="mockup-body" style="font-family:monospace;font-size:11px;line-height:1.8;padding:16px;">
+    <div style="color:rgba(255,255,255,0.35);margin-bottom:6px;">// Injected at start of every agent run (loop.ts)</div>
+    <div style="color:#a8d8a8;">const todayEvents = execSync('clawdia-cal list').toString();</div>
+    <div style="color:#a8d8a8;">// → parsed and formatted as plain text:</div>
+    <br>
+    <div style="color:rgba(255,255,255,0.6);">Today is Friday 2026-03-20.</div>
+    <div style="color:rgba(255,255,255,0.6);">Your schedule today:</div>
+    <div style="color:rgba(255,255,255,0.6);">  - 10:00  Team standup (30 min)</div>
+    <div style="color:rgba(255,255,255,0.6);">  - 14:00  Design review (60 min)</div>
+    <div style="color:rgba(255,255,255,0.6);">  - 16:30  1:1 with dp (60 min)</div>
+    <br>
+    <div style="color:rgba(255,255,255,0.35);">// If no events today:</div>
+    <div style="color:rgba(255,255,255,0.6);">Today is Friday 2026-03-20. No events scheduled.</div>
+    <br>
+    <div style="color:rgba(255,255,255,0.35);">// Appended to existing system prompt — does not replace it</div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:24px;">
+  <h3>CLIanything registration</h3>
+  <p style="font-size:13px;color:rgba(255,255,255,0.6);">
+    In <code>tool-builder.ts</code>, the <code>shell_exec</code> tool description is extended with a note about <code>clawdia-cal</code>:
+  </p>
+  <div style="font-family:monospace;font-size:11px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:8px;padding:12px;margin-top:8px;color:rgba(255,255,255,0.6);">
+    Use <span style="color:#a8d8a8;">clawdia-cal</span> to manage the user's calendar.<br>
+    Commands: add, list, update, delete, get.<br>
+    Example: <span style="color:#a8d8a8;">clawdia-cal add "Meeting" --date 2026-03-21 --time 14:00 --duration 60</span><br>
+    Always confirm with the user before deleting events.
+  </div>
+</div>
+
+<p style="margin-top:20px;font-size:12px;color:rgba(255,255,255,0.4);">Does this all look good? If yes, I'll write the full spec doc.</p>

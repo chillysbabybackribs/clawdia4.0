@@ -17,9 +17,17 @@ import { getPromptContext } from '../db/memory';
 import { checkRecall } from '../db/conversation-recall';
 import { getSiteContextPrompt } from '../db/site-profiles';
 import { getPlaybookPrompt } from '../db/browser-playbooks';
+import { getCurrentUrl, getHarnessContextForUrl } from '../browser/manager';
 import { getDesktopCapabilities, getGuiState, warmCoordinatesForApp } from './executors/desktop-executors';
 import { getStateSummary } from './gui/ui-state';
 import { getShortcutPromptBlock } from './gui/shortcuts';
+import {
+  compileBrowserExecutionSketch,
+  compileTaskExecutionGraphScaffold,
+  formatBrowserExecutionSketch,
+  type BrowserExecutionSketch,
+  type TaskExecutionGraphScaffold,
+} from './task-compiler';
 import {
   extractAppName, discoverApps, routeTask, scanHarnesses,
   recordSurfaceUsage, autoInstallHarness, getAppProfile,
@@ -38,6 +46,10 @@ const execAsync = promisify(exec);
 let _degradedWarningEmitted = false;
 let _nonAnthropicHarnessWarningEmitted = false;
 
+export function isExplicitHarnessRequest(message: string): boolean {
+  return /\b(?:cli-anything|cli anything|agent-harness|agent harness|build (?:a )?harness|generate (?:a )?harness|create (?:a )?harness|install (?:a )?harness|\/cli-anything)\b/i.test(message);
+}
+
 async function cmdExists(cmd: string): Promise<boolean> {
   const safeCmd = cmd.replace(/[^a-z0-9-]/gi, '');
   if (!safeCmd) return false;
@@ -54,7 +66,12 @@ export interface SetupResult {
   recallContext: string;
   siteContext: string;
   playbookContext: string;
+  harnessContext: string;
   desktopContext: string;
+  executionSketchContext: string;
+  browserExecutionSketch: BrowserExecutionSketch | null;
+  executionGraphContext: string;
+  executionGraphScaffold: TaskExecutionGraphScaffold | null;
   executionPlan: ExecutionPlan | null;
   shortcutContext: string;
   guiStateContext: string;
@@ -71,19 +88,30 @@ export async function runPreLLMSetup(
   profile: TaskProfile,
   client: ProviderClient,
   onProgress?: (text: string) => void,
+  options: { enableExecutionGraphScaffold?: boolean; allowedTools?: string[] } = {},
 ): Promise<SetupResult> {
   const result: SetupResult = {
     memoryContext: '',
     recallContext: '',
     siteContext: '',
     playbookContext: '',
+    harnessContext: '',
     desktopContext: '',
+    executionSketchContext: '',
+    browserExecutionSketch: null,
+    executionGraphContext: '',
+    executionGraphScaffold: null,
     executionPlan: null,
     shortcutContext: '',
     guiStateContext: '',
   };
 
-  const isDesktopTask = profile.promptModules.has('desktop_apps');
+  const allowedToolSet = new Set(options.allowedTools || []);
+  const hasScopedAllowedTools = allowedToolSet.size > 0;
+  const desktopToolNames = ['app_control', 'gui_interact', 'dbus_control'];
+  const desktopSetupAllowedByTools = !hasScopedAllowedTools || desktopToolNames.some((toolName) => allowedToolSet.has(toolName));
+  const isDesktopTask = profile.promptModules.has('desktop_apps') && desktopSetupAllowedByTools;
+  const explicitHarnessRequest = isExplicitHarnessRequest(userMessage);
   const needsMemory = !profile.isGreeting && userMessage.length > 10;
 
   const tasks: Promise<void>[] = [];
@@ -107,6 +135,40 @@ export async function runPreLLMSetup(
             console.log(`[Playbook] Injecting learned navigation for this task`);
           }
         } catch {}
+        if (profile.promptModules.has('browser')) {
+          try {
+            const currentUrl = getCurrentUrl();
+            if (currentUrl) {
+              result.harnessContext = getHarnessContextForUrl(currentUrl);
+              if (result.harnessContext) {
+                console.log('[Harness] Injecting site harness context for current page');
+              }
+            }
+          } catch {}
+        }
+        if (profile.promptModules.has('browser')) {
+          try {
+            const sketch = compileBrowserExecutionSketch(userMessage);
+            result.browserExecutionSketch = sketch;
+            result.executionSketchContext = formatBrowserExecutionSketch(sketch);
+            if (result.executionSketchContext) {
+              console.log('[TaskCompiler] Injecting browser execution sketch for compound task');
+            }
+          } catch {}
+        }
+        if (options.enableExecutionGraphScaffold !== false) {
+          try {
+            const scaffold = compileTaskExecutionGraphScaffold(userMessage);
+            result.executionGraphScaffold = scaffold;
+            result.executionGraphContext = [
+              '[EXECUTION GRAPH SCAFFOLD]',
+              `Summary: ${scaffold.planner.summary}`,
+              `Topology: serial_stages=${scaffold.planner.topology.serialStages}, parallel_branches=${scaffold.planner.topology.parallelBranches}`,
+              `Nodes: ${scaffold.planner.graph.nodes.map((node) => `${node.id}:${node.executor.kind}`).join(', ')}`,
+            ].join('\n');
+            console.log('[TaskCompiler] Generated execution graph scaffold');
+          } catch {}
+        }
       }
     })());
   }
@@ -137,8 +199,8 @@ export async function runPreLLMSetup(
           }
         }
 
-        // ── NEW: Generate harness if none exists (only when app is available) ──
-        if (appAvailable && client.supportsHarnessGeneration) {
+        // ── Generate harness only when the user explicitly asks for one ──
+        if (appAvailable && explicitHarnessRequest && client.supportsHarnessGeneration) {
           const existingProfile = getAppProfile(targetApp);
           const hasHarness = existingProfile?.cliAnything?.installed === true;
           if (!hasHarness) {
@@ -157,7 +219,7 @@ export async function runPreLLMSetup(
               onProgress?.(`Harness generation failed — falling back to available surfaces.`);
             }
           }
-        } else if (appAvailable && !client.supportsHarnessGeneration && !_nonAnthropicHarnessWarningEmitted) {
+        } else if (appAvailable && explicitHarnessRequest && !client.supportsHarnessGeneration && !_nonAnthropicHarnessWarningEmitted) {
           _nonAnthropicHarnessWarningEmitted = true;
           onProgress?.(`Skipping automatic CLI harness generation for ${targetApp} — not supported by the active provider (${client.provider}).`);
         }
@@ -168,8 +230,8 @@ export async function runPreLLMSetup(
         result.executionPlan = routeTask(userMessage, targetApp);
         console.log(`[Router] App: ${targetApp} → surface: ${result.executionPlan.selectedSurface} | reasoning: ${result.executionPlan.reasoning}`);
 
-        // Auto-install CLI-Anything harness if available but not installed
-        if (result.executionPlan.selectedSurface !== 'cli_anything') {
+        // Auto-install a pre-built CLI-Anything harness only on explicit request
+        if (explicitHarnessRequest && result.executionPlan.selectedSurface !== 'cli_anything') {
           try {
             const installed = await autoInstallHarness(targetApp);
             if (installed) {

@@ -64,9 +64,11 @@ input_schema:
 
 name: memory_store
 description: |
-  Explicitly store a fact in the user's persistent memory. Use ONLY when
-  the user asks you to remember something. Do not auto-store without the
-  user's request. Categories: preference, account, workflow, fact, context.
+  Store a fact about the user in persistent memory. Use when the user
+  shares a personal detail, preference, or workflow habit; explicitly asks
+  to remember something; or you learn something useful about their setup
+  or projects. Do NOT store secrets, passwords, or API keys.
+  Categories: preference, account, workflow, fact, context.
 
 input_schema:
   type: object

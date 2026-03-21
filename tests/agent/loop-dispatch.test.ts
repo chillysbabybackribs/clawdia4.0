@@ -36,6 +36,27 @@ describe('partitionIntoBatches()', () => {
     expect(batches[0]).toHaveLength(1);
   });
 
+  it('serializes browser stateful tools such as browser_navigate', () => {
+    const blocks = [
+      makeBlock('browser_navigate', { url: 'https://example.com/a' }),
+      makeBlock('browser_navigate', { url: 'https://example.com/b' }),
+    ];
+    const batches = partitionIntoBatches(blocks);
+    expect(batches).toHaveLength(2);
+    expect(batches[0][0].name).toBe('browser_navigate');
+    expect(batches[1][0].name).toBe('browser_navigate');
+  });
+
+  it('keeps browser_search parallel-safe', () => {
+    const blocks = [
+      makeBlock('browser_search', { query: 'quiet office keyboards' }),
+      makeBlock('browser_search', { query: 'logitech mx keys s review' }),
+    ];
+    const batches = partitionIntoBatches(blocks);
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toHaveLength(2);
+  });
+
   it('forces batch boundary when input references previous tool name', () => {
     const blocks = [
       makeBlock('file_read', { path: '/a' }),

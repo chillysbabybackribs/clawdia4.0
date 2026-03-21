@@ -1,0 +1,43 @@
+<h2>How should the AI integrate with the calendar?</h2>
+<p class="subtitle">Three approaches — pick the one that fits best</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Passive Context Awareness</h3>
+      <p>The AI reads the calendar automatically before every message — it knows what's scheduled and uses that context to give smarter answers. You never have to mention your schedule explicitly.</p>
+      <br>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Zero friction — always aware</li><li>No new tools or IPC needed beyond a read channel</li><li>Simple to build and reason about</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>AI can't create or edit events</li><li>Calendar data just sits in system prompt context</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Agent Tool Control</h3>
+      <p>The AI gets dedicated calendar tools: <code>calendar_read</code>, <code>calendar_create_event</code>, <code>calendar_update_event</code>, <code>calendar_delete_event</code>. It calls these when needed, like it calls <code>shell_exec</code> or <code>file_read</code> today.</p>
+      <br>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Full read/write control</li><li>Fits naturally into existing tool dispatch pattern</li><li>AI can proactively suggest and create events</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>More IPC channels to wire up</li><li>Needs approval flow for destructive actions (delete)</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Hybrid — Context + Tools + Proactive Suggestions</h3>
+      <p>Calendar state is always injected into context <em>and</em> the AI has full tool control. On top of that, the AI can proactively surface scheduling suggestions inline in chat — "Want me to block 2 hours for that?" — with one-click confirm buttons.</p>
+      <br>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Most powerful UX — AI feels truly calendar-aware</li><li>Inline suggestions reduce friction for common actions</li><li>Covers read, write, and proactive scheduling</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Most to build</li><li>Inline suggestion UI needs new ChatPanel components</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>

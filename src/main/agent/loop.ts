@@ -17,8 +17,9 @@ import { isFilesystemQuoteLookupTask } from './filesystem-agent-routing';
 import { buildStaticPrompt, buildDynamicPrompt } from './prompt-builder';
 import { getToolsForGroup, filterTools } from './tool-builder';
 import { createProviderClient, resolveModelForProvider, type LLMResponse, type NormalizedMessage, type NormalizedTextBlock, type NormalizedToolUseBlock } from './client';
-import { seedRegistry, type ExecutionPlan } from '../db/app-registry';
-import { savePlaybook, validatePlaybookCandidate, writeBloodhoundExecutorArtifacts, executeSavedBloodhoundPlaybook } from '../db/browser-playbooks';
+import * as appRegistry from '../db/app-registry';
+import type { ExecutionPlan } from '../db/app-registry';
+import { savePlaybook, shouldAutoSavePlaybook, validatePlaybookCandidate, writeBloodhoundExecutorArtifacts, executeSavedBloodhoundPlaybook } from '../db/browser-playbooks';
 import { type VerificationResult } from './verification';
 import { fireNestedCancel, registerNestedCancel, clearNestedCancel } from './loop-cancel';
 import { runYtdlpPipeline, type YtdlpResult } from './loop-ytdlp';
@@ -26,15 +27,19 @@ import { runPreLLMSetup } from './loop-setup';
 import { dispatchTools, type DispatchContext } from './loop-dispatch';
 import { verifyFileOutcomes, runRecoveryIteration, logVerificationSummary } from './loop-recovery';
 import { createExecutionPlan, requireExecutionPlanApproval, shouldCreateExecutionPlan } from './workflow';
+import { buildBrowserStepControllerPrompt, extractStepDoneMarker, stripStepDoneMarkers } from './task-compiler';
 import { cancelPendingApprovals } from './approval-manager';
 import { cancelPendingHumanInterventions } from './human-intervention-manager';
 import { appendRunEvent } from '../db/run-events';
+import { upsertRunArtifact } from '../db/run-artifacts';
 import { getSelectedPerformanceStance, getUnrestrictedMode } from '../store';
 import type { AgentProfile, PerformanceStance, ProviderId } from '../../shared/types';
 import { setProcessAgentProfile, setProcessExecutionInfo, setProcessWorkflowStage } from './process-manager';
-import { getCurrentUrl } from '../browser/manager';
+import { getCurrentUrl, runHarness } from '../browser/manager';
+import { prepareHarnessExecutionFromMessage } from '../browser/site-harness';
 import { calendarList } from '../db/calendar';
 import type { NormalizedMessageContentBlock } from './provider/types';
+import * as graphExecutor from './graph-executor';
 
 const MAX_ITERATIONS = 50;
 const MAX_WALL_MS = 10 * 60 * 1000;
@@ -51,7 +56,26 @@ const MULTI_STEP_CONNECTOR_RE = /\b(and then|then|after that|afterwards|next|fol
 let registrySeeded = false;
 function ensureRegistry(): void {
   if (registrySeeded) return;
-  try { seedRegistry(); registrySeeded = true; } catch (e) { console.warn('[Registry] Seed failed:', e); }
+  try {
+    const seed = typeof appRegistry.seedRegistry === 'function' ? appRegistry.seedRegistry : null;
+    if (!seed) {
+      console.warn('[Registry] Seed skipped: seedRegistry export unavailable');
+      registrySeeded = true;
+      return;
+    }
+    seed();
+    registrySeeded = true;
+  } catch (e) {
+    console.warn('[Registry] Seed failed:', e);
+  }
+}
+
+function resolveGraphExecutorFns() {
+  return {
+    canExecuteGraphScaffold: typeof graphExecutor.canExecuteGraphScaffold === 'function' ? graphExecutor.canExecuteGraphScaffold : null,
+    executeGraphScaffold: typeof graphExecutor.executeGraphScaffold === 'function' ? graphExecutor.executeGraphScaffold : null,
+    getWorkerDependencyChain: typeof graphExecutor.getWorkerDependencyChain === 'function' ? graphExecutor.getWorkerDependencyChain : null,
+  };
 }
 
 // ═══════════════════════════════════
@@ -146,6 +170,8 @@ export interface LoopOptions {
   runId?: string;
   provider: ProviderId;
   forcedAgentProfile?: AgentProfile;
+  allowedTools?: string[];
+  graphExecutionMode?: 'auto' | 'disabled';
   apiKey: string;
   model?: string;
   onStreamText?: (text: string) => void;
@@ -261,6 +287,10 @@ function shouldForceContinuationAfterPartialExecution(
   return null;
 }
 
+export function isExplicitSwarmRequest(userMessage: string): boolean {
+  return /\bagent_spawn\b|\bspawn\b.*\b(agent|sub-agent|worker)s?\b|\bsub-agent\b|\bparallel\b|\bworkers?\b|\bcoordinator\b|\bswarm\b/i.test(userMessage);
+}
+
 // ═══════════════════════════════════
 // Main Loop
 // ═══════════════════════════════════
@@ -322,7 +352,10 @@ export async function runAgentLoop(
   if (runId) setProcessWorkflowStage(runId, 'starting');
 
   // ── Pre-LLM Setup (extracted to loop-setup.ts) ──
-  const setup = await runPreLLMSetup(userMessage, profile, client, options.onProgress);
+  const setup = await runPreLLMSetup(userMessage, profile, client, options.onProgress, {
+    enableExecutionGraphScaffold: (options.graphExecutionMode ?? 'auto') !== 'disabled',
+    allowedTools: options.allowedTools,
+  });
   const { executionPlan } = setup;
   if (runId) {
     appendRunEvent(runId, {
@@ -334,6 +367,24 @@ export async function runAgentLoop(
         disallowedTools: executionPlan?.disallowedTools || [],
       },
     });
+    if (setup.executionGraphScaffold) {
+      upsertRunArtifact(
+        runId,
+        'execution_graph_scaffold',
+        'Execution Graph Scaffold',
+        JSON.stringify(setup.executionGraphScaffold.planner, null, 2),
+      );
+      appendRunEvent(runId, {
+        kind: 'execution_graph_scaffold_created',
+        phase: 'planning',
+        payload: {
+          summary: setup.executionGraphScaffold.planner.summary,
+          nodeCount: setup.executionGraphScaffold.planner.graph.nodes.length,
+          edgeCount: setup.executionGraphScaffold.planner.graph.edges.length,
+          parallelBranches: setup.executionGraphScaffold.planner.topology.parallelBranches,
+        },
+      });
+    }
   }
 
   // ── Extractor agent short-circuit ──
@@ -365,7 +416,41 @@ export async function runAgentLoop(
   }
 
   if (profile.toolGroup === 'browser') {
-    const executorRun = await executeSavedBloodhoundPlaybook(userMessage, getCurrentUrl() || undefined);
+    const currentUrl = getCurrentUrl(runId ? { runId } : undefined) || undefined;
+
+    if (currentUrl) {
+      const preparedHarness = prepareHarnessExecutionFromMessage(userMessage, currentUrl);
+      if (preparedHarness) {
+        const harnessRun = await runHarness(
+          preparedHarness.harness.domain,
+          preparedHarness.harness.actionName,
+          preparedHarness.fieldValues,
+          preparedHarness.autoSubmit,
+        );
+        if (!harnessRun.startsWith('[Error]') && !harnessRun.startsWith('✗')) {
+          if (runId) {
+            appendRunEvent(runId, {
+              kind: 'tool_completed',
+              phase: 'setup',
+              surface: 'browser',
+              toolName: 'browser_run_harness',
+              payload: {
+                detail: `Pre-loop site harness: ${preparedHarness.harness.domain}/${preparedHarness.harness.actionName}`,
+                resultPreview: harnessRun.slice(0, 500),
+                status: 'success',
+              },
+            });
+          }
+          cleanupRunControl(runKey);
+          return { response: harnessRun, toolCalls: [] };
+        }
+      }
+    }
+
+    const executorRun = await executeSavedBloodhoundPlaybook(userMessage, currentUrl, {
+      exactOnly: true,
+      target: runId ? { runId } : undefined,
+    });
     if (executorRun?.ok) {
       if (runId) {
         appendRunEvent(runId, {
@@ -422,6 +507,9 @@ export async function runAgentLoop(
     recallContext: setup.recallContext,
     siteContext: setup.siteContext,
     playbookContext: setup.playbookContext,
+    harnessContext: setup.harnessContext,
+    executionSketchContext: setup.executionSketchContext,
+    executionGraphContext: setup.executionGraphContext,
     desktopContext: setup.desktopContext,
     executionConstraint: executionPlan?.constraint,
     shortcutContext: setup.shortcutContext,
@@ -429,6 +517,119 @@ export async function runAgentLoop(
     isGreeting: profile.isGreeting,
     performanceStance: control.performanceStance,
   });
+
+  const graphExecutorFns = resolveGraphExecutorFns();
+  if ((options.graphExecutionMode ?? 'auto') !== 'disabled' && graphExecutorFns.canExecuteGraphScaffold?.(setup.executionGraphScaffold)) {
+    const graph = setup.executionGraphScaffold!.planner.graph;
+    const workerNodes = graph.nodes.filter((node) => node.kind === 'worker');
+    const isDependentGraphChain = !!graphExecutorFns.getWorkerDependencyChain?.(graph, workerNodes);
+    try {
+      if (!graphExecutorFns.executeGraphScaffold) {
+        throw new Error('graph executor export unavailable');
+      }
+      const graphResult = await graphExecutorFns.executeGraphScaffold({
+        scaffold: setup.executionGraphScaffold!,
+        originalUserMessage: userMessage,
+        client,
+        staticPrompt,
+        dynamicPrompt,
+        runWorkerLoop: (workerOptions) => runAgentLoop(workerOptions.userMessage, workerOptions.history, {
+          runId: workerOptions.runId,
+          provider: workerOptions.provider,
+          apiKey: workerOptions.apiKey,
+          forcedAgentProfile: workerOptions.forcedAgentProfile,
+          allowedTools: workerOptions.allowedTools,
+          graphExecutionMode: workerOptions.graphExecutionMode,
+          model: workerOptions.model,
+          onStreamText: workerOptions.onStreamText,
+          onThinking: workerOptions.onThinking,
+          onToolActivity: workerOptions.onToolActivity,
+          onToolStream: workerOptions.onToolStream,
+          onProgress: workerOptions.onProgress,
+        }),
+        workerBaseOptions: {
+          runId,
+          provider: options.provider,
+          apiKey,
+          model: modelId,
+          onStreamText: undefined,
+          onThinking: undefined,
+          onToolActivity: undefined,
+          onToolStream: undefined,
+          onProgress: undefined,
+          graphExecutionMode: 'disabled',
+        },
+        onGraphEvent: runId ? (event) => {
+          appendRunEvent(runId, {
+            kind: event.kind,
+            phase: event.phase,
+            payload: event.payload,
+          });
+        } : undefined,
+        onGraphState: runId ? (snapshot) => {
+          upsertRunArtifact(
+            runId,
+            'execution_graph_state',
+            'Execution Graph State',
+            JSON.stringify(snapshot, null, 2),
+          );
+        } : undefined,
+      });
+      if (graphResult.handled && graphResult.response) {
+        onStreamText?.(graphResult.response);
+        onStreamEnd?.();
+        cleanupRunControl(runKey);
+        return { response: graphResult.response, toolCalls: [] };
+      }
+      if (isDependentGraphChain) {
+        const failureMessage = 'Graph execution could not validate the dependent worker chain, so the run was stopped before falling back into the legacy loop. Check the graph state and verification events in the run detail view.';
+        console.warn('[GraphExecutor] Dependent graph chain failed verification; stopping instead of falling back to classic loop.');
+        if (runId) {
+          appendRunEvent(runId, {
+            kind: 'execution_graph_chain_stopped',
+            phase: 'reviewing',
+            payload: {
+              message: failureMessage,
+              graphId: graph.id,
+              workerNodeIds: workerNodes.map((node) => node.id),
+            },
+          });
+        }
+        onStreamText?.(failureMessage);
+        onStreamEnd?.();
+        cleanupRunControl(runKey);
+        return { response: failureMessage, toolCalls: [] };
+      }
+    } catch (error: any) {
+      if (isDependentGraphChain) {
+        const failureMessage = `Graph execution failed before the dependent worker chain could complete: ${error?.message || String(error)}`;
+        console.warn(`[GraphExecutor] ${failureMessage}`);
+        if (runId) {
+          appendRunEvent(runId, {
+            kind: 'execution_graph_chain_stopped',
+            phase: 'reviewing',
+            payload: {
+              message: failureMessage,
+              graphId: graph.id,
+              workerNodeIds: workerNodes.map((node) => node.id),
+            },
+          });
+        }
+        onStreamText?.(failureMessage);
+        onStreamEnd?.();
+        cleanupRunControl(runKey);
+        return { response: failureMessage, toolCalls: [] };
+      }
+      console.warn(`[GraphExecutor] Falling back to classic loop: ${error?.message || String(error)}`);
+      if (runId) {
+        appendRunEvent(runId, {
+          kind: 'execution_graph_scaffold_fallback',
+          phase: 'planning',
+          payload: { message: error?.message || String(error) },
+        });
+      }
+    }
+  }
 
   if (false && shouldCreateExecutionPlan(userMessage, profile)) { // DISABLED: plan creation commented out
     let executionPlanText: string | null = null;
@@ -506,6 +707,10 @@ export async function runAgentLoop(
 
   // ── Prepare tools ──
   let tools = getToolsForGroup(profile.toolGroup);
+  if (options.allowedTools && options.allowedTools.length > 0) {
+    const allowed = new Set(options.allowedTools);
+    tools = tools.filter((tool) => allowed.has(tool.name));
+  }
   if (executionPlan && executionPlan.disallowedTools.length > 0) {
     tools = filterTools(tools, executionPlan.disallowedTools);
   }
@@ -535,8 +740,6 @@ export async function runAgentLoop(
     onToolStream,
   };
 
-  const YTDLP_SUGGEST_RE = /\b(video|youtube|download|clip|watch|stream|vimeo|twitch)\b/i;
-  let ytdlpSuggested = false;
   let guiBatchNudgeSent = false;
   const guiBatchNudgeAt = control.performanceStance === 'aggressive'
     ? 1
@@ -550,6 +753,10 @@ export async function runAgentLoop(
       : WRAP_UP_THRESHOLD;
   const startTime = Date.now();
   let finalText = '';
+  const browserExecutionSketch = setup.browserExecutionSketch;
+  let currentBrowserSketchStep = 0;
+  let announcedBrowserSketchStep = -1;
+  let swarmCompleted = false;
 
   // ═══════════════════════════════════
   // Iteration Loop
@@ -660,12 +867,22 @@ export async function runAgentLoop(
       messages.push({ role: 'user', content: `[SYSTEM] ${dispatchCtx.toolCallCount} tool calls used (limit: ${MAX_ITERATIONS}). Wrap up.` });
     }
 
+    if (browserExecutionSketch
+        && currentBrowserSketchStep < browserExecutionSketch.steps.length
+        && announcedBrowserSketchStep !== currentBrowserSketchStep) {
+      messages.push({
+        role: 'user',
+        content: buildBrowserStepControllerPrompt(browserExecutionSketch, currentBrowserSketchStep),
+      });
+      announcedBrowserSketchStep = currentBrowserSketchStep;
+    }
+
     // ── LLM Call ──
     let iterationText = '';
     let response: LLMResponse;
 
     try {
-      response = await client.chat(messages, profile.isGreeting ? [] : dispatchCtx.tools, staticPrompt, dynamicPrompt, (chunk) => {
+      response = await client.chat(messages, profile.isGreeting || swarmCompleted ? [] : dispatchCtx.tools, staticPrompt, dynamicPrompt, (chunk) => {
         iterationText += chunk;
         onStreamText?.(chunk);
       }, { signal: control.abortController.signal });
@@ -705,6 +922,8 @@ export async function runAgentLoop(
     }
 
     if (toolUseBlocks.length === 0) {
+      const completedSketchStep = extractStepDoneMarker(responseText);
+      const cleanResponseText = stripStepDoneMarkers(responseText);
       const isShortNarration = iteration === 0 && responseText.length < 300 && NARRATION_RE.test(responseText) && dispatchCtx.toolCallCount === 0;
 
       if (isShortNarration && iteration < MAX_ITERATIONS - 1) {
@@ -729,12 +948,56 @@ export async function runAgentLoop(
         continue;
       }
 
-      finalText = responseText;
+      if (browserExecutionSketch && currentBrowserSketchStep < browserExecutionSketch.steps.length) {
+        const expectedStep = currentBrowserSketchStep + 1;
+        const totalSteps = browserExecutionSketch.steps.length;
+
+        if (completedSketchStep !== null && completedSketchStep >= expectedStep) {
+          // Advance to the completed step (may jump multiple steps if LLM
+          // emitted [STEP_DONE:1] [STEP_DONE:2] [STEP_DONE:3] in one response)
+          currentBrowserSketchStep = completedSketchStep;
+          announcedBrowserSketchStep = -1;
+
+          if (currentBrowserSketchStep >= totalSteps) {
+            // ALL steps are done — let the response through, don't force continuation
+            finalText = cleanResponseText;
+            if (runId) {
+              appendRunEvent(runId, {
+                kind: 'assistant_response',
+                phase: 'llm',
+                payload: { iteration, text: cleanResponseText.slice(0, 1000) },
+              });
+            }
+            break;
+          }
+
+          // More steps remain — continue to the next one
+          if (iteration < MAX_ITERATIONS - 1) {
+            onStreamText?.('\n\n__RESET__');
+            messages.push({ role: 'assistant', content: cleanResponseText || `[STEP ${completedSketchStep} COMPLETE]` });
+            messages.push({
+              role: 'user',
+              content: `[SYSTEM] Step ${completedSketchStep} is complete. Continue with step ${currentBrowserSketchStep + 1}/${totalSteps} now.`,
+            });
+            continue;
+          }
+        } else if (currentBrowserSketchStep < totalSteps - 1 && iteration < MAX_ITERATIONS - 1) {
+          onStreamText?.('\n\n__RESET__');
+          messages.push({ role: 'assistant', content: cleanResponseText || response.content as any });
+          messages.push({
+            role: 'user',
+            content: `[SYSTEM] Do not conclude the overall task yet. You are still on step ${expectedStep}/${totalSteps}. When step ${expectedStep} is complete, include [STEP_DONE:${expectedStep}] in your next text response and then continue to the next step.`,
+          });
+          continue;
+        }
+      }
+
+      finalText = cleanResponseText;
       if (runId) {
         appendRunEvent(runId, {
           kind: 'assistant_response',
           phase: 'llm',
-          payload: { iteration, text: responseText.slice(0, 1000) },
+          payload: { iteration, text: cleanResponseText.slice(0, 1000) },
         });
       }
       break;
@@ -746,6 +1009,20 @@ export async function runAgentLoop(
 
     const toolResults = await dispatchTools(toolUseBlocks, dispatchCtx);
     messages.push({ role: 'user', content: toolResults as any });
+
+    const successfulSwarmOnlyTurn =
+      isExplicitSwarmRequest(userMessage) &&
+      toolUseBlocks.length > 0 &&
+      toolUseBlocks.every(block => block.name === 'agent_spawn') &&
+      toolResults.every(result => !String(result.content || '').startsWith('[Error'));
+
+    if (successfulSwarmOnlyTurn) {
+      swarmCompleted = true;
+      messages.push({
+        role: 'user',
+        content: '[SYSTEM] The swarm execution is complete. Do not call any more tools. Summarize the swarm results only.',
+      });
+    }
 
     // Escalation notice
     if (dispatchCtx.escalatedToFull && !messages.some(m =>
@@ -760,13 +1037,6 @@ export async function runAgentLoop(
     if (iteration === MAX_ITERATIONS - 1) {
       finalText = responseText || '[Reached iteration limit.]';
     }
-  }
-
-  if (!ytdlpSuggested && YTDLP_SUGGEST_RE.test(finalText) && profile.agentProfile !== 'ytdlp') {
-    ytdlpSuggested = true;
-    const hint = '\n\nI have an Extractor agent that can find and download videos automatically — type `/extractor` or ask me to use it.';
-    options.onStreamText?.(hint);
-    finalText += hint;
   }
 
   onStreamEnd?.();
@@ -834,7 +1104,26 @@ export async function runAgentLoop(
   const browserToolCalls = dispatchCtx.allToolCalls.filter(tc =>
     tc.name.startsWith('browser_') && tc.status === 'success',
   );
-  if (browserToolCalls.length >= 2 && finalText && !finalText.startsWith('[Cancelled')) {
+  const formAwareBrowserCalls = browserToolCalls.filter(tc =>
+    tc.name === 'browser_fill_field'
+    || tc.name === 'browser_run_harness'
+    || tc.name === 'browser_register_harness'
+    || tc.name === 'browser_detect_form'
+    || tc.name === 'browser_focus_field',
+  );
+  const shouldSkipPlaybookSave = formAwareBrowserCalls.length >= 2;
+
+  if (
+    !shouldSkipPlaybookSave &&
+    browserToolCalls.length >= 2 &&
+    finalText &&
+    !finalText.startsWith('[Cancelled') &&
+    shouldAutoSavePlaybook(userMessage, browserToolCalls.map(tc => ({
+      name: tc.name,
+      input: tc.input || {},
+      summary: tc.detail || tc.name,
+    })))
+  ) {
     try {
       const browserRuntimeMs = browserToolCalls.reduce((sum, tc) => sum + (tc.durationMs || 0), 0);
       const browserStepCount = browserToolCalls.length;
@@ -843,7 +1132,7 @@ export async function runAgentLoop(
         input: tc.input || {},
         summary: tc.detail || tc.name,
       }));
-      const currentBrowserUrl = getCurrentUrl();
+      const currentBrowserUrl = getCurrentUrl(runId ? { runId } : undefined);
 
       if (profile.agentProfile === 'bloodhound' && !getUnrestrictedMode()) {
         const validation = await validatePlaybookCandidate(userMessage, serializableBrowserCalls, {
