@@ -125,13 +125,11 @@ export default function App() {
   return (
     <div className="flex h-screen w-screen overflow-hidden rounded-[10px] border-[2px] border-white/[0.04]">
       <Sidebar
-        activeView={activeView}
         onViewChange={setActiveView}
         onNewChat={handleNewChat}
         onLoadConversation={handleLoadConversation}
         onOpenProcess={handleOpenProcess}
-        collapsed={sidebarCollapsed}
-        onToggleCollapse={() => setSidebarCollapsed(v => !v)}
+        chatKey={chatKey}
       />
 
       <div
