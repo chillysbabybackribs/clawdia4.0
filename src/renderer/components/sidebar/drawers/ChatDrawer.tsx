@@ -125,14 +125,20 @@ export default function ChatDrawer({ onNewChat, onLoadConversation, onOpenProces
           <div className="mb-1">
             <div className="px-3 py-1.5 text-[9px] font-semibold text-text-secondary/40 uppercase tracking-wider">Active</div>
             {filteredActive.map(proc => (
-              <button key={proc.id} onClick={() => handleProcessClick(proc)}
-                className="no-drag w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-white/[0.04] transition-colors cursor-pointer">
-                <StatusDot status={proc.status} />
-                <div className="flex-1 min-w-0">
-                  <div className="text-[11px] text-text-primary truncate">{proc.summary.slice(0, 30)}</div>
-                  <div className="text-[9px] text-text-secondary/50 mt-0.5">{timeAgo(proc.startedAt)}</div>
-                </div>
-              </button>
+              <div key={proc.id} className="flex items-center gap-2 px-3 py-2 hover:bg-white/[0.04] transition-colors group">
+                <button onClick={() => handleProcessClick(proc)} className="no-drag flex items-center gap-2 flex-1 min-w-0 text-left cursor-pointer">
+                  <StatusDot status={proc.status} />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[11px] text-text-primary truncate">{proc.summary.slice(0, 30)}</div>
+                    <div className="text-[9px] text-text-secondary/50 mt-0.5">{timeAgo(proc.startedAt)}</div>
+                  </div>
+                </button>
+                {proc.status === 'needs_human' && (
+                  <button onClick={() => onOpenProcess(proc.id)}
+                    className="no-drag flex-shrink-0 text-[12px] text-[#e8a020] hover:text-text-primary transition-colors cursor-pointer"
+                    title="Respond">→</button>
+                )}
+              </div>
             ))}
           </div>
         )}
