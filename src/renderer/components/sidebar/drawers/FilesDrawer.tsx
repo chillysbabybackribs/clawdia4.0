@@ -92,17 +92,17 @@ export default function FilesDrawer({ onAddContext }: FilesDrawerProps) {
         <div
           role="button"
           onClick={() => entry.type === 'dir' ? toggleDir(entry) : handleFileClick(entry)}
-          className="flex items-center gap-1.5 px-2 py-[3px] hover:bg-white/[0.04] transition-colors cursor-pointer group"
+          className="flex items-center gap-1.5 px-2 py-[3px] hover:bg-border-subtle transition-colors cursor-pointer group"
           style={{ paddingLeft: `${8 + indent}px` }}
         >
           <span className="text-[11px] flex-shrink-0">
             {entry.type === 'dir' ? (isExpanded ? '📂' : '📁') : fileIcon(entry.name)}
           </span>
-          <span className={`text-[11px] flex-1 truncate ${entry.type === 'dir' ? 'text-text-secondary/60' : 'text-text-secondary/50'}`}>
+          <span className={`text-[11px] flex-1 truncate ${entry.type === 'dir' ? 'text-text-secondary' : 'text-text-secondary'}`}>
             {entry.name}
           </span>
           {entry.type === 'file' && (
-            <span className="text-[9px] text-text-secondary/20 flex-shrink-0">
+            <span className="text-[9px] text-text-muted flex-shrink-0">
               {entry.name.split('.').pop()?.toLowerCase()}
             </span>
           )}
@@ -118,48 +118,48 @@ export default function FilesDrawer({ onAddContext }: FilesDrawerProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="px-3 py-3 border-b border-[#141420] flex-shrink-0">
+      <div className="px-3 py-3 border-b border-border flex-shrink-0">
         <div className="text-[11px] font-semibold text-text-primary mb-2">Files</div>
         <div className="relative">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"
-            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-secondary/40 pointer-events-none">
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-tertiary pointer-events-none">
             <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
           <input
             type="text" placeholder="Search files..."
             value={search} onChange={e => setSearch(e.target.value)}
-            className="w-full h-[26px] pl-7 pr-2 rounded bg-white/[0.04] border border-[#1a1a2a] text-[11px] text-text-primary placeholder-text-secondary/40 outline-none focus:border-accent/30 transition-all"
+            className="w-full h-[26px] pl-7 pr-2 rounded bg-border-subtle border border-border text-[11px] text-text-primary placeholder-text-tertiary outline-none focus:border-accent/30 transition-all"
           />
         </div>
       </div>
 
       {/* Pinned */}
       <div className="flex-shrink-0">
-        <div className="px-3 py-1.5 text-[9px] font-semibold text-text-secondary/40 uppercase tracking-wider">Pinned</div>
+        <div className="px-3 py-1.5 text-[9px] font-semibold text-text-tertiary uppercase tracking-wider">Pinned</div>
         {PINNED.map(({ label, path }) => (
           <button key={path} onClick={() => { setRoot(path); setExpanded({}); setSearch(''); }}
-            className={`no-drag w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-white/[0.04] transition-colors cursor-pointer
-              ${root === path ? 'text-text-primary' : 'text-text-secondary/50'}`}>
+            className={`no-drag w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-border-subtle transition-colors cursor-pointer
+              ${root === path ? 'text-text-primary' : 'text-text-secondary'}`}>
             <span className="text-[11px]">
               {label === 'Home' ? '🏠' : label === 'Desktop' ? '🖥' : '⬇'}
             </span>
             <span className="text-[11px]">{label}</span>
           </button>
         ))}
-        <div className="h-px bg-[#111120] my-1" />
+        <div className="h-px bg-surface-1 my-1" />
       </div>
 
       {/* Tree */}
       <div className="flex-1 overflow-y-auto min-h-0">
-        <div className="px-3 py-1.5 text-[9px] font-semibold text-text-secondary/40 uppercase tracking-wider truncate">{root}</div>
+        <div className="px-3 py-1.5 text-[9px] font-semibold text-text-tertiary uppercase tracking-wider truncate">{root}</div>
         {filteredEntries.map(entry => renderEntry(entry))}
         {filteredEntries.length === 0 && (
-          <div className="px-3 py-2 text-[11px] text-text-secondary/30">
+          <div className="px-3 py-2 text-[11px] text-text-muted">
             {search ? 'No matches' : 'Empty folder'}
           </div>
         )}
-        <div className="h-px bg-[#111120] my-2" />
-        <div className="px-3 pb-3 text-[10px] text-text-secondary/30">Click a file to add it to the current chat as context.</div>
+        <div className="h-px bg-surface-1 my-2" />
+        <div className="px-3 pb-3 text-[10px] text-text-muted">Click a file to add it to the current chat as context.</div>
       </div>
     </div>
   );

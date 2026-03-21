@@ -25,8 +25,8 @@ function RailIcon({
       title={title}
       className={`no-drag relative flex items-center justify-center w-[34px] h-[34px] rounded-lg transition-all cursor-pointer flex-shrink-0
         ${active
-          ? 'bg-[#161624] text-text-primary'
-          : 'text-[#333] hover:text-[#666] hover:bg-[#111120]'
+          ? 'bg-surface-1 text-text-primary'
+          : 'text-text-muted hover:text-text-tertiary hover:bg-surface-1'
         }`}
     >
       {active && (
@@ -86,13 +86,13 @@ const MODES: { mode: DrawerMode; title: string }[] = [
 
 export default function Rail({ activeMode, onModeChange, onSettings }: RailProps) {
   return (
-    <div className="flex flex-col items-center w-[48px] flex-shrink-0 py-2.5 gap-1 bg-[#0a0a12] border-r border-[#141420]">
+    <div className="flex flex-col items-center w-[48px] flex-shrink-0 py-2.5 gap-1 bg-surface-0 border-r border-border">
       {/* Brand */}
       <div className="drag-region flex items-center justify-center w-[28px] h-[28px] rounded-lg bg-accent flex-shrink-0 mb-2">
         <span className="text-[11px] font-black text-white select-none">C</span>
       </div>
 
-      <div className="w-[18px] h-px bg-[#161622] flex-shrink-0" />
+      <div className="w-[18px] h-px bg-surface-1 flex-shrink-0" />
 
       {/* Mode icons */}
       {MODES.map(({ mode, title }) => (

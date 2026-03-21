@@ -57,7 +57,7 @@ export default function Sidebar({
       />
 
       {drawerOpen && (
-        <div className="w-[210px] flex-shrink-0 bg-[#0c0c16] border-r border-[#141420] flex flex-col overflow-hidden">
+        <div className="w-[210px] flex-shrink-0 bg-surface-0 border-r border-border flex flex-col overflow-hidden">
           {activeMode === 'chat' && (
             <ChatDrawer
               onNewChat={onNewChat}

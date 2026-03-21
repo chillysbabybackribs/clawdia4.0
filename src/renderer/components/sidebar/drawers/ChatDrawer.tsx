@@ -41,7 +41,7 @@ function StatusDot({ status }: { status: ProcessInfo['status'] }) {
   if (status === 'awaiting_approval' || status === 'needs_human') {
     return <span className="w-[7px] h-[7px] rounded-full bg-[#e8a020] flex-shrink-0 shadow-[0_0_5px_rgba(232,160,32,0.4)]" />;
   }
-  return <span className="w-[7px] h-[7px] rounded-full bg-[#1e1e2e] flex-shrink-0" />;
+  return <span className="w-[7px] h-[7px] rounded-full bg-surface-2 flex-shrink-0" />;
 }
 
 export default function ChatDrawer({ onNewChat, onLoadConversation, onOpenProcess, chatKey }: ChatDrawerProps) {
@@ -91,7 +91,7 @@ export default function ChatDrawer({ onNewChat, onLoadConversation, onOpenProces
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-3 border-b border-[#141420] flex-shrink-0">
+      <div className="flex items-center justify-between px-3 py-3 border-b border-border flex-shrink-0">
         <span className="text-[11px] font-semibold text-text-primary">Conversations</span>
         <button
           onClick={onNewChat}
@@ -105,7 +105,7 @@ export default function ChatDrawer({ onNewChat, onLoadConversation, onOpenProces
       <div className="px-2.5 py-2 flex-shrink-0">
         <div className="relative">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"
-            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-secondary/40 pointer-events-none">
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-tertiary pointer-events-none">
             <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
           <input
@@ -113,7 +113,7 @@ export default function ChatDrawer({ onNewChat, onLoadConversation, onOpenProces
             placeholder="Search..."
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="w-full h-[26px] pl-7 pr-2 rounded bg-white/[0.04] border border-[#1a1a2a] text-[11px] text-text-primary placeholder-text-secondary/40 outline-none focus:border-accent/30 transition-all"
+            className="w-full h-[26px] pl-7 pr-2 rounded bg-border-subtle border border-border text-[11px] text-text-primary placeholder-text-tertiary outline-none focus:border-accent/30 transition-all"
           />
         </div>
       </div>
@@ -123,14 +123,14 @@ export default function ChatDrawer({ onNewChat, onLoadConversation, onOpenProces
         {/* Active */}
         {filteredActive.length > 0 && (
           <div className="mb-1">
-            <div className="px-3 py-1.5 text-[9px] font-semibold text-text-secondary/40 uppercase tracking-wider">Active</div>
+            <div className="px-3 py-1.5 text-[9px] font-semibold text-text-tertiary uppercase tracking-wider">Active</div>
             {filteredActive.map(proc => (
-              <div key={proc.id} className="flex items-center gap-2 px-3 py-2 hover:bg-white/[0.04] transition-colors group">
+              <div key={proc.id} className="flex items-center gap-2 px-3 py-2 hover:bg-border-subtle transition-colors group">
                 <button onClick={() => handleProcessClick(proc)} className="no-drag flex items-center gap-2 flex-1 min-w-0 text-left cursor-pointer">
                   <StatusDot status={proc.status} />
                   <div className="flex-1 min-w-0">
                     <div className="text-[11px] text-text-primary truncate">{proc.summary.slice(0, 30)}</div>
-                    <div className="text-[9px] text-text-secondary/50 mt-0.5">{timeAgo(proc.startedAt)}</div>
+                    <div className="text-[9px] text-text-tertiary mt-0.5">{timeAgo(proc.startedAt)}</div>
                   </div>
                 </button>
                 {proc.status === 'needs_human' && (
@@ -146,15 +146,15 @@ export default function ChatDrawer({ onNewChat, onLoadConversation, onOpenProces
         {/* History */}
         {filteredConvs.length > 0 && (
           <div>
-            <div className="px-3 py-1.5 text-[9px] font-semibold text-text-secondary/40 uppercase tracking-wider">History</div>
+            <div className="px-3 py-1.5 text-[9px] font-semibold text-text-tertiary uppercase tracking-wider">History</div>
             {filteredConvs.map(conv => (
               <div key={conv.id} role="button" tabIndex={0}
                 onClick={() => onLoadConversation(conv.id)}
                 onKeyDown={e => { if (e.key === 'Enter') onLoadConversation(conv.id); }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-white/[0.04] transition-colors cursor-pointer group outline-none">
-                <span className="w-[4px] h-[4px] rounded-full bg-[#1e1e2e] flex-shrink-0" />
-                <span className="flex-1 text-[11px] text-text-secondary/60 truncate">{conv.title}</span>
-                <span className="text-[9px] text-text-secondary/30 flex-shrink-0">{convTimeAgo(conv.updatedAt)}</span>
+                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-border-subtle transition-colors cursor-pointer group outline-none">
+                <span className="w-[4px] h-[4px] rounded-full bg-surface-2 flex-shrink-0" />
+                <span className="flex-1 text-[11px] text-text-secondary truncate">{conv.title}</span>
+                <span className="text-[9px] text-text-muted flex-shrink-0">{convTimeAgo(conv.updatedAt)}</span>
                 <button
                   onClick={e => handleDeleteConv(conv.id, e)}
                   className="flex-shrink-0 w-4 h-4 flex items-center justify-center rounded opacity-0 group-hover:opacity-40 hover:!opacity-100 hover:bg-red-500/20 hover:text-red-400 transition-all cursor-pointer"
@@ -169,7 +169,7 @@ export default function ChatDrawer({ onNewChat, onLoadConversation, onOpenProces
         )}
 
         {filteredActive.length === 0 && filteredConvs.length === 0 && (
-          <div className="px-3 py-4 text-[11px] text-text-secondary/30 text-center">
+          <div className="px-3 py-4 text-[11px] text-text-muted text-center">
             {search ? 'No results' : 'No conversations yet'}
           </div>
         )}
