@@ -71,7 +71,7 @@ export default function ChatDrawer({ onNewChat, onLoadConversation, onOpenProces
   const [processes, setProcesses] = useState<ProcessInfo[]>([]);
   const [conversations, setConversations] = useState<ConvItem[]>([]);
   const [search, setSearch] = useState('');
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const api = (window as any).clawdia;
 
@@ -108,7 +108,7 @@ export default function ChatDrawer({ onNewChat, onLoadConversation, onOpenProces
   };
 
   const toggleGroup = (label: string) => {
-    setCollapsed(prev => {
+    setExpanded(prev => {
       const next = new Set(prev);
       next.has(label) ? next.delete(label) : next.add(label);
       return next;
@@ -183,7 +183,7 @@ export default function ChatDrawer({ onNewChat, onLoadConversation, onOpenProces
         {!search && groups && groups.length > 0 && (
           <div>
             {groups.map(({ label, convs }) => {
-              const isCollapsed = collapsed.has(label);
+              const isCollapsed = !expanded.has(label);
               return (
                 <div key={label}>
                   {/* Group header — clickable to collapse */}
