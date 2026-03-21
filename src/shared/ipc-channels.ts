@@ -9,6 +9,7 @@ export const IPC = {
   CHAT_LIST: 'chat:list',
   CHAT_LOAD: 'chat:load',
   CHAT_DELETE: 'chat:delete',
+  CHAT_OPEN_ATTACHMENT: 'chat:open-attachment',
   BROWSER_NAVIGATE: 'browser:navigate',
   BROWSER_BACK: 'browser:back',
   BROWSER_FORWARD: 'browser:forward',
@@ -50,6 +51,16 @@ export const IPC = {
   RUN_RESOLVE_HUMAN_INTERVENTION: 'run:human-intervention:resolve',
   POLICY_LIST: 'policy:list',
   CALENDAR_LIST: 'calendar:list',
+  // Filesystem
+  FS_READ_DIR: 'fs:read-dir',
+  FS_READ_FILE: 'fs:read-file',
+  // Desktop
+  DESKTOP_LIST_APPS: 'desktop:list-apps',
+  DESKTOP_FOCUS_APP: 'desktop:focus-app',
+  DESKTOP_KILL_APP: 'desktop:kill-app',
+  // Browser sessions
+  BROWSER_LIST_SESSIONS: 'browser:list-sessions',
+  BROWSER_CLEAR_SESSION: 'browser:clear-session',
 } as const;
 
 export const IPC_EVENTS = {
@@ -69,4 +80,6 @@ export const IPC_EVENTS = {
   // Process events (pushed from main to renderer)
   PROCESS_LIST_CHANGED: 'process:list',
   CALENDAR_EVENTS_CHANGED: 'calendar:events-changed',
+  // Swarm events (pushed from main to renderer)
+  SWARM_STATE_CHANGED: 'swarm:state-changed',
 } as const;
