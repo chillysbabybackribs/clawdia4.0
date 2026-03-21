@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 
 interface AppInfo {
   name: string;
@@ -11,24 +11,25 @@ export default function DesktopDrawer() {
   const [apps, setApps] = useState<AppInfo[]>([]);
   const [platformChecked, setPlatformChecked] = useState(false);
   const [isLinux, setIsLinux] = useState(true);
+  const platformCheckedRef = useRef(false);
   const api = (window as any).clawdia;
 
   const refresh = useCallback(async () => {
     if (!api) return;
     const list = await api.desktop.listApps().catch(() => null as AppInfo[] | null);
-    if (!platformChecked) {
-      // Main process returns null on non-Linux, [] on Linux with no windows
+    if (!platformCheckedRef.current) {
       setIsLinux(list !== null);
       setPlatformChecked(true);
+      platformCheckedRef.current = true;
     }
     setApps(list || []);
-  }, [platformChecked]);
+  }, []); // stable — reads platformCheckedRef by ref, not by closure
 
   useEffect(() => {
     refresh();
     const interval = setInterval(refresh, 5000);
     return () => clearInterval(interval);
-  }, [refresh]);
+  }, [refresh]); // refresh is now stable, effect only runs once
 
   const handleFocus = async (windowId: string) => {
     await api.desktop.focusApp(windowId).catch(() => {});

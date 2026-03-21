@@ -55,6 +55,7 @@ export default function FilesDrawer({ onAddContext }: FilesDrawerProps) {
     if (expanded[entry.path]) {
       setExpanded(prev => { const n = { ...prev }; delete n[entry.path]; return n; });
     } else {
+      if (!api) return;
       const children: FsEntry[] = await api.fs.readDir(entry.path) || [];
       children.sort((a, b) => {
         if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
