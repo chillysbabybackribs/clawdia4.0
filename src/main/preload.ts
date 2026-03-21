@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { MessageAttachment } from '../shared/types';
 
 function invoke<T = any>(channel: string, ...args: any[]): Promise<T> {
   return ipcRenderer.invoke(channel, ...args);
@@ -12,7 +13,8 @@ function on(channel: string, callback: (...args: any[]) => void): () => void {
 
 contextBridge.exposeInMainWorld('clawdia', {
   chat: {
-    send: (message: string, images?: any[]) => invoke('chat:send', message, images),
+    send: (message: string, attachments?: MessageAttachment[]) => invoke('chat:send', message, attachments),
+    openAttachment: (filePath: string) => invoke('chat:open-attachment', filePath),
     stop: () => invoke('chat:stop'),
     pause: () => invoke('chat:pause'),
     resume: () => invoke('chat:resume'),
@@ -45,6 +47,8 @@ contextBridge.exposeInMainWorld('clawdia', {
     matchHistory: (prefix: string) => invoke('browser:history-match', prefix),
     hide: () => invoke('browser:hide'),
     show: () => invoke('browser:show'),
+    listSessions: () => invoke('browser:list-sessions'),
+    clearSession: (domain: string) => invoke('browser:clear-session', domain),
     onUrlChanged: (cb: (url: string) => void) => on('browser:url-changed', cb),
     onTitleChanged: (cb: (title: string) => void) => on('browser:title-changed', cb),
     onLoading: (cb: (loading: boolean) => void) => on('browser:loading', cb),
@@ -93,6 +97,9 @@ contextBridge.exposeInMainWorld('clawdia', {
     list: (from?: string, to?: string) => invoke('calendar:list', from, to),
     onEventsChanged: (cb: (events: any[]) => void) => on('calendar:events-changed', cb),
   },
+  swarm: {
+    onStateChanged: (cb: (state: any) => void) => on('swarm:state-changed', cb),
+  },
   policy: {
     list: () => invoke('policy:list'),
   },
@@ -100,5 +107,14 @@ contextBridge.exposeInMainWorld('clawdia', {
     minimize: () => invoke('window:minimize'),
     maximize: () => invoke('window:maximize'),
     close: () => invoke('window:close'),
+  },
+  fs: {
+    readDir: (dirPath: string) => invoke('fs:read-dir', dirPath),
+    readFile: (filePath: string) => invoke('fs:read-file', filePath),
+  },
+  desktop: {
+    listApps: () => invoke('desktop:list-apps'),
+    focusApp: (windowId: string) => invoke('desktop:focus-app', windowId),
+    killApp: (pid: number) => invoke('desktop:kill-app', pid),
   },
 });
