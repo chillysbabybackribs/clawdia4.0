@@ -2,8 +2,11 @@
  * Clawdia 4.0 — Main Process
  */
 
-import { app, BrowserWindow, ipcMain, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, shell, session } from 'electron';
+import { execSync } from 'child_process';
+import * as fsSync from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { IPC, IPC_EVENTS } from '../shared/ipc-channels';
 import { runAgentLoop, cancelLoop, pauseLoop, resumeLoop, addContext } from './agent/loop';
 import { parseManualAgentProfileOverride } from './agent/agent-profile-override';
@@ -52,7 +55,10 @@ import {
   matchUrlHistory,
 } from './browser/manager';
 import { startCalendarWatcher, stopCalendarWatcher } from './calendar-watcher';
+import { initAgentSpawnExecutor } from './agent/agent-spawn-executor';
 import { calendarList } from './db/calendar';
+import type { MessageAttachment } from '../shared/types';
+import { buildUserMessageContent } from './db/conversations';
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
@@ -109,6 +115,7 @@ function createWindow(): void {
       initBrowser(mainWindow);
       initProcessManager(mainWindow);
       startCalendarWatcher(mainWindow);
+      initAgentSpawnExecutor(mainWindow);
     }
   });
 
@@ -145,12 +152,19 @@ function setupIpcHandlers(): void {
   });
   ipcMain.handle(IPC.WINDOW_CLOSE, () => mainWindow?.close());
 
-  ipcMain.handle(IPC.CHAT_SEND, async (_event, message: string) => {
+  ipcMain.handle(IPC.CHAT_SEND, async (_event, message: string, attachments?: MessageAttachment[]) => {
     const provider = getSelectedProvider();
     const apiKey = getApiKey(provider);
     if (!apiKey) return { error: `No API key set for ${provider}. Go to Settings to add your API key.` };
 
-    const { cleanedMessage, forcedAgentProfile } = parseManualAgentProfileOverride(message);
+    const safeAttachments = Array.isArray(attachments) ? attachments : [];
+    const synthesizedMessage = !message.trim() && safeAttachments.length > 0
+      ? safeAttachments.every((attachment) => attachment.kind === 'image')
+        ? `Please analyze the attached image${safeAttachments.length === 1 ? '' : 's'}.`
+        : `Please review the attached file${safeAttachments.length === 1 ? '' : 's'}.`
+      : message;
+
+    const { cleanedMessage, forcedAgentProfile } = parseManualAgentProfileOverride(synthesizedMessage);
     if (!cleanedMessage.trim()) {
       return { error: 'Agent override commands require a prompt, for example: /filesystem-agent find the exact file containing "..." or /bloodhound learn the fastest route to GitHub notifications' };
     }
@@ -167,9 +181,10 @@ function setupIpcHandlers(): void {
     // as "completed" since it's the foreground task).
     const processId = registerProcess(conversationId, cleanedMessage, provider, getSelectedModel(provider));
 
-    addMessage(conversationId, 'user', cleanedMessage);
+    addMessage(conversationId, 'user', message.trim(), undefined, safeAttachments);
     const history = getAnthropicHistory(conversationId);
     history.pop();
+    const initialUserContent = buildUserMessageContent(cleanedMessage, safeAttachments);
 
     try {
       const result = await runAgentLoop(cleanedMessage, history, {
@@ -190,6 +205,7 @@ function setupIpcHandlers(): void {
         onWorkflowPlanText: (chunk) => routeEvent(processId, IPC_EVENTS.CHAT_WORKFLOW_PLAN_TEXT, chunk),
         onWorkflowPlanEnd: () => routeEvent(processId, IPC_EVENTS.CHAT_WORKFLOW_PLAN_END, {}),
         onStreamEnd: () => routeEvent(processId, IPC_EVENTS.CHAT_STREAM_END, {}),
+        initialUserContent,
       });
 
       const finalStatus = result.response?.startsWith('[Cancelled by user]') ? 'cancelled' : 'completed';
@@ -254,6 +270,11 @@ function setupIpcHandlers(): void {
     deleteConversation(id);
     if (activeConversationId === id) activeConversationId = null;
     return { ok: true };
+  });
+  ipcMain.handle(IPC.CHAT_OPEN_ATTACHMENT, async (_e, filePath: string) => {
+    if (!filePath) return { ok: false, error: 'Missing file path' };
+    const result = await shell.openPath(filePath);
+    return result ? { ok: false, error: result } : { ok: true };
   });
 
   ipcMain.handle(IPC.API_KEY_GET, async (_e, provider?: string) => getApiKey(provider as any));
@@ -385,6 +406,98 @@ function setupIpcHandlers(): void {
 
   // ── Browser URL autocomplete ──
   ipcMain.handle(IPC.BROWSER_HISTORY_MATCH, async (_e, prefix: string) => matchUrlHistory(prefix));
+
+  // ── Filesystem ──
+  ipcMain.handle('fs:read-dir', async (_event, dirPath: string) => {
+    try {
+      const resolved = dirPath.startsWith('~')
+        ? dirPath.replace('~', os.homedir())
+        : dirPath;
+      const entries = fsSync.readdirSync(resolved, { withFileTypes: true });
+      return entries.map(e => ({
+        name: e.name,
+        type: e.isDirectory() ? 'dir' : 'file',
+        path: path.join(resolved, e.name),
+      }));
+    } catch {
+      return [];
+    }
+  });
+
+  ipcMain.handle('fs:read-file', async (_event, filePath: string) => {
+    const resolved = filePath.startsWith('~')
+      ? filePath.replace('~', os.homedir())
+      : filePath;
+    const stat = fsSync.statSync(resolved);
+    if (stat.size > 500 * 1024) {
+      throw new Error(`File too large: ${Math.round(stat.size / 1024)}KB (max 500KB)`);
+    }
+    return fsSync.readFileSync(resolved, 'utf-8');
+  });
+
+  // ── Desktop app management ──
+  ipcMain.handle('desktop:list-apps', async () => {
+    if (process.platform !== 'linux') return null;
+    try {
+      const wmctrlOut = execSync('wmctrl -lp 2>/dev/null', { encoding: 'utf-8' });
+      const lines = wmctrlOut.trim().split('\n').filter(Boolean);
+      const apps: { name: string; pid: number; windowId: string; memoryMB: number }[] = [];
+      for (const line of lines) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 5) continue;
+        const windowId = parts[0];
+        const pid = parseInt(parts[2], 10);
+        if (!pid || pid <= 0) continue;
+        try {
+          const comm = fsSync.readFileSync(`/proc/${pid}/comm`, 'utf-8').trim();
+          const statm = fsSync.readFileSync(`/proc/${pid}/statm`, 'utf-8').trim();
+          const pages = parseInt(statm.split(' ')[1], 10);
+          const memoryMB = Math.round((pages * 4096) / (1024 * 1024));
+          const title = parts.slice(4).join(' ');
+          apps.push({ name: title || comm, pid, windowId, memoryMB });
+        } catch {
+          continue;
+        }
+      }
+      const seen = new Set<number>();
+      return apps.filter(a => { if (seen.has(a.pid)) return false; seen.add(a.pid); return true; });
+    } catch {
+      return [];
+    }
+  });
+
+  ipcMain.handle('desktop:focus-app', async (_event, windowId: string) => {
+    if (process.platform !== 'linux') return;
+    try {
+      execSync(`wmctrl -ia ${windowId}`);
+    } catch { /* ignore */ }
+  });
+
+  ipcMain.handle('desktop:kill-app', async (_event, pid: number) => {
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch { /* process may already be gone */ }
+  });
+
+  // ── Browser session management ──
+  ipcMain.handle('browser:list-sessions', async () => {
+    const cookies = await session.defaultSession.cookies.get({});
+    const domains = new Set<string>();
+    for (const cookie of cookies) {
+      const domain = cookie.domain.replace(/^\./, '').toLowerCase();
+      if (domain) domains.add(domain);
+    }
+    return Array.from(domains).sort();
+  });
+
+  ipcMain.handle('browser:clear-session', async (_event, domain: string) => {
+    const cookies = await session.defaultSession.cookies.get({ domain });
+    for (const cookie of cookies) {
+      const cookieDomain = cookie.domain.replace(/^\./, '');
+      const url = `https://${cookieDomain}${cookie.path || '/'}`;
+      await session.defaultSession.cookies.remove(url, cookie.name);
+    }
+  });
 }
 
 app.whenReady().then(createWindow);
