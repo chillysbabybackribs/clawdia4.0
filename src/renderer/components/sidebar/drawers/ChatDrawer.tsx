@@ -22,16 +22,39 @@ function timeAgo(ts: number): string {
   return `${Math.floor(secs / 86400)}d`;
 }
 
-function convTimeAgo(isoDate: string): string {
-  const diff = Date.now() - new Date(isoDate).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'Now';
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d`;
-  return new Date(isoDate).toLocaleDateString([], { month: 'short', day: 'numeric' });
+function convTime(isoDate: string): string {
+  const d = new Date(isoDate);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+// Groups: Today, Yesterday, This Week, then "Month Year" buckets
+type Group = { label: string; convs: ConvItem[] };
+
+function groupConversations(convs: ConvItem[]): Group[] {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfYesterday = startOfToday - 86400000;
+  const startOfWeek = startOfToday - now.getDay() * 86400000;
+
+  const groups: Map<string, ConvItem[]> = new Map();
+
+  const getLabel = (isoDate: string): string => {
+    const ts = new Date(isoDate).getTime();
+    if (ts >= startOfToday) return 'Today';
+    if (ts >= startOfYesterday) return 'Yesterday';
+    if (ts >= startOfWeek) return 'This Week';
+    const d = new Date(isoDate);
+    return d.toLocaleDateString([], { month: 'long', year: 'numeric' });
+  };
+
+  for (const conv of convs) {
+    const label = getLabel(conv.updatedAt);
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label)!.push(conv);
+  }
+
+  // Preserve insertion order (convs arrive newest-first from API)
+  return Array.from(groups.entries()).map(([label, c]) => ({ label, convs: c }));
 }
 
 function StatusDot({ status }: { status: ProcessInfo['status'] }) {
@@ -48,6 +71,7 @@ export default function ChatDrawer({ onNewChat, onLoadConversation, onOpenProces
   const [processes, setProcesses] = useState<ProcessInfo[]>([]);
   const [conversations, setConversations] = useState<ConvItem[]>([]);
   const [search, setSearch] = useState('');
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   const api = (window as any).clawdia;
 
@@ -83,10 +107,21 @@ export default function ChatDrawer({ onNewChat, onLoadConversation, onOpenProces
     }
   };
 
+  const toggleGroup = (label: string) => {
+    setCollapsed(prev => {
+      const next = new Set(prev);
+      next.has(label) ? next.delete(label) : next.add(label);
+      return next;
+    });
+  };
+
   const active = processes.filter(p => ['running', 'awaiting_approval', 'needs_human'].includes(p.status));
   const q = search.toLowerCase();
   const filteredActive = q ? active.filter(p => p.summary.toLowerCase().includes(q)) : active;
   const filteredConvs = q ? conversations.filter(c => c.title.toLowerCase().includes(q)) : conversations;
+
+  // When searching, show flat list; otherwise show grouped
+  const groups = search ? null : groupConversations(conversations);
 
   return (
     <div className="flex flex-col h-full">
@@ -120,7 +155,8 @@ export default function ChatDrawer({ onNewChat, onLoadConversation, onOpenProces
 
       {/* Scrollable body */}
       <div className="flex-1 overflow-y-auto min-h-0 scrollbar-thin">
-        {/* Active */}
+
+        {/* Active processes */}
         {filteredActive.length > 0 && (
           <div className="mb-1">
             <div className="px-3 py-1.5 text-[9px] font-semibold text-text-tertiary uppercase tracking-wider">Active</div>
@@ -143,18 +179,63 @@ export default function ChatDrawer({ onNewChat, onLoadConversation, onOpenProces
           </div>
         )}
 
-        {/* History */}
-        {filteredConvs.length > 0 && (
+        {/* History — grouped when not searching */}
+        {!search && groups && groups.length > 0 && (
           <div>
-            <div className="px-3 py-1.5 text-[9px] font-semibold text-text-tertiary uppercase tracking-wider">History</div>
+            {groups.map(({ label, convs }) => {
+              const isCollapsed = collapsed.has(label);
+              return (
+                <div key={label}>
+                  {/* Group header — clickable to collapse */}
+                  <button
+                    onClick={() => toggleGroup(label)}
+                    className="no-drag w-full flex items-center gap-1 px-3 py-1.5 hover:bg-border-subtle transition-colors cursor-pointer group/hdr"
+                  >
+                    <svg
+                      width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+                      className={`text-text-muted flex-shrink-0 transition-transform ${isCollapsed ? '-rotate-90' : ''}`}
+                    >
+                      <polyline points="6 9 12 15 18 9" />
+                    </svg>
+                    <span className="text-[9px] font-semibold text-text-tertiary uppercase tracking-wider flex-1 text-left">{label}</span>
+                    <span className="text-[9px] text-text-muted opacity-0 group-hover/hdr:opacity-100 transition-opacity">{convs.length}</span>
+                  </button>
+
+                  {/* Group rows */}
+                  {!isCollapsed && convs.map(conv => (
+                    <div key={conv.id} role="button" tabIndex={0}
+                      onClick={() => onLoadConversation(conv.id)}
+                      onKeyDown={e => { if (e.key === 'Enter') onLoadConversation(conv.id); }}
+                      className="w-full flex items-center gap-2 pl-6 pr-3 py-1 hover:bg-border-subtle transition-colors cursor-pointer group outline-none">
+                      <span className="flex-1 text-[11px] text-text-secondary truncate leading-snug">{conv.title}</span>
+                      <span className="text-[9px] text-text-muted flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">{convTime(conv.updatedAt)}</span>
+                      <button
+                        onClick={e => handleDeleteConv(conv.id, e)}
+                        className="flex-shrink-0 w-4 h-4 flex items-center justify-center rounded opacity-0 group-hover:opacity-40 hover:!opacity-100 hover:bg-red-500/20 hover:text-red-400 transition-all cursor-pointer"
+                      >
+                        <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                          <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Flat search results */}
+        {search && filteredConvs.length > 0 && (
+          <div>
+            <div className="px-3 py-1.5 text-[9px] font-semibold text-text-tertiary uppercase tracking-wider">Results</div>
             {filteredConvs.map(conv => (
               <div key={conv.id} role="button" tabIndex={0}
                 onClick={() => onLoadConversation(conv.id)}
                 onKeyDown={e => { if (e.key === 'Enter') onLoadConversation(conv.id); }}
                 className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-border-subtle transition-colors cursor-pointer group outline-none">
-                <span className="w-[4px] h-[4px] rounded-full bg-surface-2 flex-shrink-0" />
                 <span className="flex-1 text-[11px] text-text-secondary truncate">{conv.title}</span>
-                <span className="text-[9px] text-text-muted flex-shrink-0">{convTimeAgo(conv.updatedAt)}</span>
+                <span className="text-[9px] text-text-muted flex-shrink-0">{convTime(conv.updatedAt)}</span>
                 <button
                   onClick={e => handleDeleteConv(conv.id, e)}
                   className="flex-shrink-0 w-4 h-4 flex items-center justify-center rounded opacity-0 group-hover:opacity-40 hover:!opacity-100 hover:bg-red-500/20 hover:text-red-400 transition-all cursor-pointer"
@@ -168,10 +249,14 @@ export default function ChatDrawer({ onNewChat, onLoadConversation, onOpenProces
           </div>
         )}
 
-        {filteredActive.length === 0 && filteredConvs.length === 0 && (
+        {filteredActive.length === 0 && filteredConvs.length === 0 && conversations.length === 0 && (
           <div className="px-3 py-4 text-[11px] text-text-muted text-center">
-            {search ? 'No results' : 'No conversations yet'}
+            No conversations yet
           </div>
+        )}
+
+        {search && filteredConvs.length === 0 && filteredActive.length === 0 && (
+          <div className="px-3 py-4 text-[11px] text-text-muted text-center">No results</div>
         )}
       </div>
     </div>
