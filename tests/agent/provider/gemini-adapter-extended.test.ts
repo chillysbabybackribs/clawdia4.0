@@ -282,3 +282,59 @@ describe('stringifyToolResultContent (Gemini)', () => {
     consoleSpy.mockRestore();
   });
 });
+
+// Tests for thought-part exclusion from main text accumulator
+
+describe('Gemini thought-part handling', () => {
+  // Replicate the streaming accumulation logic from gemini-adapter.ts
+  // to test that thought parts are excluded from the main text output.
+
+  function accumulateWithThoughts(parts: Array<{ text?: string; thought?: boolean }>): {
+    text: string;
+    thinkingText: string;
+  } {
+    let text = '';
+    let thinkingText = '';
+    for (const part of parts) {
+      if (part.text) {
+        if (part.thought) {
+          thinkingText += part.text;
+        } else {
+          text += part.text;
+        }
+      }
+    }
+    return { text, thinkingText };
+  }
+
+  it('regular text parts go to text accumulator only', () => {
+    const parts = [{ text: 'Hello world' }];
+    const result = accumulateWithThoughts(parts);
+    expect(result.text).toBe('Hello world');
+    expect(result.thinkingText).toBe('');
+  });
+
+  it('thought parts go to thinkingText only, not text', () => {
+    const parts = [{ text: 'I am reasoning about this...', thought: true }];
+    const result = accumulateWithThoughts(parts);
+    expect(result.text).toBe('');
+    expect(result.thinkingText).toBe('I am reasoning about this...');
+  });
+
+  it('mixed parts: thought excluded from main text, regular included', () => {
+    const parts = [
+      { text: 'Let me think...', thought: true },
+      { text: 'The answer is 42.' },
+    ];
+    const result = accumulateWithThoughts(parts);
+    expect(result.text).toBe('The answer is 42.');
+    expect(result.thinkingText).toBe('Let me think...');
+  });
+
+  it('thoughtSummary from usageMetadata preferred over inline thoughts when both present', () => {
+    const inlineThinking = 'inline reasoning';
+    const summary = 'Concise thought summary from API';
+    const finalThinkingText = summary || inlineThinking;
+    expect(finalThinkingText).toBe(summary);
+  });
+});

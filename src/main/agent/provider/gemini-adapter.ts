@@ -9,7 +9,7 @@ import type {
   NormalizedToolDefinition,
   NormalizedToolResultBlock,
 } from './types';
-import { lookupModelMaxOutput } from './types';
+import { lookupModelMaxOutput, normalizeStopReason } from './types';
 
 const MODEL_MAX_OUTPUT: Record<string, number> = {
   'gemini-2.5-flash-lite': 16384,
@@ -20,6 +20,7 @@ const GEMINI_MAX_OUTPUT_FALLBACK = 16384;
 
 interface GeminiPart {
   text?: string;
+  thought?: boolean;
   inlineData?: {
     mimeType: string;
     data: string;
@@ -47,6 +48,7 @@ interface GeminiResponseChunk {
   usageMetadata?: {
     promptTokenCount?: number;
     candidatesTokenCount?: number;
+    thoughtSummary?: string;
   };
   modelVersion?: string;
   error?: {
@@ -279,6 +281,8 @@ export class GeminiProviderClient implements ProviderClient {
     if (!response.body) throw new Error('Gemini streaming response had no body.');
 
     let text = '';
+    let thinkingAccumulator = '';
+    let thoughtSummary = '';
     let stopReason = 'stop';
     let inputTokens = 0;
     let outputTokens = 0;
@@ -298,6 +302,9 @@ export class GeminiProviderClient implements ProviderClient {
       if (chunk.usageMetadata) {
         inputTokens = chunk.usageMetadata.promptTokenCount || inputTokens;
         outputTokens = chunk.usageMetadata.candidatesTokenCount || outputTokens;
+        if (chunk.usageMetadata.thoughtSummary) {
+          thoughtSummary = chunk.usageMetadata.thoughtSummary;
+        }
       }
 
       const candidate = chunk.candidates?.[0];
@@ -307,8 +314,12 @@ export class GeminiProviderClient implements ProviderClient {
       const parts = candidate.content?.parts || [];
       for (const part of parts) {
         if (part.text) {
-          text += part.text;
-          onText?.(part.text);
+          if (part.thought) {
+            thinkingAccumulator += part.text;
+          } else {
+            text += part.text;
+            onText?.(part.text);
+          }
         }
         if (part.functionCall) {
           // Prefer provider-supplied ID. If absent, generate a stable synthetic key
@@ -323,6 +334,9 @@ export class GeminiProviderClient implements ProviderClient {
         }
       }
     }
+
+    // thoughtSummary (post-stream) takes precedence over inline thought parts
+    const thinkingText = (thoughtSummary || thinkingAccumulator) || undefined;
 
     const content: NormalizedAssistantContentBlock[] = [];
     if (text) content.push({ type: 'text', text });
@@ -339,7 +353,7 @@ export class GeminiProviderClient implements ProviderClient {
 
     return {
       content,
-      stopReason,
+      stopReason: normalizeStopReason(stopReason),
       model: responseModel,
       usage: {
         inputTokens,
@@ -347,6 +361,7 @@ export class GeminiProviderClient implements ProviderClient {
         cacheReadTokens: 0,
         cacheCreateTokens: 0,
       },
+      thinkingText,
     };
   }
 }
