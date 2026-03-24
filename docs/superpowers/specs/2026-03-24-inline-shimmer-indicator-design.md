@@ -299,6 +299,15 @@ const handleStreamTextChunk = useCallback((chunk: string) => {
 }, [...]);
 ```
 
+### `handleStreamEndEvent` — replace status clear
+
+```typescript
+// Before:
+setStatusText('');
+// After:
+setShimmerText('');
+```
+
 ### `handleWorkflowPlanTextEvent` and `handleWorkflowPlanResetEvent` — remove status clear
 
 Both handlers call `setStatusText('')` as a side-clear (lines 553 and 560). Remove these lines — no replacement needed (workflow plan streaming has its own dedicated UI; shimmer is not involved):
