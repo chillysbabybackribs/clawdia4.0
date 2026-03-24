@@ -7,6 +7,7 @@
 
 import { getDb } from './database';
 import type { ProviderId, WorkflowStage } from '../../shared/types';
+import { maybeRecordSequence } from '../agent/bloodhound/recorder';
 
 export type RunStatus = 'running' | 'awaiting_approval' | 'needs_human' | 'completed' | 'failed' | 'cancelled';
 
@@ -100,6 +101,11 @@ export function completeRun(id: string, status: Exclude<RunStatus, 'running' | '
     SET status = ?, error = ?, completed_at = ?, updated_at = ?
     WHERE id = ?
   `).run(status, error || null, now, now, id);
+
+  // Non-blocking — Bloodhound records qualifying runs async
+  maybeRecordSequence(id, status).catch(err =>
+    console.warn('[Bloodhound] recording failed silently:', err.message)
+  );
 }
 
 export function setRunStatus(id: string, status: Extract<RunStatus, 'running' | 'awaiting_approval' | 'needs_human'>, error?: string): void {
