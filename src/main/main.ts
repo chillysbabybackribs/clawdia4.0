@@ -61,6 +61,9 @@ import { initAgentSpawnExecutor } from './agent/agent-spawn-executor';
 import { calendarList } from './db/calendar';
 import type { MessageAttachment } from '../shared/types';
 import { buildUserMessageContent } from './db/conversations';
+import { identityStore } from './autonomy/identity-store';
+import { proactiveDetector } from './autonomy/proactive-detector';
+import { taskScheduler } from './autonomy/task-scheduler';
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
@@ -116,6 +119,11 @@ function createWindow(): void {
     if (mainWindow) {
       initBrowser(mainWindow);
       initProcessManager(mainWindow);
+      // Initialize task scheduler — runs stored cron jobs
+      taskScheduler.start(async (prompt, taskId) => {
+        console.log(`[Scheduler] Running task ${taskId}: ${prompt.slice(0, 60)}`);
+        // TODO (Phase 2): wire to process-manager background dispatch
+      });
       startCalendarWatcher(mainWindow);
       initAgentSpawnExecutor(mainWindow);
     }
@@ -190,6 +198,7 @@ function setupIpcHandlers(): void {
     const processId = processManager.registerProcess(conversationId, cleanedMessage, provider, getSelectedModel(provider));
 
     addMessage(conversationId, 'user', message.trim(), undefined, safeAttachments);
+    proactiveDetector.recordMentions(message.trim());
     const history = getAnthropicHistory(conversationId);
     history.pop();
     const initialUserContent = buildUserMessageContent(cleanedMessage, safeAttachments);
@@ -268,6 +277,9 @@ function setupIpcHandlers(): void {
   });
   ipcMain.handle(IPC.CHAT_LOAD, async (_e, id: string) => {
     if (getAttachedRunId()) detachCurrent();
+    // Yield to the event loop before running synchronous SQLite queries so any
+    // in-flight renders or IPC callbacks can complete first, avoiding UI jank.
+    await new Promise<void>((resolve) => setImmediate(resolve));
     const conv = getConversation(id);
     if (!conv) return { error: 'Conversation not found' };
     activeConversationId = id;
