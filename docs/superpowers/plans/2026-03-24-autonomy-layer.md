@@ -1396,14 +1396,25 @@ In `site-harness.ts`, find the `rowToHarness` function and add the new fields to
 
 - [ ] **Step 4: Update `saveHarness` INSERT to persist the new fields**
 
-In `site-harness.ts`, find the `saveHarness` function's INSERT statement. Add `intervention_hint, is_signup_harness` to the column list and the corresponding values from the harness object:
+In `src/main/browser/site-harness.ts`, the existing `saveHarness` INSERT (lines 196–219) uses `?` positional parameters with `.run(...)`. Add two more columns and two more `?` placeholders — do NOT use template-literal interpolation, as that would cause a parameter-count mismatch at runtime.
 
+Change the INSERT column list from:
 ```typescript
-  // In the INSERT:
-  intervention_hint, is_signup_harness
-  // In the VALUES:
-  ${JSON.stringify(harness.interventionHint ?? null)},
-  ${harness.isSignupHarness ? 1 : 0}
+    INSERT INTO site_harnesses (domain, action_name, url_pattern, fields_json, submit_json, verify_json, success_count, fail_count, last_used, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+```
+to:
+```typescript
+    INSERT INTO site_harnesses (domain, action_name, url_pattern, fields_json, submit_json, verify_json, success_count, fail_count, last_used, created_at, intervention_hint, is_signup_harness)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+```
+
+And also add `intervention_hint = excluded.intervention_hint, is_signup_harness = excluded.is_signup_harness` to the `ON CONFLICT DO UPDATE SET` block.
+
+Add two more arguments to the `.run(...)` call after `harness.createdAt || new Date().toISOString()`:
+```typescript
+    harness.interventionHint ?? null,
+    harness.isSignupHarness ? 1 : 0,
 ```
 
 - [ ] **Step 5: TypeScript compile check**
