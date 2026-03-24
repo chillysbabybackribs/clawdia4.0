@@ -3,10 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const getMock = vi.fn();
 const runMock = vi.fn();
 const allMock = vi.fn();
+const prepareMock = vi.fn((_sql: string) => ({ get: getMock, run: runMock, all: allMock }));
 
 vi.mock('../../src/main/db/database', () => ({
   getDb: () => ({
-    prepare: (_sql: string) => ({ get: getMock, run: runMock, all: allMock }),
+    prepare: prepareMock,
   }),
 }));
 
@@ -15,6 +16,7 @@ describe('spending-transactions', () => {
     getMock.mockReset();
     runMock.mockReset();
     allMock.mockReset();
+    prepareMock.mockReset();
   });
 
   it('insertTransaction returns the new row id', async () => {
@@ -45,10 +47,15 @@ describe('spending-transactions', () => {
     expect(tx!.runId).toBe('run-1');
   });
 
-  it('updateTransactionToActual calls run with actual amount and id', async () => {
+  it('updateTransactionToActual calls run with actual amount and id, sets is_estimated and status', async () => {
+    prepareMock.mockImplementation((_sql: string) => ({ get: getMock, run: runMock, all: allMock }));
     const { updateTransactionToActual } = await import('../../src/main/db/spending-transactions');
     updateTransactionToActual(5, 1050);
     expect(runMock).toHaveBeenCalledWith(1050, 5);
+    // Verify the SQL string contains the required literal updates
+    const sql: string = prepareMock.mock.calls[0][0];
+    expect(sql).toContain('is_estimated = 0');
+    expect(sql).toContain("status = 'completed'");
   });
 
   it('deleteTransaction calls run with correct id', async () => {
@@ -74,5 +81,6 @@ describe('spending-transactions', () => {
     const txns = listTransactions();
     expect(txns).toHaveLength(1);
     expect(txns[0].isEstimated).toBe(false);
+    expect(allMock).toHaveBeenCalledWith(50);
   });
 });
