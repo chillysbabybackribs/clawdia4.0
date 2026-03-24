@@ -355,9 +355,7 @@ function AttachmentGallery({ attachments }: { attachments: MessageAttachment[] }
   );
 }
 
-const AssistantMessage = React.memo(function AssistantMessage({ message, streamMap, shimmerText }: { message: Message; streamMap?: ToolStreamMap; shimmerText?: string }) {
-  const activeStreamMap = message.isStreaming ? (streamMap ?? {}) : {};
-
+const AssistantMessage = React.memo(function AssistantMessage({ message, shimmerText }: { message: Message; shimmerText?: string }) {
   // Live path: flat append-only feed
   if (message.feed && message.feed.length > 0) {
     const textItems: Array<{ text: string; isStreaming?: boolean; idx: number }> = [];
@@ -994,7 +992,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
         <div className="flex flex-col gap-4 px-4 pt-5 pb-8 max-w-[720px]">
           {messages.map(msg =>
             msg.role === 'assistant'
-              ? <AssistantMessage key={msg.id} message={msg} streamMap={msg.isStreaming ? streamMap : undefined} shimmerText={msg.isStreaming ? shimmerText : undefined} />
+              ? <AssistantMessage key={msg.id} message={msg} shimmerText={msg.isStreaming ? shimmerText : undefined} />
               : <UserMessage key={msg.id} message={msg} />
           )}
           {(visiblePlanText || isWorkflowPlanStreaming) && (
