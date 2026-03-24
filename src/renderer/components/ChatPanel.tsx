@@ -564,8 +564,11 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
   }, [ensureAssistantReplayMessage, scheduleStreamUpdate]);
 
   const handleThinkingEvent = useCallback((thought: string) => {
-    setShimmerText(thought ? 'Thinking…' : '');
-    if (thought) autoScroll();
+    if (!thought) return; // empty = post-LLM clear signal; let stream-end handle it
+    // Use real thinking text when it's substantive; fall back to generic label
+    const isGeneric = thought === 'Thinking...' || thought.startsWith('Drafting') || thought.startsWith('Paused');
+    setShimmerText(isGeneric ? 'Thinking…' : thought);
+    autoScroll();
   }, [autoScroll]);
 
   const handleWorkflowPlanTextEvent = useCallback((chunk: string) => {
@@ -592,9 +595,8 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
       if (lastIdx >= 0 && feedRef.current[lastIdx].kind === 'text') {
         feedRef.current[lastIdx] = { ...feedRef.current[lastIdx], isStreaming: false } as FeedItem;
       }
-      setShimmerText(toolToShimmerLabel(activity.name, activity.detail));
       scheduleStreamUpdate();
-      autoScroll();
+      // Don't override shimmer with tool labels — keep "Thinking…" steady throughout
     } else if (activity.status === 'awaiting_approval') {
       setShimmerText('Waiting for approval…');
       autoScroll();
@@ -602,7 +604,6 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
       setShimmerText('Needs your input…');
       autoScroll();
     }
-    // success / error: no-op — shimmer will be cleared by first text chunk or stream end
   }, [autoScroll, ensureAssistantReplayMessage, scheduleStreamUpdate]);
 
   const handleToolStreamEvent = useCallback((payload: { toolId: string; toolName: string; chunk: string }) => {
