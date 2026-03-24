@@ -123,4 +123,19 @@ describe('spending-budget engine', () => {
     expect(budgets[0].spent).toBe(3000);
     expect(budgets[0].limit).toBe(10000);
   });
+
+  it('checkBudget correctly handles monthly budget with resetDay=31 without date overflow', async () => {
+    listActiveBudgetsMock.mockReturnValue([
+      { id: 1, period: 'monthly', limitUsd: 10000, isActive: true, resetDay: 31 },
+    ]);
+    sumPeriodSpendMock.mockReturnValue(0);
+    const { checkBudget } = await import('../../src/main/agent/spending-budget');
+    // Main thing: should not throw, should return a valid result
+    const result = checkBudget(5000);
+    expect(result.allowed).toBe(true);
+    // Verify sumPeriodSpend was called with a valid ISO date string
+    const sinceArg = sumPeriodSpendMock.mock.calls[0][0];
+    expect(() => new Date(sinceArg)).not.toThrow();
+    expect(new Date(sinceArg).getTime()).not.toBeNaN();
+  });
 });

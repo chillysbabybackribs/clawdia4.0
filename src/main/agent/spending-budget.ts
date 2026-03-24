@@ -30,13 +30,15 @@ function periodStartIso(period: BudgetPeriod, resetDay?: number): string {
     return start.toISOString();
   }
   // monthly
-  const start = new Date(now);
-  start.setDate(resetDay ?? 1);
-  start.setHours(0, 0, 0, 0);
-  // If we haven't reached reset_day yet this month, go back one month
-  if (start > now) {
-    start.setMonth(start.getMonth() - 1);
-  }
+  const now2 = new Date(now);
+  // Determine which month the period starts in
+  const targetMonth = (resetDay ?? 1) > now2.getDate() ? now2.getMonth() - 1 : now2.getMonth();
+  const targetYear = targetMonth < 0 ? now2.getFullYear() - 1 : now2.getFullYear();
+  const normalizedMonth = ((targetMonth % 12) + 12) % 12;
+  // Clamp resetDay to valid days in the target month (avoids overflow)
+  const daysInMonth = new Date(targetYear, normalizedMonth + 1, 0).getDate();
+  const clampedDay = Math.min(resetDay ?? 1, daysInMonth);
+  const start = new Date(targetYear, normalizedMonth, clampedDay, 0, 0, 0, 0);
   return start.toISOString();
 }
 
