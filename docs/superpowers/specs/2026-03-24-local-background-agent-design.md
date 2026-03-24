@@ -158,7 +158,7 @@ The Retrieval sub-project uses `embedding_source` and `embedding_dim` to normali
 
 A `LocalAgentDaemon` runs as a Node.js child process spawned by the Electron main process. It owns a job queue and runs on idle time. Communication is over a typed IPC channel using `child_process.fork()`.
 
-**Build requirement:** `daemon-worker.ts` must be a **separate esbuild/webpack entry point** so it compiles to its own `daemon-worker.js` output file. The fork path in `daemon.ts` must use `path.join(__dirname, 'daemon-worker.js')` — a path that resolves correctly in both development and packaged Electron builds. A relative TypeScript import will not work at runtime.
+**Build requirement:** The project builds the main process with `tsc -p tsconfig.main.json`, which outputs all files under `dist/` mirroring the `src/` structure. `daemon-worker.ts` at `src/main/agent/local/daemon-worker.ts` will compile to `dist/main/agent/local/daemon-worker.js`. The fork call in `daemon.ts` must use `path.join(__dirname, 'daemon-worker.js')` — `__dirname` at runtime resolves to `dist/main/agent/local/`, so this path is correct in both development and packaged Electron builds. Do not use a relative TypeScript import; use the compiled path.
 
 ### Daemon Architecture
 

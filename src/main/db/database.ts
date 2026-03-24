@@ -739,19 +739,21 @@ function runMigrations(db: Database.Database): void {
     console.log('[DB] Running migration v28: task_sequences');
     db.exec(`
       CREATE TABLE IF NOT EXISTS task_sequences (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
-        run_id          TEXT NOT NULL REFERENCES runs(id),
-        goal            TEXT NOT NULL,
-        goal_embedding  BLOB,
-        surfaces        TEXT NOT NULL DEFAULT '[]',
-        steps           TEXT NOT NULL DEFAULT '[]',
-        outcome         TEXT NOT NULL DEFAULT 'success',
-        tool_call_count INTEGER NOT NULL DEFAULT 0,
-        duration_ms     INTEGER NOT NULL DEFAULT 0,
-        success_count   INTEGER NOT NULL DEFAULT 0,
-        fail_count      INTEGER NOT NULL DEFAULT 0,
-        last_used       TEXT,
-        created_at      TEXT NOT NULL
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id           TEXT NOT NULL REFERENCES runs(id),
+        goal             TEXT NOT NULL,
+        goal_embedding   BLOB,
+        embedding_dim    INTEGER,
+        embedding_source TEXT,
+        surfaces         TEXT NOT NULL DEFAULT '[]',
+        steps            TEXT NOT NULL DEFAULT '[]',
+        outcome          TEXT NOT NULL DEFAULT 'success',
+        tool_call_count  INTEGER NOT NULL DEFAULT 0,
+        duration_ms      INTEGER NOT NULL DEFAULT 0,
+        success_count    INTEGER NOT NULL DEFAULT 0,
+        fail_count       INTEGER NOT NULL DEFAULT 0,
+        last_used        TEXT,
+        created_at       TEXT NOT NULL
       );
       INSERT INTO schema_version (version) VALUES (28);
     `);
