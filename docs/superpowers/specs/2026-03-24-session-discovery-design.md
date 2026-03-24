@@ -71,7 +71,9 @@ function normalizeCookieDomain(domain: string): string {
 }
 ```
 
-Applied to `cookie.domain` for each cookie before deduplication.
+Applied to `cookie.domain` for each cookie before deduplication, and to each `account.serviceName` when building the exclusion Set.
+
+The existing per-account `accessType` cookie lookup (`session.cookies.get({ domain: account.serviceName })`) does **not** apply normalization — it uses the literal stored `serviceName`. This is intentional: the stored value was chosen by the user or the interceptor and is expected to match what Electron's cookie store recognizes. Normalization is only applied for deduplication between the two lists.
 
 ### Noise filtering
 
