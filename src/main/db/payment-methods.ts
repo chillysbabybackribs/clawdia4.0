@@ -98,14 +98,18 @@ export function listPaymentMethods(): PaymentMethod[] {
 
 export function setPreferred(id: number): void {
   const db = getDb();
-  db.prepare('UPDATE payment_methods SET is_preferred = 0').run();
-  db.prepare('UPDATE payment_methods SET is_preferred = 1 WHERE id = ?').run(id);
+  db.transaction(() => {
+    db.prepare('UPDATE payment_methods SET is_preferred = 0').run();
+    db.prepare('UPDATE payment_methods SET is_preferred = 1 WHERE id = ?').run(id);
+  })();
 }
 
 export function setBackup(id: number): void {
   const db = getDb();
-  db.prepare('UPDATE payment_methods SET is_backup = 0').run();
-  db.prepare('UPDATE payment_methods SET is_backup = 1 WHERE id = ?').run(id);
+  db.transaction(() => {
+    db.prepare('UPDATE payment_methods SET is_backup = 0').run();
+    db.prepare('UPDATE payment_methods SET is_backup = 1 WHERE id = ?').run(id);
+  })();
 }
 
 export function softDeletePaymentMethod(id: number): void {
