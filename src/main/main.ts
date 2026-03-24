@@ -520,6 +520,63 @@ function setupIpcHandlers(): void {
       await browserSession.cookies.remove(url, cookie.name);
     }
   });
+
+  // ── Identity ──
+  ipcMain.handle(IPC.IDENTITY_PROFILE_GET, () => {
+    return identityStore.getDefaultProfile();
+  });
+
+  ipcMain.handle(IPC.IDENTITY_PROFILE_SET, (_e, input: any) => {
+    return identityStore.upsertProfile({ ...input, name: 'default', isDefault: true });
+  });
+
+  ipcMain.handle(IPC.IDENTITY_ACCOUNTS_LIST, async () => {
+    const accounts = identityStore.listAccounts();
+    const session = getBrowserSession();
+    return Promise.all(accounts.map(async (account) => {
+      const { passwordPlain: _omit, ...view } = account;
+      let accessType: 'session' | 'vault' | 'managed' = 'managed';
+      if (session) {
+        try {
+          const cookies = await session.cookies.get({ domain: account.serviceName });
+          if (cookies.length > 0) {
+            accessType = 'session';
+          } else {
+            const cred = identityStore.getCredential(account.serviceName, account.serviceName);
+            if (cred) accessType = 'vault';
+          }
+        } catch {
+          // cookie check failed — fall through to 'managed'
+        }
+      }
+      return { ...view, accessType };
+    }));
+  });
+
+  ipcMain.handle(IPC.IDENTITY_ACCOUNT_ADD, (_e, input: any) => {
+    const account = identityStore.saveAccount({ ...input, status: 'active' });
+    const { passwordPlain: _omit, ...view } = account;
+    return { ...view, accessType: 'managed' as const };
+  });
+
+  ipcMain.handle(IPC.IDENTITY_ACCOUNT_DELETE, (_e, serviceName: string) => {
+    identityStore.deleteAccount(serviceName);
+    return { ok: true };
+  });
+
+  ipcMain.handle(IPC.IDENTITY_CREDENTIALS_LIST, () => {
+    return identityStore.listCredentials();
+  });
+
+  ipcMain.handle(IPC.IDENTITY_CREDENTIAL_ADD, (_e, label: string, type: string, service: string, valuePlain: string) => {
+    identityStore.saveCredential({ label, type: type as any, service, valuePlain });
+    return { ok: true };
+  });
+
+  ipcMain.handle(IPC.IDENTITY_CREDENTIAL_DELETE, (_e, label: string, service: string) => {
+    identityStore.deleteCredential(label, service);
+    return { ok: true };
+  });
 }
 
 app.whenReady().then(createWindow);
