@@ -9,6 +9,17 @@ import type {
   NormalizedToolDefinition,
   NormalizedToolResultBlock,
 } from './types';
+import { lookupModelMaxOutput } from './types';
+
+const MODEL_MAX_OUTPUT: Record<string, number> = {
+  'gpt-5.4-mini': 16384,
+  'gpt-5.4-nano': 8192,
+  'gpt-5.4': 32768,
+  'gpt-5-mini': 16384,
+  'gpt-5-nano': 8192,
+  'gpt-5': 32768,
+};
+const OPENAI_MAX_OUTPUT_FALLBACK = 16384;
 
 interface OpenAIChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -271,7 +282,8 @@ export class OpenAIProviderClient implements ProviderClient {
       ...(tools.length > 0 ? { tools: toOpenAITools(tools), tool_choice: 'auto', parallel_tool_calls: true } : {}),
     };
 
-    if (options?.maxTokens) body.max_tokens = options.maxTokens;
+    const maxTokens = options?.maxTokens ?? lookupModelMaxOutput(this.model, MODEL_MAX_OUTPUT, OPENAI_MAX_OUTPUT_FALLBACK);
+    body.max_tokens = maxTokens;
 
     const response = await retryFetch(
       'https://api.openai.com/v1/chat/completions',
@@ -353,6 +365,11 @@ export class OpenAIProviderClient implements ProviderClient {
         input,
       });
     }
+
+    const cacheReadTokens = 0;
+    const totalInput = inputTokens + cacheReadTokens;
+    const cacheHitRate = totalInput > 0 ? ((cacheReadTokens / totalInput) * 100).toFixed(1) : '0.0';
+    console.log(`[LLM] ${responseModel} | in=${inputTokens} cache_read=${cacheReadTokens} out=${outputTokens} | cache_hit=${cacheHitRate}% | max_tokens=${maxTokens} | stop=${stopReason}`);
 
     return {
       content: contentBlocks,

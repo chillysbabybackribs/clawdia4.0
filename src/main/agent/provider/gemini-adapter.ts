@@ -9,6 +9,14 @@ import type {
   NormalizedToolDefinition,
   NormalizedToolResultBlock,
 } from './types';
+import { lookupModelMaxOutput } from './types';
+
+const MODEL_MAX_OUTPUT: Record<string, number> = {
+  'gemini-2.5-flash-lite': 16384,
+  'gemini-2.5-flash': 32768,
+  'gemini-2.5-pro': 65536,
+};
+const GEMINI_MAX_OUTPUT_FALLBACK = 16384;
 
 interface GeminiPart {
   text?: string;
@@ -248,9 +256,8 @@ export class GeminiProviderClient implements ProviderClient {
       ...(tools.length > 0 ? { tools: toGeminiTools(tools) } : {}),
     };
 
-    if (options?.maxTokens) {
-      body.generationConfig = { maxOutputTokens: options.maxTokens };
-    }
+    const maxTokens = options?.maxTokens ?? lookupModelMaxOutput(this.model, MODEL_MAX_OUTPUT, GEMINI_MAX_OUTPUT_FALLBACK);
+    body.generationConfig = { ...body.generationConfig, maxOutputTokens: maxTokens };
 
     const response = await retryFetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:streamGenerateContent?alt=sse`,
@@ -327,6 +334,8 @@ export class GeminiProviderClient implements ProviderClient {
         input: toolCall.args,
       });
     }
+
+    console.log(`[LLM] ${responseModel} | in=${inputTokens} out=${outputTokens} | max_tokens=${maxTokens} | stop=${stopReason}`);
 
     return {
       content,
