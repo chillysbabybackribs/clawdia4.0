@@ -227,6 +227,44 @@ export class IdentityStore {
     if (!row) return null;
     return this.decrypt(row.value_encrypted);
   }
+
+  // ── List / Delete (required for settings UI) ──
+
+  listAccounts(): ManagedAccount[] {
+    const rows = getDb().prepare('SELECT * FROM managed_accounts ORDER BY created_at DESC').all() as any[];
+    return rows.map(row => ({
+      id: row.id,
+      serviceName: row.service_name,
+      loginUrl: row.login_url,
+      username: row.username,
+      emailUsed: row.email_used,
+      passwordPlain: this.decrypt(row.password_encrypted),
+      phoneUsed: row.phone_used,
+      phoneMethod: row.phone_method,
+      status: row.status,
+      createdAt: row.created_at,
+      notes: row.notes,
+    }));
+  }
+
+  deleteAccount(serviceName: string): void {
+    getDb().prepare('DELETE FROM managed_accounts WHERE service_name = ?').run(serviceName);
+  }
+
+  listCredentials(): { label: string; type: string; service: string; maskedValue: string }[] {
+    const rows = getDb().prepare(
+      'SELECT label, type, service, value_encrypted FROM credential_vault ORDER BY created_at DESC'
+    ).all() as any[];
+    return rows.map(row => {
+      const val = this.decrypt(row.value_encrypted);
+      const maskedValue = '•'.repeat(Math.max(0, val.length - 4)) + val.slice(-4);
+      return { label: row.label, type: row.type, service: row.service, maskedValue };
+    });
+  }
+
+  deleteCredential(label: string, service: string): void {
+    getDb().prepare('DELETE FROM credential_vault WHERE label = ? AND service = ?').run(label, service);
+  }
 }
 
 // Singleton for use across the autonomy module
