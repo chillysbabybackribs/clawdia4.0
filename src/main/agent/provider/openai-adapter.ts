@@ -9,7 +9,7 @@ import type {
   NormalizedToolDefinition,
   NormalizedToolResultBlock,
 } from './types';
-import { lookupModelMaxOutput } from './types';
+import { lookupModelMaxOutput, normalizeStopReason } from './types';
 
 const MODEL_MAX_OUTPUT: Record<string, number> = {
   'gpt-5.4-mini': 16384,
@@ -87,6 +87,8 @@ interface OpenAIStreamingChunk {
   usage?: {
     prompt_tokens?: number;
     completion_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number };
+    completion_tokens_details?: { reasoning_tokens?: number };
   };
   model?: string;
   error?: {
@@ -248,7 +250,7 @@ async function* readSseData(stream: ReadableStream<Uint8Array>): AsyncGenerator<
 
 export class OpenAIProviderClient implements ProviderClient {
   readonly provider = 'openai' as const;
-  readonly supportsHarnessGeneration = false as const;
+  readonly supportsHarnessGeneration = true as const;
   private apiKey: string;
   private model: string;
 
@@ -315,6 +317,8 @@ export class OpenAIProviderClient implements ProviderClient {
     let stopReason = 'stop';
     let inputTokens = 0;
     let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let reasoningTokens = 0;
     let responseModel = this.model;
     const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
 
@@ -325,6 +329,8 @@ export class OpenAIProviderClient implements ProviderClient {
       if (chunk.usage) {
         inputTokens = chunk.usage.prompt_tokens || inputTokens;
         outputTokens = chunk.usage.completion_tokens || outputTokens;
+        cacheReadTokens = chunk.usage.prompt_tokens_details?.cached_tokens || cacheReadTokens;
+        reasoningTokens = chunk.usage.completion_tokens_details?.reasoning_tokens || reasoningTokens;
       }
 
       const choice = chunk.choices?.[0];
@@ -366,21 +372,21 @@ export class OpenAIProviderClient implements ProviderClient {
       });
     }
 
-    const cacheReadTokens = 0;
     const totalInput = inputTokens + cacheReadTokens;
     const cacheHitRate = totalInput > 0 ? ((cacheReadTokens / totalInput) * 100).toFixed(1) : '0.0';
     console.log(`[LLM] ${responseModel} | in=${inputTokens} cache_read=${cacheReadTokens} out=${outputTokens} | cache_hit=${cacheHitRate}% | max_tokens=${maxTokens} | stop=${stopReason}`);
 
     return {
       content: contentBlocks,
-      stopReason,
+      stopReason: normalizeStopReason(stopReason),
       model: responseModel,
       usage: {
         inputTokens,
         outputTokens,
-        cacheReadTokens: 0,
+        cacheReadTokens,
         cacheCreateTokens: 0,
       },
+      thinkingText: reasoningTokens > 0 ? `[Reasoning: ~${reasoningTokens} tokens]` : undefined,
     };
   }
 }

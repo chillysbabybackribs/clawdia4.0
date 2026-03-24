@@ -226,3 +226,11 @@ describe('stringifyToolResultContent', () => {
     consoleSpy.mockRestore();
   });
 });
+
+describe('OpenAI supportsHarnessGeneration', () => {
+  it('OpenAIProviderClient.supportsHarnessGeneration is true', async () => {
+    const { OpenAIProviderClient } = await import('../../../src/main/agent/provider/openai-adapter');
+    const client = new OpenAIProviderClient('test-key');
+    expect(client.supportsHarnessGeneration).toBe(true);
+  });
+});
