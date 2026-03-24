@@ -70,6 +70,19 @@ export const IPC = {
   IDENTITY_CREDENTIALS_LIST: 'identity:credentials:list',
   IDENTITY_CREDENTIAL_ADD: 'identity:credential:add',
   IDENTITY_CREDENTIAL_DELETE: 'identity:credential:delete',
+  // Wallet
+  WALLET_GET_PAYMENT_METHODS: 'wallet:get-payment-methods',
+  WALLET_ADD_MANUAL_CARD: 'wallet:add-manual-card',
+  WALLET_IMPORT_BROWSER_CARDS: 'wallet:import-browser-cards',
+  WALLET_CONFIRM_IMPORT: 'wallet:confirm-import',
+  WALLET_SET_PREFERRED: 'wallet:set-preferred',
+  WALLET_SET_BACKUP: 'wallet:set-backup',
+  WALLET_REMOVE_CARD: 'wallet:remove-card',
+  WALLET_GET_BUDGETS: 'wallet:get-budgets',
+  WALLET_SET_BUDGET: 'wallet:set-budget',
+  WALLET_DISABLE_BUDGET: 'wallet:disable-budget',
+  WALLET_GET_TRANSACTIONS: 'wallet:get-transactions',
+  WALLET_GET_REMAINING_BUDGETS: 'wallet:get-remaining-budgets',
 } as const;
 
 export const IPC_EVENTS = {
@@ -93,4 +106,8 @@ export const IPC_EVENTS = {
   SWARM_STATE_CHANGED: 'swarm:state-changed',
   // Identity events (pushed from main to renderer)
   IDENTITY_ACCOUNTS_CHANGED: 'identity:accounts-changed',
+  // Spending events (pushed from main to renderer)
+  SPENDING_PURCHASE_COMPLETE: 'spending:purchase-complete',
+  SPENDING_LOW_BALANCE: 'spending:low-balance',
+  SPENDING_BUDGET_EXCEEDED: 'spending:budget-exceeded',
 } as const;
