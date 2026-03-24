@@ -68,7 +68,7 @@ import {
 } from './db/payment-methods';
 import { upsertBudget, listActiveBudgets, disableBudget } from './db/spending-budgets';
 import { listTransactions } from './db/spending-transactions';
-import { getRemainingBudgets } from './agent/spending-budget';
+import { getRemainingBudgets, resetExpiredPeriods } from './agent/spending-budget';
 import { scanBrowserCards } from './agent/browser-card-scanner';
 import { proactiveDetector } from './autonomy/proactive-detector';
 import { taskScheduler } from './autonomy/task-scheduler';
@@ -660,6 +660,15 @@ function setupIpcHandlers(): void {
   ipcMain.handle(IPC.WALLET_GET_REMAINING_BUDGETS, () => getRemainingBudgets());
 }
 
-app.whenReady().then(createWindow);
+// Spending notification emitter — called by checkout-executor
+export function emitSpendingEvent(event: string, payload: Record<string, any>): void {
+  mainWindow?.webContents.send(event, payload);
+}
+
+app.whenReady().then(() => {
+  createWindow();
+  resetExpiredPeriods();
+  setInterval(resetExpiredPeriods, 60 * 60 * 1000); // hourly
+});
 app.on('before-quit', () => { closeBrowser(); destroyShell(); });
 app.on('window-all-closed', () => { destroyShell(); closeDb(); app.quit(); });
