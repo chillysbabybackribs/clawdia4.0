@@ -355,7 +355,7 @@ function AttachmentGallery({ attachments }: { attachments: MessageAttachment[] }
   );
 }
 
-function AssistantMessage({ message, streamMap }: { message: Message; streamMap?: ToolStreamMap }) {
+const AssistantMessage = React.memo(function AssistantMessage({ message, streamMap }: { message: Message; streamMap?: ToolStreamMap }) {
   const activeStreamMap = message.isStreaming ? (streamMap ?? {}) : {};
 
   // Live path: flat append-only feed
@@ -420,9 +420,16 @@ function AssistantMessage({ message, streamMap }: { message: Message; streamMap?
       </div>
     </div>
   );
-}
+}, (prev, next) => {
+  // Skip re-render for finished messages — their data never changes
+  if (!prev.message.isStreaming && !next.message.isStreaming) {
+    return prev.message.id === next.message.id;
+  }
+  // Always re-render the actively streaming message
+  return false;
+});
 
-function UserMessage({ message }: { message: Message }) {
+const UserMessage = React.memo(function UserMessage({ message }: { message: Message }) {
   return (
     <div className="flex flex-col items-end gap-1 animate-slide-up">
       <div className="max-w-[85%] rounded-2xl rounded-br-md px-4 py-2.5 bg-neutral-700/60 text-white backdrop-blur-sm">
@@ -436,6 +443,41 @@ function UserMessage({ message }: { message: Message }) {
       <span className="text-[11px] text-text-secondary/70 mr-1">{message.timestamp}</span>
     </div>
   );
+});
+
+function extractHostname(detail: string): string | null {
+  const match = detail?.match(/https?:\/\/([^/\s]+)/);
+  return match ? match[1].replace(/^www\./, '') : null;
+}
+
+function toolToShimmerLabel(name: string, detail?: string): string {
+  if (name === 'browser_navigate') {
+    const host = extractHostname(detail ?? '');
+    return host ? `Navigating to ${host}…` : 'Navigating…';
+  }
+  const labels: Record<string, string> = {
+    browser_click:     'Clicking…',
+    browser_extract:   'Extracting page content…',
+    browser_read:      'Reading page…',
+    browser_type:      'Typing…',
+    browser_batch:     'Running browser sequence…',
+    browser_scroll:    'Scrolling…',
+    shell_exec:        'Running command…',
+    file_read:         'Reading file…',
+    file_write:        'Writing file…',
+    file_edit:         'Editing file…',
+    directory_tree:    'Scanning directory…',
+    fs_quote_lookup:   'Searching files…',
+    fs_folder_summary: 'Summarising folder…',
+    agent_spawn:       'Spawning agent…',
+    memory_read:       'Recalling memory…',
+    memory_write:      'Saving to memory…',
+  };
+  return labels[name] ?? 'Working…';
+}
+
+function InlineShimmer({ text }: { text: string }) {
+  return <span className="inline-shimmer">{text}</span>;
 }
 
 export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrowser, onShowBrowser, calendarOpen, onToggleCalendar, onOpenSettings, onOpenPendingApproval, loadConversationId, replayBuffer }: ChatPanelProps) {
@@ -443,6 +485,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
   const [isStreaming, setIsStreaming] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [statusText, setStatusText] = useState('');
+  const [shimmerText, setShimmerText] = useState<string>('');
   const [streamMap, setStreamMap] = useState<ToolStreamMap>({});
   const [pendingApprovalRunId, setPendingApprovalRunId] = useState<string | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState<RunApproval[]>([]);
