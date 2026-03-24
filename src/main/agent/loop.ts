@@ -904,7 +904,7 @@ export async function runAgentLoop(
       break;
     }
 
-    onThinking?.('');
+    onThinking?.(response.thinkingText || '');
 
     const textBlocks = response.content.filter((b): b is NormalizedTextBlock => b.type === 'text');
     const toolUseBlocks = response.content.filter((b): b is NormalizedToolUseBlock => b.type === 'tool_use');
