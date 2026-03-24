@@ -378,7 +378,20 @@ export function getBackupMethod(): PaymentMethod | null {
 }
 ```
 
-**Implementation note:** The tests import `getDb()` which uses the singleton. For unit tests, either (a) call `initDb(':memory:')` before the tests if such a function exists, or (b) mock `getDb` to return the test DB. Check `src/main/db/database.ts` for how the DB singleton is initialized — adapt accordingly.
+**Test isolation — required before running tests:**
+
+The DB modules call `getDb()` which returns an application-level singleton. Tests need their own in-memory DB. Add an `initDb` export to `src/main/db/database.ts` if one doesn't exist:
+
+```typescript
+// In database.ts — add alongside getDb():
+export function initDb(path: string): void {
+  // Re-initialize the singleton with the given path (use ':memory:' in tests)
+  // Implementation depends on how the singleton is currently initialized —
+  // find the `let db: Database.Database` declaration and reassign it here.
+}
+```
+
+Then in each test file's `beforeEach`, call `initDb(':memory:')` to reset the singleton to a fresh in-memory DB before each test. Without this, `getDb()` inside the module under test will use the application DB, not the test DB, and all DB assertions will fail or interact with the live database.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1178,8 +1191,13 @@ ipcMain.handle(IPC.WALLET_GET_PAYMENT_METHODS, () => listPaymentMethods());
 ipcMain.handle(IPC.WALLET_ADD_MANUAL_CARD, (_e, input: {
   label: string; lastFour: string; cardType: string;
   expiryMonth: number; expiryYear: number; billingName?: string;
-  cardNumber: string; // full PAN — encrypted into vault, never stored raw
+  cardNumber: string; // full PAN — validated, then encrypted into vault, never stored raw
 }) => {
+  // Validate PAN before storing: numeric only, 13–19 digits
+  const digits = input.cardNumber.replace(/\s/g, '');
+  if (!/^\d{13,19}$/.test(digits)) {
+    throw new Error('Invalid card number');
+  }
   // Store full details encrypted in credential_vault
   const vaultLabel = `payment_card_${input.lastFour}_${Date.now()}`;
   identityStore.saveCredential({
@@ -1282,6 +1300,7 @@ Open `src/main/preload.ts`. The preload exposes a structured namespace per featu
 
 - [ ] **Step 2: Add wallet to Rail.tsx (three-part change)**
 
+
 Open `src/renderer/components/sidebar/Rail.tsx`.
 
 **Part 1** — extend `DrawerMode` union (line 3):
@@ -1304,7 +1323,7 @@ export type DrawerMode = 'chat' | 'agents' | 'browser' | 'files' | 'desktop' | '
   { mode: 'wallet', title: 'Wallet' },
 ```
 
-- [ ] **Step 2: Add WalletDrawer to Sidebar.tsx**
+- [ ] **Step 3: Add WalletDrawer to Sidebar.tsx**
 
 Open `src/renderer/components/Sidebar.tsx`.
 
