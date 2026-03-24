@@ -292,7 +292,7 @@ This section covers **time-based scheduling only** for the initial build. Event-
 
 1. **Validate Bloodhound** — confirm playbook record/replay works reliably on 3+ real sites (`site-harness.ts`)
 2. **DB migrations** — add all new tables in `database.ts` as new migration versions
-3. **Identity store + credential vault** — `identity-store.ts` with `keytar` encryption (foundation everything else depends on)
+3. **Identity store + credential vault** — `identity-store.ts` with `safeStorage` encryption (foundation everything else depends on)
 4. **Account provisioner + email monitor** — implement together as a unit; provisioner is incomplete without verification
 5. **Human-in-the-loop new types** — extend `run-human-interventions.ts` union + MutationObserver/IPC auto-resume in `human-intervention-manager.ts`
 6. **Phone verifier** — Google Voice browser path first, Twilio fallback second
