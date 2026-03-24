@@ -31,6 +31,7 @@
  *   scheduled_tasks, scheduled_task_runs — task scheduler (v26)
  *   site_harnesses.intervention_hint + is_signup_harness — signup annotation (v27)
  *   task_sequences — distilled multi-surface task recordings for Bloodhound v2 (v28)
+ *   payment_methods, spending_budgets, spending_transactions — Clawdia Wallet (v29)
  */
 
 import Database from 'better-sqlite3';
@@ -759,5 +760,71 @@ function runMigrations(db: Database.Database): void {
     `);
   }
 
-  console.log(`[DB] Schema at version ${Math.max(currentVersion, 28)}`);
+  if (currentVersion < 29) {
+    console.log('[DB] Running migration v29: wallet tables + widen credential_vault type');
+    db.exec(`
+      -- Widen credential_vault CHECK to include payment_card
+      -- SQLite requires drop + recreate to alter CHECK constraints
+      -- Follow the RENAME TO _old pattern established in migrations v22 and v23
+      ALTER TABLE credential_vault RENAME TO credential_vault_old;
+
+      CREATE TABLE IF NOT EXISTS credential_vault (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        label            TEXT NOT NULL,
+        type             TEXT NOT NULL
+                           CHECK(type IN ('api_key','session_token','app_password','oauth_token','keychain_blob','payment_card')),
+        service          TEXT NOT NULL DEFAULT '',
+        value_encrypted  TEXT NOT NULL,
+        expires_at       TEXT,
+        created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(label, service)
+      );
+      INSERT INTO credential_vault (id, label, type, service, value_encrypted, expires_at, created_at)
+      SELECT id, label, type, service, value_encrypted, expires_at, created_at
+      FROM credential_vault_old;
+      DROP TABLE credential_vault_old;
+
+      CREATE TABLE IF NOT EXISTS payment_methods (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        label           TEXT NOT NULL,
+        last_four       TEXT NOT NULL,
+        card_type       TEXT NOT NULL,
+        method_type     TEXT NOT NULL DEFAULT 'card',
+        expiry_month    INTEGER NOT NULL,
+        expiry_year     INTEGER NOT NULL,
+        billing_name    TEXT,
+        source          TEXT NOT NULL,
+        vault_ref       TEXT,
+        is_preferred    INTEGER NOT NULL DEFAULT 0,
+        is_backup       INTEGER NOT NULL DEFAULT 0,
+        is_active       INTEGER NOT NULL DEFAULT 1,
+        created_at      TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS spending_budgets (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        period      TEXT NOT NULL UNIQUE,
+        limit_usd   INTEGER NOT NULL,
+        is_active   INTEGER NOT NULL DEFAULT 1,
+        reset_day   INTEGER,
+        created_at  TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS spending_transactions (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id            TEXT REFERENCES runs(id) ON DELETE SET NULL,
+        merchant          TEXT NOT NULL,
+        amount_usd        INTEGER NOT NULL,
+        description       TEXT,
+        payment_method_id INTEGER REFERENCES payment_methods(id) ON DELETE SET NULL,
+        status            TEXT NOT NULL,
+        is_estimated      INTEGER NOT NULL DEFAULT 0,
+        created_at        TEXT NOT NULL
+      );
+
+      INSERT INTO schema_version (version) VALUES (29);
+    `);
+  }
+
+  console.log(`[DB] Schema at version ${Math.max(currentVersion, 29)}`);
 }
