@@ -15,6 +15,7 @@ import type {
   NormalizedMessageContentBlock,
   NormalizedToolDefinition,
 } from './types';
+import { normalizeStopReason } from './types';
 
 const sdkPool: Map<string, Anthropic> = new Map();
 
@@ -253,7 +254,7 @@ export class AnthropicProviderClient implements ProviderClient {
 
     return {
       content: contentBlocks,
-      stopReason,
+      stopReason: normalizeStopReason(stopReason),
       model: this.model,
       usage: { inputTokens, outputTokens, cacheReadTokens, cacheCreateTokens },
     };

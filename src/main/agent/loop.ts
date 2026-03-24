@@ -914,8 +914,8 @@ export async function runAgentLoop(
     // Guard: if the provider signalled tool_calls but streaming produced no blocks
     // (e.g. GPT-5 chunk ordering delivered finish_reason before all deltas), force
     // another iteration rather than terminating with an empty tool list.
-    if (toolUseBlocks.length === 0 && response.stopReason === 'tool_calls') {
-      console.warn('[Agent] stopReason=tool_calls but no tool_use blocks received — forcing continuation');
+    if (toolUseBlocks.length === 0 && response.stopReason === 'tool_use') {
+      console.warn('[Agent] stopReason=tool_use but no tool_use blocks received — forcing continuation');
       messages.push({ role: 'assistant', content: response.content as any });
       messages.push({ role: 'user', content: '[SYSTEM] You indicated tool calls were needed. Please proceed with your tool calls now.' });
       continue;

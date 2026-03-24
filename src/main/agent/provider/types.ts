@@ -69,4 +69,34 @@ export interface LLMResponse {
     cacheReadTokens: number;
     cacheCreateTokens: number;
   };
+  thinkingText?: string;
+}
+
+// ── Stop-reason normalization ────────────────────────────────────────────────
+
+const STOP_REASON_MAP: Record<string, string> = {
+  tool_use: 'tool_use',
+  tool_calls: 'tool_use',
+  function_calls: 'tool_use',
+  end_turn: 'end_turn',
+  stop: 'end_turn',
+  length: 'max_tokens',
+  max_tokens: 'max_tokens',
+};
+
+export function normalizeStopReason(raw: string): string {
+  return STOP_REASON_MAP[raw] ?? raw;
+}
+
+// ── Model max-output lookup ──────────────────────────────────────────────────
+
+export function lookupModelMaxOutput(
+  model: string,
+  map: Record<string, number>,
+  fallback: number,
+): number {
+  const entry = Object.entries(map)
+    .sort((a, b) => b[0].length - a[0].length)
+    .find(([prefix]) => model.startsWith(prefix));
+  return entry ? entry[1] : fallback;
 }
