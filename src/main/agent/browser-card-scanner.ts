@@ -29,32 +29,33 @@ function scanChrome(): PaymentMethodCandidate[] {
       const tmpPath = path.join(os.tmpdir(), `clawdia-webdata-${Date.now()}.db`);
       fs.copyFileSync(webDataPath, tmpPath);
       const db = new Database(tmpPath, { readonly: true });
+      try {
+        // CRITICAL: Only read display metadata columns. NEVER read card_number_encrypted.
+        const rows = db.prepare<Array<{
+          name_on_card: string;
+          last_four: string;
+          expiration_month: number;
+          expiration_year: number;
+        }>>(`
+          SELECT name_on_card, last_four, expiration_month, expiration_year
+          FROM credit_cards
+          WHERE use_count > 0
+        `).all();
 
-      // CRITICAL: Only read display metadata columns. NEVER read card_number_encrypted.
-      const rows = db.prepare<Array<{
-        name_on_card: string;
-        last_four: string;
-        expiration_month: number;
-        expiration_year: number;
-      }>>(`
-        SELECT name_on_card, last_four, expiration_month, expiration_year
-        FROM credit_cards
-        WHERE use_count > 0
-      `).all();
-
-      db.close();
-      fs.unlinkSync(tmpPath);
-
-      return rows.map(row => ({
-        label: `${inferCardType(row.name_on_card)} ••••${row.last_four}`,
-        lastFour: row.last_four,
-        cardType: inferCardType(row.name_on_card),
-        expiryMonth: row.expiration_month,
-        expiryYear: row.expiration_year,
-        billingName: row.name_on_card || undefined,
-        source: 'browser_autofill' as const,
-        browserSource: 'chrome' as const,
-      }));
+        return rows.map(row => ({
+          label: `${inferCardType(row.name_on_card)} ••••${row.last_four}`,
+          lastFour: row.last_four,
+          cardType: inferCardType(row.name_on_card),
+          expiryMonth: row.expiration_month,
+          expiryYear: row.expiration_year,
+          billingName: row.name_on_card || undefined,
+          source: 'browser_autofill' as const,
+          browserSource: 'chrome' as const,
+        }));
+      } finally {
+        db.close();
+        try { fs.unlinkSync(tmpPath); } catch { /* best-effort */ }
+      }
     } catch {
       // Locked or unreadable — silently return empty
       return [];

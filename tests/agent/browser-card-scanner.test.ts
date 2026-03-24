@@ -79,9 +79,13 @@ describe('browser-card-scanner', () => {
     const { scanBrowserCards } = await import('../../src/main/agent/browser-card-scanner');
     await scanBrowserCards();
 
+    // Verify prepareMock was actually called (guard against stale cache)
+    expect(prepareMock).toHaveBeenCalled();
+    const sql: string = prepareMock.mock.calls[0]?.[0] ?? '';
+
     // Verify the SQL used does NOT contain card_number_encrypted
-    expect(capturedSql).not.toContain('card_number_encrypted');
-    expect(capturedSql).toContain('name_on_card');
-    expect(capturedSql).toContain('last_four');
+    expect(sql).not.toContain('card_number_encrypted');
+    expect(sql).toContain('name_on_card');
+    expect(sql).toContain('last_four');
   });
 });
