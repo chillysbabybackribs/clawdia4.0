@@ -75,6 +75,7 @@ export default function WalletDrawer() {
   const [remaining, setRemaining] = useState<RemainingBudget[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [importCandidates, setImportCandidates] = useState<any[] | null>(null);
+  const [selectedImportIndices, setSelectedImportIndices] = useState<Set<number>>(new Set());
   const [showAddForm, setShowAddForm] = useState(false);
   const [addForm, setAddForm] = useState({
     label: '', lastFour: '', cardType: 'visa',
@@ -99,6 +100,7 @@ export default function WalletDrawer() {
   const handleImport = async () => {
     const candidates = await api.wallet.importBrowserCards();
     setImportCandidates(candidates ?? []);
+    setSelectedImportIndices(new Set((candidates ?? []).map((_: any, i: number) => i)));
   };
 
   const handleConfirmImport = async (selected: any[]) => {
@@ -160,15 +162,26 @@ export default function WalletDrawer() {
               ? <div className="text-text-muted">No saved cards found in browser.</div>
               : importCandidates.map((c, i) => (
                 <div key={i} className="flex items-center gap-1 mb-1">
-                  <input type="checkbox" defaultChecked id={`imp-${i}`} />
+                  <input
+                    type="checkbox"
+                    checked={selectedImportIndices.has(i)}
+                    onChange={e => {
+                      setSelectedImportIndices(prev => {
+                        const next = new Set(prev);
+                        if (e.target.checked) next.add(i); else next.delete(i);
+                        return next;
+                      });
+                    }}
+                    id={`imp-${i}`}
+                  />
                   <label htmlFor={`imp-${i}`} className="text-text-primary">{c.label}</label>
                 </div>
               ))
             }
             <div className="flex gap-1 mt-1">
-              <button onClick={() => handleConfirmImport(importCandidates)}
+              <button onClick={() => handleConfirmImport(importCandidates.filter((_: any, i: number) => selectedImportIndices.has(i)))}
                 className="text-[11px] px-2 py-0.5 rounded bg-accent text-white">Import</button>
-              <button onClick={() => setImportCandidates(null)}
+              <button onClick={() => { setImportCandidates(null); setSelectedImportIndices(new Set()); }}
                 className="text-[11px] px-2 py-0.5 rounded bg-surface-2 text-text-muted">Cancel</button>
             </div>
           </div>
@@ -263,6 +276,7 @@ export default function WalletDrawer() {
                 <div className="flex items-center gap-1 mt-1">
                   <span className="text-text-muted">$</span>
                   <input
+                    key={`budget-${period}-${budget.limitUsd}`}
                     type="number"
                     defaultValue={budget.limitUsd > 0 ? (budget.limitUsd / 100).toFixed(0) : ''}
                     onBlur={e => setBudgetValue(period, Math.round(Number(e.target.value) * 100))}
