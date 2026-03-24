@@ -425,7 +425,10 @@ const UserMessage = React.memo(function UserMessage({ message }: { message: Mess
         )}
         {message.content.trim() && <div className="text-[1rem] leading-relaxed whitespace-pre-wrap">{message.content}</div>}
       </div>
-      <span className="text-[11px] text-text-secondary/70 mr-1">{message.timestamp}</span>
+      <div className="flex items-center gap-2 mr-1">
+        <span className="text-[11px] text-text-secondary/70">{message.timestamp}</span>
+        {message.content.trim() && <CopyButton text={message.content} />}
+      </div>
     </div>
   );
 });
