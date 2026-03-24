@@ -51,14 +51,15 @@ function toRecord(row: SpendingTransactionRow): SpendingTransaction {
 }
 
 export function insertTransaction(tx: NewTransaction): number {
+  const now = new Date().toISOString();
   const result = getDb().prepare(`
     INSERT INTO spending_transactions
-      (run_id, merchant, amount_usd, description, payment_method_id, status, is_estimated)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+      (run_id, merchant, amount_usd, description, payment_method_id, status, is_estimated, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     tx.runId ?? null, tx.merchant, tx.amountUsd,
     tx.description ?? null, tx.paymentMethodId ?? null,
-    tx.status ?? 'pending', tx.isEstimated ? 1 : 0,
+    tx.status ?? 'pending', tx.isEstimated ? 1 : 0, now,
   );
   return Number(result.lastInsertRowid);
 }
@@ -80,6 +81,12 @@ export function updateTransactionToActual(id: number, actualCents: number): void
 
 export function deleteTransaction(id: number): void {
   getDb().prepare('DELETE FROM spending_transactions WHERE id = ?').run(id);
+}
+
+export function updateTransactionStatus(id: number, status: TransactionStatus): void {
+  getDb().prepare(
+    'UPDATE spending_transactions SET status = ? WHERE id = ?'
+  ).run(status, id);
 }
 
 export function listTransactions(limit = 50): SpendingTransaction[] {

@@ -20,7 +20,7 @@ describe('spending-budgets', () => {
   it('upsertBudget calls run with correct args', async () => {
     const { upsertBudget } = await import('../../src/main/db/spending-budgets');
     upsertBudget({ period: 'monthly', limitUsd: 20000 });
-    expect(runMock).toHaveBeenCalledWith('monthly', 20000, null);
+    expect(runMock).toHaveBeenCalledWith('monthly', 20000, null, expect.any(String));
   });
 
   it('getBudget returns null when not found', async () => {

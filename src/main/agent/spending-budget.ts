@@ -3,6 +3,7 @@ import {
   insertTransaction,
   updateTransactionToActual,
   deleteTransaction,
+  updateTransactionStatus,
   sumPeriodSpend,
 } from '../db/spending-transactions';
 
@@ -98,7 +99,7 @@ export function confirmTransaction(transactionId: number, actualCents: number): 
 }
 
 export function cancelReservation(transactionId: number): void {
-  deleteTransaction(transactionId);
+  updateTransactionStatus(transactionId, 'failed');
 }
 
 export function resetExpiredPeriods(): void {

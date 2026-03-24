@@ -32,12 +32,13 @@ function toRecord(row: SpendingBudgetRow): SpendingBudget {
 }
 
 export function upsertBudget(input: { period: BudgetPeriod; limitUsd: number; resetDay?: number }): void {
+  const now = new Date().toISOString();
   getDb().prepare(`
-    INSERT INTO spending_budgets (period, limit_usd, is_active, reset_day)
-    VALUES (?, ?, 1, ?)
+    INSERT INTO spending_budgets (period, limit_usd, is_active, reset_day, created_at)
+    VALUES (?, ?, 1, ?, ?)
     ON CONFLICT(period) DO UPDATE SET limit_usd = excluded.limit_usd,
       reset_day = excluded.reset_day, is_active = 1
-  `).run(input.period, input.limitUsd, input.resetDay ?? null);
+  `).run(input.period, input.limitUsd, input.resetDay ?? null, now);
 }
 
 export function getBudget(period: BudgetPeriod): SpendingBudget | null {

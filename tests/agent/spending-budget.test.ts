@@ -6,6 +6,7 @@ const sumPeriodSpendMock = vi.fn();
 const insertTransactionMock = vi.fn();
 const updateTransactionToActualMock = vi.fn();
 const deleteTransactionMock = vi.fn();
+const updateTransactionStatusMock = vi.fn();
 
 vi.mock('../../src/main/db/spending-budgets', () => ({
   listActiveBudgets: listActiveBudgetsMock,
@@ -15,6 +16,7 @@ vi.mock('../../src/main/db/spending-transactions', () => ({
   insertTransaction: insertTransactionMock,
   updateTransactionToActual: updateTransactionToActualMock,
   deleteTransaction: deleteTransactionMock,
+  updateTransactionStatus: updateTransactionStatusMock,
   sumPeriodSpend: sumPeriodSpendMock,
 }));
 
@@ -25,6 +27,7 @@ describe('spending-budget engine', () => {
     insertTransactionMock.mockReset();
     updateTransactionToActualMock.mockReset();
     deleteTransactionMock.mockReset();
+    updateTransactionStatusMock.mockReset();
   });
 
   it('checkBudget allows purchase when no budgets configured', async () => {
@@ -104,10 +107,10 @@ describe('spending-budget engine', () => {
     expect(updateTransactionToActualMock).toHaveBeenCalledWith(5, 2100);
   });
 
-  it('cancelReservation calls deleteTransaction', async () => {
+  it('cancelReservation marks transaction as failed', async () => {
     const { cancelReservation } = await import('../../src/main/agent/spending-budget');
     cancelReservation(7);
-    expect(deleteTransactionMock).toHaveBeenCalledWith(7);
+    expect(updateTransactionStatusMock).toHaveBeenCalledWith(7, 'failed');
   });
 
   it('getRemainingBudgets returns correct remaining for active budgets', async () => {

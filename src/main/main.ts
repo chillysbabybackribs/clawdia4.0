@@ -605,7 +605,8 @@ function setupIpcHandlers(): void {
     if (!/^\d{13,19}$/.test(digits)) {
       throw new Error('Invalid card number');
     }
-    const vaultLabel = `payment_card_${input.lastFour}_${Date.now()}`;
+    const lastFour = digits.slice(-4);
+    const vaultLabel = `payment_card_${lastFour}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     identityStore.saveCredential({
       label: vaultLabel,
       type: 'payment_card',
@@ -619,7 +620,7 @@ function setupIpcHandlers(): void {
     });
     const id = insertPaymentMethod({
       label: input.label,
-      lastFour: input.lastFour,
+      lastFour: lastFour,
       cardType: input.cardType as any,
       expiryMonth: input.expiryMonth,
       expiryYear: input.expiryYear,
@@ -651,8 +652,10 @@ function setupIpcHandlers(): void {
   ipcMain.handle(IPC.WALLET_REMOVE_CARD, (_e, id: number) => softDeletePaymentMethod(id));
 
   ipcMain.handle(IPC.WALLET_GET_BUDGETS, () => listActiveBudgets());
-  ipcMain.handle(IPC.WALLET_SET_BUDGET, (_e, input: { period: string; limitUsd: number; resetDay?: number }) =>
-    upsertBudget(input as any));
+  ipcMain.handle(IPC.WALLET_SET_BUDGET, (_e, input: { period: string; limitUsd: number; resetDay?: number }) => {
+    if (!input.limitUsd || input.limitUsd <= 0) throw new Error('Budget limit must be greater than 0');
+    upsertBudget(input as any);
+  });
   ipcMain.handle(IPC.WALLET_DISABLE_BUDGET, (_e, period: string) => disableBudget(period as any));
 
   ipcMain.handle(IPC.WALLET_GET_TRANSACTIONS, (_e, args?: { limit?: number }) =>

@@ -69,15 +69,16 @@ function toRecord(row: PaymentMethodRow): PaymentMethod {
 }
 
 export function insertPaymentMethod(pm: NewPaymentMethod): number {
+  const now = new Date().toISOString();
   const result = getDb().prepare(`
     INSERT INTO payment_methods
       (label, last_four, card_type, method_type, expiry_month, expiry_year,
-       billing_name, source, vault_ref)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       billing_name, source, vault_ref, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     pm.label, pm.lastFour, pm.cardType, pm.methodType ?? 'card',
     pm.expiryMonth, pm.expiryYear, pm.billingName ?? null,
-    pm.source, pm.vaultRef ?? null,
+    pm.source, pm.vaultRef ?? null, now,
   );
   return Number(result.lastInsertRowid);
 }
