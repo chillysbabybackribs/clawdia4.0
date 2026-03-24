@@ -100,6 +100,19 @@ contextBridge.exposeInMainWorld('clawdia', {
   swarm: {
     onStateChanged: (cb: (state: any) => void) => on('swarm:state-changed', cb),
   },
+  identity: {
+    getProfile: () => invoke('identity:profile:get'),
+    setProfile: (input: any) => invoke('identity:profile:set', input),
+    listAccounts: () => invoke('identity:accounts:list'),
+    addAccount: (input: any) => invoke('identity:account:add', input),
+    deleteAccount: (serviceName: string) => invoke('identity:account:delete', serviceName),
+    listCredentials: () => invoke('identity:credentials:list'),
+    addCredential: (label: string, type: string, service: string, valuePlain: string) =>
+      invoke('identity:credential:add', label, type, service, valuePlain),
+    deleteCredential: (label: string, service: string) =>
+      invoke('identity:credential:delete', label, service),
+    onAccountsChanged: (cb: () => void) => on('identity:accounts-changed', cb),
+  },
   policy: {
     list: () => invoke('policy:list'),
   },
