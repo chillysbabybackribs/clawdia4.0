@@ -1,3 +1,4 @@
+import { retryFetch } from './retry-fetch';
 import type { ProviderClient } from './base';
 import type {
   ChatOptions,
@@ -272,26 +273,18 @@ export class OpenAIProviderClient implements ProviderClient {
 
     if (options?.maxTokens) body.max_tokens = options.maxTokens;
 
-    const RETRYABLE = new Set([429, 502, 503, 504]);
-    const MAX_ATTEMPTS = 3;
-    let response!: Response;
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      response = await fetch('https://api.openai.com/v1/chat/completions', {
+    const response = await retryFetch(
+      'https://api.openai.com/v1/chat/completions',
+      {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${this.apiKey}`,
         },
         body: JSON.stringify(body),
-        signal: options?.signal,
-      });
-
-      if (response.ok || !RETRYABLE.has(response.status)) break;
-
-      const retryAfter = response.headers.get('retry-after');
-      const delayMs = retryAfter ? parseFloat(retryAfter) * 1000 : (2 ** attempt) * 1000 + Math.random() * 200;
-      if (attempt < MAX_ATTEMPTS - 1) await new Promise((r) => setTimeout(r, delayMs));
-    }
+      },
+      { signal: options?.signal },
+    );
 
     const requestId = response.headers.get('x-request-id');
     if (requestId) console.debug(`[OpenAI] x-request-id: ${requestId}`);

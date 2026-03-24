@@ -1,3 +1,4 @@
+import { retryFetch } from './retry-fetch';
 import type { ProviderClient } from './base';
 import type {
   ChatOptions,
@@ -251,15 +252,18 @@ export class GeminiProviderClient implements ProviderClient {
       body.generationConfig = { maxOutputTokens: options.maxTokens };
     }
 
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${this.model}:streamGenerateContent?alt=sse`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': this.apiKey,
+    const response = await retryFetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:streamGenerateContent?alt=sse`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': this.apiKey,
+        },
+        body: JSON.stringify(body),
       },
-      body: JSON.stringify(body),
-      signal: options?.signal,
-    });
+      { signal: options?.signal },
+    );
 
     if (!response.ok) {
       const data = await response.json().catch(() => ({})) as GeminiResponseChunk;
