@@ -139,7 +139,7 @@ Single exported function:
 ```typescript
 export async function maybeRecordSequence(
   runId: string,
-  status: RunStatus,
+  status: Exclude<RunStatus, 'running' | 'awaiting_approval' | 'needs_human'>,
 ): Promise<void>
 ```
 
@@ -243,16 +243,18 @@ export function listTaskSequences(limit?: number): TaskSequence[]
 
 ### `src/main/db/database.ts`
 
-Add migration at version **27** (current latest is v26):
+Add migration at version **28** (v27 is already taken by `site_harnesses` intervention annotations):
 
 ```typescript
-if (currentVersion < 27) {
+if (currentVersion < 28) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS task_sequences (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
       run_id          TEXT NOT NULL REFERENCES runs(id),
       goal            TEXT NOT NULL,
       goal_embedding  BLOB,
+      embedding_dim   INTEGER,
+      embedding_source TEXT,
       surfaces        TEXT NOT NULL DEFAULT '[]',
       steps           TEXT NOT NULL DEFAULT '[]',
       outcome         TEXT NOT NULL DEFAULT 'success',
@@ -264,7 +266,7 @@ if (currentVersion < 27) {
       created_at      TEXT NOT NULL
     );
   `);
-  db.pragma('user_version = 27');
+  db.pragma('user_version = 28');
 }
 ```
 
