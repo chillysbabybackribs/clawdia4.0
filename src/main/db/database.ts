@@ -26,6 +26,9 @@
  *   messages.attachments_json — uploaded image/file metadata for chat messages (v21)
  *   run_artifacts.kind widened for execution_graph_scaffold (v22)
  *   run_artifacts.kind widened for execution_graph_state (v23)
+ *   identity_profiles, managed_accounts, credential_vault — identity & credential vault (v24)
+ *   service_mentions — proactive service detection (v25)
+ *   scheduled_tasks, scheduled_task_runs — task scheduler (v26)
  */
 
 import Database from 'better-sqlite3';
@@ -605,5 +608,100 @@ function runMigrations(db: Database.Database): void {
     `);
   }
 
-  console.log(`[DB] Schema at version ${Math.max(currentVersion, 23)}`);
+  if (currentVersion < 24) {
+    console.log('[DB] Running migration v24: autonomy identity + credential tables');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS identity_profiles (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        name             TEXT NOT NULL UNIQUE,
+        full_name        TEXT NOT NULL DEFAULT '',
+        email            TEXT NOT NULL DEFAULT '',
+        username_pattern TEXT NOT NULL DEFAULT '',
+        date_of_birth    TEXT,
+        is_default       INTEGER NOT NULL DEFAULT 0,
+        created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS managed_accounts (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        service_name        TEXT NOT NULL,
+        login_url           TEXT NOT NULL DEFAULT '',
+        username            TEXT NOT NULL DEFAULT '',
+        email_used          TEXT NOT NULL DEFAULT '',
+        password_encrypted  TEXT NOT NULL DEFAULT '',
+        phone_used          TEXT NOT NULL DEFAULT '',
+        identity_profile_id INTEGER REFERENCES identity_profiles(id),
+        phone_method        TEXT NOT NULL DEFAULT '',
+        status              TEXT NOT NULL DEFAULT 'unverified'
+                              CHECK(status IN ('active', 'suspended', 'unverified')),
+        created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+        notes               TEXT NOT NULL DEFAULT '',
+        UNIQUE(service_name)
+      );
+
+      CREATE TABLE IF NOT EXISTS credential_vault (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        label            TEXT NOT NULL,
+        type             TEXT NOT NULL
+                           CHECK(type IN ('api_key','session_token','app_password','oauth_token','keychain_blob')),
+        service          TEXT NOT NULL DEFAULT '',
+        value_encrypted  TEXT NOT NULL,
+        expires_at       TEXT,
+        created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(label, service)
+      );
+
+      INSERT INTO schema_version (version) VALUES (24);
+    `);
+  }
+
+  if (currentVersion < 25) {
+    console.log('[DB] Running migration v25: service_mentions for proactive detection');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS service_mentions (
+        service_name  TEXT PRIMARY KEY,
+        mention_count INTEGER NOT NULL DEFAULT 0,
+        last_seen     TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO schema_version (version) VALUES (25);
+    `);
+  }
+
+  if (currentVersion < 26) {
+    console.log('[DB] Running migration v26: scheduled_tasks + scheduled_task_runs');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS scheduled_tasks (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        name          TEXT NOT NULL,
+        description   TEXT NOT NULL DEFAULT '',
+        cron_expr     TEXT,
+        trigger_type  TEXT NOT NULL DEFAULT 'time'
+                        CHECK(trigger_type IN ('time', 'completion')),
+        trigger_after_task_id INTEGER REFERENCES scheduled_tasks(id),
+        prompt        TEXT NOT NULL,
+        enabled       INTEGER NOT NULL DEFAULT 1,
+        requires_approval INTEGER NOT NULL DEFAULT 0,
+        approved      INTEGER NOT NULL DEFAULT 0,
+        created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS scheduled_task_runs (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id       INTEGER NOT NULL REFERENCES scheduled_tasks(id),
+        status        TEXT NOT NULL CHECK(status IN ('running','completed','failed','skipped')),
+        started_at    TEXT NOT NULL DEFAULT (datetime('now')),
+        completed_at  TEXT,
+        result        TEXT,
+        error         TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_task_id
+        ON scheduled_task_runs(task_id, started_at DESC);
+
+      INSERT INTO schema_version (version) VALUES (26);
+    `);
+  }
+
+  console.log(`[DB] Schema at version ${Math.max(currentVersion, 26)}`);
 }
