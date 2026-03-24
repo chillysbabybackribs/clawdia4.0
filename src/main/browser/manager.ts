@@ -288,6 +288,11 @@ export function createTab(url?: string, opts: { hidden?: boolean; activate?: boo
 
   if (url) view.webContents.loadURL(ensureUrl(url));
 
+  // Notify login interceptor of new user-facing tab
+  if (!opts.ownerRunId) {
+    _notifyNewUserTab(view.webContents);
+  }
+
   console.log(`[Browser] Created tab ${id} (${tabs.size} total)`);
   emitTabsChanged();
   return id;
@@ -1728,4 +1733,23 @@ export function isValidProductExtraction(extracted: StructuredExtractionEnvelope
   if (/^page not found$/i.test(title)) return false;
   if (/^\d+-\d+\s+of\s+\d+\s+results/i.test(title)) return false;
   return true;
+}
+
+/** Returns webContents for all user-facing (non-agent-isolated) tabs. Used by login interceptor. */
+export function getAllUserTabWebContents(): import('electron').WebContents[] {
+  return Array.from(tabs.values())
+    .filter(t => !t.ownerRunId)
+    .map(t => t.view.webContents);
+}
+
+let _onNewUserTabCb: ((wc: import('electron').WebContents) => void) | null = null;
+
+/** Register a callback to be called whenever a new user-facing tab is created. */
+export function setOnNewUserTabCallback(cb: (wc: import('electron').WebContents) => void): void {
+  _onNewUserTabCb = cb;
+}
+
+/** Called internally by createTab for non-isolated tabs. */
+export function _notifyNewUserTab(wc: import('electron').WebContents): void {
+  _onNewUserTabCb?.(wc);
 }

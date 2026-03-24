@@ -64,6 +64,8 @@ import { buildUserMessageContent } from './db/conversations';
 import { identityStore } from './autonomy/identity-store';
 import { proactiveDetector } from './autonomy/proactive-detector';
 import { taskScheduler } from './autonomy/task-scheduler';
+import { attachToWebContents } from './autonomy/login-interceptor';
+import { getAllUserTabWebContents, setOnNewUserTabCallback } from './browser/manager';
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
@@ -118,6 +120,11 @@ function createWindow(): void {
     mainWindow?.show();
     if (mainWindow) {
       initBrowser(mainWindow);
+      // Wire login interceptor to all current and future user-facing tabs
+      for (const wc of getAllUserTabWebContents()) {
+        attachToWebContents(wc);
+      }
+      setOnNewUserTabCallback((wc) => attachToWebContents(wc));
       initProcessManager(mainWindow);
       // Initialize task scheduler — runs stored cron jobs
       taskScheduler.start(async (prompt, taskId) => {
