@@ -61,6 +61,15 @@ export const IPC = {
   // Browser sessions
   BROWSER_LIST_SESSIONS: 'browser:list-sessions',
   BROWSER_CLEAR_SESSION: 'browser:clear-session',
+  // Identity settings
+  IDENTITY_PROFILE_GET: 'identity:profile:get',
+  IDENTITY_PROFILE_SET: 'identity:profile:set',
+  IDENTITY_ACCOUNTS_LIST: 'identity:accounts:list',
+  IDENTITY_ACCOUNT_ADD: 'identity:account:add',
+  IDENTITY_ACCOUNT_DELETE: 'identity:account:delete',
+  IDENTITY_CREDENTIALS_LIST: 'identity:credentials:list',
+  IDENTITY_CREDENTIAL_ADD: 'identity:credential:add',
+  IDENTITY_CREDENTIAL_DELETE: 'identity:credential:delete',
 } as const;
 
 export const IPC_EVENTS = {
@@ -82,4 +91,6 @@ export const IPC_EVENTS = {
   CALENDAR_EVENTS_CHANGED: 'calendar:events-changed',
   // Swarm events (pushed from main to renderer)
   SWARM_STATE_CHANGED: 'swarm:state-changed',
+  // Identity events (pushed from main to renderer)
+  IDENTITY_ACCOUNTS_CHANGED: 'identity:accounts-changed',
 } as const;
