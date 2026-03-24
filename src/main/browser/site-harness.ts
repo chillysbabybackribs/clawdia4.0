@@ -78,6 +78,10 @@ export interface SiteHarness {
   successCount: number;
   /** Number of times this harness has failed */
   failCount: number;
+  /** If this harness required human intervention, describes what step and why. */
+  interventionHint?: string;
+  /** True if this harness was learned from a signup flow (vs. a regular form). */
+  isSignupHarness?: boolean;
   /** ISO timestamp of last use */
   lastUsed: string;
   /** ISO timestamp of creation */
@@ -194,8 +198,8 @@ export function saveHarness(harness: SiteHarness): number {
   ensureHarnessTable();
   const db = getDb();
   const result = db.prepare(`
-    INSERT INTO site_harnesses (domain, action_name, url_pattern, fields_json, submit_json, verify_json, success_count, fail_count, last_used, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO site_harnesses (domain, action_name, url_pattern, fields_json, submit_json, verify_json, success_count, fail_count, last_used, created_at, intervention_hint, is_signup_harness)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(domain, action_name) DO UPDATE SET
       url_pattern = excluded.url_pattern,
       fields_json = excluded.fields_json,
@@ -203,7 +207,9 @@ export function saveHarness(harness: SiteHarness): number {
       verify_json = excluded.verify_json,
       success_count = excluded.success_count,
       fail_count = excluded.fail_count,
-      last_used = excluded.last_used
+      last_used = excluded.last_used,
+      intervention_hint = excluded.intervention_hint,
+      is_signup_harness = excluded.is_signup_harness
   `).run(
     harness.domain,
     harness.actionName,
@@ -215,6 +221,8 @@ export function saveHarness(harness: SiteHarness): number {
     harness.failCount,
     harness.lastUsed || new Date().toISOString(),
     harness.createdAt || new Date().toISOString(),
+    harness.interventionHint ?? null,
+    harness.isSignupHarness ? 1 : 0,
   );
   return result.lastInsertRowid as number;
 }
@@ -249,6 +257,8 @@ function rowToHarness(row: any): SiteHarness {
     verify: JSON.parse(row.verify_json || '{}'),
     successCount: row.success_count,
     failCount: row.fail_count,
+    interventionHint: row.intervention_hint ?? undefined,
+    isSignupHarness: row.is_signup_harness === 1,
     lastUsed: row.last_used,
     createdAt: row.created_at,
   };

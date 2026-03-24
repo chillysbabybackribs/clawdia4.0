@@ -29,6 +29,7 @@
  *   identity_profiles, managed_accounts, credential_vault — identity & credential vault (v24)
  *   service_mentions — proactive service detection (v25)
  *   scheduled_tasks, scheduled_task_runs — task scheduler (v26)
+ *   site_harnesses.intervention_hint + is_signup_harness — signup annotation (v27)
  */
 
 import Database from 'better-sqlite3';
@@ -703,5 +704,35 @@ function runMigrations(db: Database.Database): void {
     `);
   }
 
-  console.log(`[DB] Schema at version ${Math.max(currentVersion, 26)}`);
+  if (currentVersion < 27) {
+    console.log('[DB] Running migration v27: site_harnesses intervention annotations');
+    // site_harnesses may not exist yet on fresh installs (created lazily by ensureHarnessTable).
+    // We create it if missing, then add the new columns via try/catch since SQLite
+    // does not support IF NOT EXISTS on ALTER TABLE.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS site_harnesses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        domain TEXT NOT NULL,
+        action_name TEXT NOT NULL,
+        url_pattern TEXT NOT NULL,
+        fields_json TEXT NOT NULL,
+        submit_json TEXT NOT NULL,
+        verify_json TEXT NOT NULL DEFAULT '{}',
+        success_count INTEGER NOT NULL DEFAULT 0,
+        fail_count INTEGER NOT NULL DEFAULT 0,
+        last_used TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(domain, action_name)
+      );
+      CREATE INDEX IF NOT EXISTS idx_harness_domain ON site_harnesses(domain);
+    `);
+    // Add new columns — wrapped in individual try/catch since ALTER TABLE
+    // fails if the column already exists (e.g. on a fresh install that just ran
+    // ensureHarnessTable before this migration ran).
+    try { db.exec(`ALTER TABLE site_harnesses ADD COLUMN intervention_hint TEXT`); } catch {}
+    try { db.exec(`ALTER TABLE site_harnesses ADD COLUMN is_signup_harness INTEGER NOT NULL DEFAULT 0`); } catch {}
+    db.exec(`INSERT INTO schema_version (version) VALUES (27)`);
+  }
+
+  console.log(`[DB] Schema at version ${Math.max(currentVersion, 27)}`);
 }
