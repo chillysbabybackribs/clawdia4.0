@@ -557,11 +557,13 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
       isStreaming: true,
     }]);
     setIsStreaming(true);
+    setShimmerText('Thinking…');
     return assistantId;
   }, []);
 
   const handleStreamTextChunk = useCallback((chunk: string) => {
     ensureAssistantReplayMessage();
+    setShimmerText('');           // clear shimmer the moment text arrives
     if (chunk.includes('__RESET__')) {
       const lastIdx = feedRef.current.length - 1;
       if (lastIdx >= 0 && feedRef.current[lastIdx].kind === 'text') {
@@ -578,26 +580,24 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
     } else {
       feedRef.current.push({ kind: 'text', text: chunk, isStreaming: true });
     }
-    setStatusText('');
+    setShimmerText('');
     scheduleStreamUpdate();
   }, [ensureAssistantReplayMessage, scheduleStreamUpdate]);
 
   const handleThinkingEvent = useCallback((thought: string) => {
-    setStatusText(thought || '');
+    setShimmerText(thought ? 'Thinking…' : '');
     if (thought) autoScroll();
   }, [autoScroll]);
 
   const handleWorkflowPlanTextEvent = useCallback((chunk: string) => {
     setWorkflowPlanDraft(prev => prev + chunk);
     setIsWorkflowPlanStreaming(true);
-    setStatusText('');
     requestAnimationFrame(() => autoScroll());
   }, [autoScroll]);
 
   const handleWorkflowPlanResetEvent = useCallback(() => {
     setWorkflowPlanDraft('');
     setIsWorkflowPlanStreaming(true);
-    setStatusText('');
   }, []);
 
   const handleWorkflowPlanEndEvent = useCallback(() => {
@@ -606,47 +606,24 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
 
   const handleToolActivityEvent = useCallback((activity: { name: string; status: string; detail?: string }) => {
     ensureAssistantReplayMessage();
-    if (activity.status === 'running' || activity.status === 'awaiting_approval' || activity.status === 'needs_human') {
-      const newTool: ToolCall = {
-        id: `tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        name: activity.name,
-        status: activity.status === 'awaiting_approval' ? 'running' : 'running',
-        detail: activity.detail,
-      };
+
+    if (activity.status === 'running') {
+      // Freeze any in-progress text item so text + shimmer don't interleave
       const lastIdx = feedRef.current.length - 1;
       if (lastIdx >= 0 && feedRef.current[lastIdx].kind === 'text') {
         feedRef.current[lastIdx] = { ...feedRef.current[lastIdx], isStreaming: false } as FeedItem;
       }
-      feedRef.current.push({ kind: 'tool', tool: newTool });
+      setShimmerText(toolToShimmerLabel(activity.name, activity.detail));
       scheduleStreamUpdate();
-      const detail = activity.detail ? ` — ${activity.detail.slice(0, 50)}` : '';
-      setStatusText(
-        activity.status === 'needs_human'
-          ? `Needs human intervention${detail}`
-          : activity.status === 'awaiting_approval'
-            ? `Waiting for approval${detail}`
-            : `Running ${activity.name}${detail}`,
-      );
-    } else {
-      const toolId = feedRef.current
-        .slice().reverse()
-        .find(item => item.kind === 'tool' && item.tool.name === activity.name && item.tool.status === 'running');
-      if (toolId && toolId.kind === 'tool') {
-        const idx = feedRef.current.lastIndexOf(toolId);
-        feedRef.current[idx] = {
-          kind: 'tool',
-          tool: {
-            ...toolId.tool,
-            status: activity.status as ToolCall['status'],
-            detail: activity.detail,
-          },
-        };
-      }
-      scheduleStreamUpdate();
-      if (activity.status === 'success') setStatusText(`Completed ${activity.name}`);
-      else if (activity.status === 'error') setStatusText(`Failed: ${activity.name}`);
+      autoScroll();
+    } else if (activity.status === 'awaiting_approval') {
+      setShimmerText('Waiting for approval…');
+      autoScroll();
+    } else if (activity.status === 'needs_human') {
+      setShimmerText('Needs your input…');
+      autoScroll();
     }
-    autoScroll();
+    // success / error: no-op — shimmer will be cleared by first text chunk or stream end
   }, [autoScroll, ensureAssistantReplayMessage, scheduleStreamUpdate]);
 
   const handleToolStreamEvent = useCallback((payload: { toolId: string; toolName: string; chunk: string }) => {
@@ -679,7 +656,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
       ));
     }
     setIsStreaming(false);
-    setStatusText('');
+    setShimmerText('');
     assistantMsgIdRef.current = null;
   }, [flushStreamUpdate]);
 
@@ -700,7 +677,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
       setWorkflowPlanDraft('');
       setIsWorkflowPlanStreaming(false);
       setIsStreaming(false);
-      setStatusText('');
+      setShimmerText('');
       setMessages([]);
       setLoadedConversationId(loadConversationId);
       return;
@@ -714,7 +691,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
       setWorkflowPlanDraft('');
       setIsWorkflowPlanStreaming(false);
       setIsStreaming(false);
-      setStatusText('');
+      setShimmerText('');
       setMessages(result.messages || []);
       setLoadedConversationId(loadConversationId);
       requestAnimationFrame(() => {
@@ -731,7 +708,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
 
     feedRef.current = [];
     setStreamMap({});
-    setStatusText('');
+    setShimmerText('');
     setIsStreaming(true);
 
     const replay = async () => {
@@ -896,7 +873,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
       }
 
       setIsStreaming(false);
-      setStatusText('');
+      setShimmerText('');
       setWorkflowPlanDraft('');
       setIsWorkflowPlanStreaming(false);
       assistantMsgIdRef.current = null;
@@ -907,7 +884,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
         m.id === assistantId ? { ...m, content: `⚠️ ${err.message || 'Unknown error'}`, isStreaming: false } : m
       ));
       setIsStreaming(false);
-      setStatusText('');
+      setShimmerText('');
       setWorkflowPlanDraft('');
       setIsWorkflowPlanStreaming(false);
       assistantMsgIdRef.current = null;
@@ -918,19 +895,17 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
     (window as any).clawdia?.chat.stop();
     setIsStreaming(false);
     setIsPaused(false);
-    setStatusText('');
+    setShimmerText('');
   }, []);
 
   const handlePause = useCallback(() => {
     (window as any).clawdia?.chat.pause();
     setIsPaused(true);
-    setStatusText('Paused — type to add context, or resume');
   }, []);
 
   const handleResume = useCallback(() => {
     (window as any).clawdia?.chat.resume();
     setIsPaused(false);
-    setStatusText('Resuming...');
   }, []);
 
   const handleRateTool = useCallback((messageId: string, toolId: string, rating: 'up' | 'down' | null, note?: string) => {
@@ -968,7 +943,6 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
       timestamp: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
     };
     setMessages(prev => [...prev, contextMsg]);
-    setStatusText('Context added — will be used in next iteration');
     requestAnimationFrame(() => scrollToBottom('smooth'));
   }, [scrollToBottom]);
 
