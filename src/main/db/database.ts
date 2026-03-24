@@ -30,6 +30,7 @@
  *   service_mentions — proactive service detection (v25)
  *   scheduled_tasks, scheduled_task_runs — task scheduler (v26)
  *   site_harnesses.intervention_hint + is_signup_harness — signup annotation (v27)
+ *   task_sequences — distilled multi-surface task recordings for Bloodhound v2 (v28)
  */
 
 import Database from 'better-sqlite3';
@@ -734,5 +735,27 @@ function runMigrations(db: Database.Database): void {
     db.exec(`INSERT INTO schema_version (version) VALUES (27)`);
   }
 
-  console.log(`[DB] Schema at version ${Math.max(currentVersion, 27)}`);
+  if (currentVersion < 28) {
+    console.log('[DB] Running migration v28: task_sequences');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS task_sequences (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id          TEXT NOT NULL REFERENCES runs(id),
+        goal            TEXT NOT NULL,
+        goal_embedding  BLOB,
+        surfaces        TEXT NOT NULL DEFAULT '[]',
+        steps           TEXT NOT NULL DEFAULT '[]',
+        outcome         TEXT NOT NULL DEFAULT 'success',
+        tool_call_count INTEGER NOT NULL DEFAULT 0,
+        duration_ms     INTEGER NOT NULL DEFAULT 0,
+        success_count   INTEGER NOT NULL DEFAULT 0,
+        fail_count      INTEGER NOT NULL DEFAULT 0,
+        last_used       TEXT,
+        created_at      TEXT NOT NULL
+      );
+      INSERT INTO schema_version (version) VALUES (28);
+    `);
+  }
+
+  console.log(`[DB] Schema at version ${Math.max(currentVersion, 28)}`);
 }
