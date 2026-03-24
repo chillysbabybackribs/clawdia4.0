@@ -66,6 +66,30 @@ describe('task-sequences CRUD', () => {
     expect(result!.goalEmbedding).toBeNull();
   });
 
+  it('getTaskSequence deserializes non-null goal_embedding to Float32Array', async () => {
+    const original = new Float32Array([0.1, 0.2, 0.3]);
+    const blob = Buffer.from(original.buffer);
+    getMock.mockReturnValue({
+      id: 2,
+      run_id: 'run-2',
+      goal: 'test embedding',
+      goal_embedding: blob,
+      surfaces: JSON.stringify([]),
+      steps: JSON.stringify([]),
+      outcome: 'success',
+      tool_call_count: 3,
+      duration_ms: 1000,
+      success_count: 3,
+      fail_count: 0,
+      last_used: null,
+      created_at: '2026-03-24T00:00:00.000Z',
+    });
+    const { getTaskSequence } = await import('../../src/main/db/task-sequences');
+    const result = getTaskSequence(2);
+    expect(result!.goalEmbedding).toBeInstanceOf(Float32Array);
+    expect(result!.goalEmbedding!.length).toBe(3);
+  });
+
   it('updateTaskSequenceSteps serializes steps to JSON', async () => {
     runMock.mockReturnValue({ changes: 1 });
     const { updateTaskSequenceSteps } = await import('../../src/main/db/task-sequences');

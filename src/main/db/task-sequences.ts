@@ -85,7 +85,7 @@ function rowToTaskSequence(row: any): TaskSequence {
     runId: row.run_id,
     goal: row.goal,
     goalEmbedding: row.goal_embedding
-      ? new Float32Array(Buffer.from(row.goal_embedding).buffer)
+      ? (() => { const buf = Buffer.from(row.goal_embedding); return new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / Float32Array.BYTES_PER_ELEMENT); })()
       : null,
     surfaces: JSON.parse(row.surfaces || '[]'),
     steps: JSON.parse(row.steps || '[]'),
