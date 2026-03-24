@@ -37,7 +37,7 @@ async function embedWithOpenAI(text: string, apiKey: string): Promise<Float32Arr
   });
 
   if (!response.ok) {
-    const err = await response.text();
+    const err = await response.text().catch(() => '');
     throw new Error(`OpenAI embedding error ${response.status}: ${err}`);
   }
 
@@ -60,7 +60,7 @@ async function embedWithGemini(text: string, apiKey: string): Promise<Float32Arr
   );
 
   if (!response.ok) {
-    const err = await response.text();
+    const err = await response.text().catch(() => '');
     throw new Error(`Gemini embedding error ${response.status}: ${err}`);
   }
 
