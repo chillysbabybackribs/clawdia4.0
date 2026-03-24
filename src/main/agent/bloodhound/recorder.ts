@@ -45,6 +45,7 @@ export async function maybeRecordSequence(
       durationMs > MIN_DURATION_MS;
 
     if (!meetsThreshold) return;
+    if (steps.length === 0) return;
 
     const isFailedOrCancelled = status === 'cancelled' || status === 'failed';
     if (isFailedOrCancelled && successfulSteps === 0) return;
