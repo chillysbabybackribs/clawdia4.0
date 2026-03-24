@@ -51,4 +51,11 @@ describe('lookupModelMaxOutput()', () => {
   it('returns fallback for unknown model', () => {
     expect(lookupModelMaxOutput('gpt-unknown', map, 8192)).toBe(8192);
   });
+
+  it('picks the longer prefix when two prefixes both match', () => {
+    const ambiguousMap: Record<string, number> = { 'gpt-5': 8192, 'gpt-5.4': 32768 };
+    // 'gpt-5.4-mini-20260101' starts with both 'gpt-5' and 'gpt-5.4'
+    // the longer prefix 'gpt-5.4' must win
+    expect(lookupModelMaxOutput('gpt-5.4-mini-20260101', ambiguousMap, 4096)).toBe(32768);
+  });
 });

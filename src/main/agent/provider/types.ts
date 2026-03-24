@@ -76,8 +76,8 @@ export interface LLMResponse {
 
 const STOP_REASON_MAP: Record<string, string> = {
   tool_use: 'tool_use',
-  tool_calls: 'tool_use',
-  function_calls: 'tool_use',
+  tool_calls: 'tool_use',       // OpenAI raw value
+  function_calls: 'tool_use',  // defensive — Gemini uses 'stop' even for tool calls; this entry handles any future adapter that uses this string
   end_turn: 'end_turn',
   stop: 'end_turn',
   length: 'max_tokens',
