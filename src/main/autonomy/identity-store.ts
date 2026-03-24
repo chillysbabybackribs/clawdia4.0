@@ -70,8 +70,11 @@ export interface SaveCredentialInput {
 export class IdentityStore {
   private encrypt(value: string): string {
     if (!safeStorage.isEncryptionAvailable()) {
-      // Fallback: store as-is in test/CI environments where keychain unavailable.
-      // Production always has encryption available on desktop Electron.
+      // Encryption unavailable — this should not happen on a desktop Electron install.
+      // Log a warning so the issue is surfaced; do not silently store plaintext in production.
+      if (process.type === 'browser') {
+        console.warn('[IdentityStore] WARNING: safeStorage encryption unavailable — credentials stored unencrypted. Ensure libsecret is installed on Linux.');
+      }
       return value;
     }
     return safeStorage.encryptString(value).toString('base64');

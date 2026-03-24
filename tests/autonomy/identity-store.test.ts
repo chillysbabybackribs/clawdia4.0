@@ -58,7 +58,8 @@ describe('IdentityStore', () => {
     const db = new Database(tmpPath);
     const row = db.prepare('SELECT password_encrypted FROM managed_accounts WHERE service_name = ?').get('github') as any;
     expect(row.password_encrypted).not.toBe('mypassword');
-    expect(row.password_encrypted).not.toContain('mypassword'); // truly encrypted
+    // encrypt() calls .toString('base64') on the mock Buffer — stored value is base64, not plaintext
+    expect(row.password_encrypted).toBe(Buffer.from('mypassword:encrypted').toString('base64'));
     db.close();
   });
 
