@@ -67,6 +67,14 @@ import {
   mergeDiscoveredSessionAccounts,
   toManagedAccountView,
 } from './autonomy/session-discovery';
+import {
+  insertPaymentMethod, listPaymentMethods, setPreferred, setBackup,
+  softDeletePaymentMethod,
+} from './db/payment-methods';
+import { upsertBudget, listActiveBudgets, disableBudget } from './db/spending-budgets';
+import { listTransactions } from './db/spending-transactions';
+import { getRemainingBudgets, resetExpiredPeriods } from './agent/spending-budget';
+import { scanBrowserCards } from './agent/browser-card-scanner';
 import { proactiveDetector } from './autonomy/proactive-detector';
 import { taskScheduler } from './autonomy/task-scheduler';
 import { attachToWebContents } from './autonomy/login-interceptor';
@@ -586,8 +594,86 @@ function setupIpcHandlers(): void {
     identityStore.deleteCredential(label, service);
     return { ok: true };
   });
+
+  // Wallet handlers
+  ipcMain.handle(IPC.WALLET_GET_PAYMENT_METHODS, () => listPaymentMethods());
+
+  ipcMain.handle(IPC.WALLET_ADD_MANUAL_CARD, (_e, input: {
+    label: string; lastFour: string; cardType: string;
+    expiryMonth: number; expiryYear: number; billingName?: string;
+    cardNumber: string;
+  }) => {
+    const digits = input.cardNumber.replace(/\s/g, '');
+    if (!/^\d{13,19}$/.test(digits)) {
+      throw new Error('Invalid card number');
+    }
+    const lastFour = digits.slice(-4);
+    const vaultLabel = `payment_card_${lastFour}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    identityStore.saveCredential({
+      label: vaultLabel,
+      type: 'payment_card',
+      service: 'wallet',
+      valuePlain: JSON.stringify({
+        cardNumber: digits,
+        expiryMonth: input.expiryMonth,
+        expiryYear: input.expiryYear,
+        billingName: input.billingName,
+      }),
+    });
+    const id = insertPaymentMethod({
+      label: input.label,
+      lastFour: lastFour,
+      cardType: input.cardType as any,
+      expiryMonth: input.expiryMonth,
+      expiryYear: input.expiryYear,
+      billingName: input.billingName,
+      source: 'manual',
+      vaultRef: vaultLabel,
+    });
+    return listPaymentMethods().find(m => m.id === id);
+  });
+
+  ipcMain.handle(IPC.WALLET_IMPORT_BROWSER_CARDS, async () => await scanBrowserCards());
+
+  ipcMain.handle(IPC.WALLET_CONFIRM_IMPORT, (_e, candidates: any[]) => {
+    for (const c of candidates) {
+      insertPaymentMethod({
+        label: c.label,
+        lastFour: c.lastFour,
+        cardType: c.cardType,
+        expiryMonth: c.expiryMonth,
+        expiryYear: c.expiryYear,
+        billingName: c.billingName,
+        source: 'browser_autofill',
+      });
+    }
+  });
+
+  ipcMain.handle(IPC.WALLET_SET_PREFERRED, (_e, id: number) => setPreferred(id));
+  ipcMain.handle(IPC.WALLET_SET_BACKUP, (_e, id: number) => setBackup(id));
+  ipcMain.handle(IPC.WALLET_REMOVE_CARD, (_e, id: number) => softDeletePaymentMethod(id));
+
+  ipcMain.handle(IPC.WALLET_GET_BUDGETS, () => listActiveBudgets());
+  ipcMain.handle(IPC.WALLET_SET_BUDGET, (_e, input: { period: string; limitUsd: number; resetDay?: number }) => {
+    if (!input.limitUsd || input.limitUsd <= 0) throw new Error('Budget limit must be greater than 0');
+    upsertBudget(input as any);
+  });
+  ipcMain.handle(IPC.WALLET_DISABLE_BUDGET, (_e, period: string) => disableBudget(period as any));
+
+  ipcMain.handle(IPC.WALLET_GET_TRANSACTIONS, (_e, args?: { limit?: number }) =>
+    listTransactions(args?.limit));
+  ipcMain.handle(IPC.WALLET_GET_REMAINING_BUDGETS, () => getRemainingBudgets());
 }
 
-app.whenReady().then(createWindow);
+// Spending notification emitter — called by checkout-executor
+export function emitSpendingEvent(event: string, payload: Record<string, any>): void {
+  mainWindow?.webContents.send(event, payload);
+}
+
+app.whenReady().then(() => {
+  createWindow();
+  resetExpiredPeriods();
+  setInterval(resetExpiredPeriods, 60 * 60 * 1000); // hourly
+});
 app.on('before-quit', () => { closeBrowser(); destroyShell(); });
 app.on('window-all-closed', () => { destroyShell(); closeDb(); app.quit(); });

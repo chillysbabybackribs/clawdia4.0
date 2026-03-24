@@ -59,7 +59,7 @@ export interface SaveAccountInput {
 
 export interface SaveCredentialInput {
   label: string;
-  type: 'api_key' | 'session_token' | 'app_password' | 'oauth_token';
+  type: 'api_key' | 'session_token' | 'app_password' | 'oauth_token' | 'payment_card';
   service?: string;
   valuePlain: string;
   expiresAt?: string;

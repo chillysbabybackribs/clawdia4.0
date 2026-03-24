@@ -1,6 +1,6 @@
 import React from 'react';
 
-export type DrawerMode = 'chat' | 'agents' | 'browser' | 'files' | 'desktop';
+export type DrawerMode = 'chat' | 'agents' | 'browser' | 'files' | 'desktop' | 'wallet';
 
 interface RailProps {
   activeMode: DrawerMode | null; // null = drawer closed
@@ -68,6 +68,12 @@ const icons = {
       <line x1="12" y1="17" x2="12" y2="21" />
     </svg>
   ),
+  wallet: (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
+      <line x1="1" y1="10" x2="23" y2="10" />
+    </svg>
+  ),
   settings: (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3" />
@@ -82,6 +88,7 @@ const MODES: { mode: DrawerMode; title: string }[] = [
   { mode: 'browser', title: 'Browser Sessions' },
   { mode: 'files', title: 'Files' },
   { mode: 'desktop', title: 'Desktop' },
+  { mode: 'wallet', title: 'Wallet' },
 ];
 
 export default function Rail({ activeMode, onModeChange, onSettings }: RailProps) {

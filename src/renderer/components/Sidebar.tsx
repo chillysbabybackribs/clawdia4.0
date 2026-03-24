@@ -6,6 +6,7 @@ import AgentsDrawer from './sidebar/drawers/AgentsDrawer';
 import BrowserDrawer from './sidebar/drawers/BrowserDrawer';
 import FilesDrawer from './sidebar/drawers/FilesDrawer';
 import DesktopDrawer from './sidebar/drawers/DesktopDrawer';
+import WalletDrawer from './sidebar/drawers/WalletDrawer';
 
 interface SidebarProps {
   onViewChange: (view: View) => void;
@@ -75,6 +76,7 @@ export default function Sidebar({
           {activeMode === 'browser' && <BrowserDrawer />}
           {activeMode === 'files' && <FilesDrawer onAddContext={handleAddContext} />}
           {activeMode === 'desktop' && <DesktopDrawer />}
+          {activeMode === 'wallet' && <WalletDrawer />}
         </div>
       )}
     </nav>
