@@ -1,8 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import type { Message, ToolCall, FeedItem, ProcessInfo, RunApproval, RunHumanIntervention, MessageAttachment } from '../../shared/types';
 import InputBar from './InputBar';
-import StatusLine from './StatusLine';
-import ToolActivity, { type ToolStreamMap } from './ToolActivity';
+import { type ToolStreamMap } from './ToolActivity';
 import MarkdownRenderer from './MarkdownRenderer';
 import TerminalLogStrip from './TerminalLogStrip';
 import SwarmPanel from './SwarmPanel';
@@ -411,8 +410,6 @@ const AssistantMessage = React.memo(function AssistantMessage({ message, shimmer
   if (!prev.message.isStreaming && !next.message.isStreaming) {
     return prev.message.id === next.message.id;
   }
-  // Re-render when shimmerText changes (keeps shimmer in sync)
-  if (prev.shimmerText !== next.shimmerText) return false;
   // Always re-render the actively streaming message
   return false;
 });
@@ -563,7 +560,6 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
     } else {
       feedRef.current.push({ kind: 'text', text: chunk, isStreaming: true });
     }
-    setShimmerText('');
     scheduleStreamUpdate();
   }, [ensureAssistantReplayMessage, scheduleStreamUpdate]);
 
