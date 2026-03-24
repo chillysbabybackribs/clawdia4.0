@@ -18,8 +18,6 @@ export interface CheckoutResult {
   transactionId?: number;
 }
 
-const CVV_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-
 export async function runCheckout(opts: CheckoutOptions): Promise<CheckoutResult> {
   const { runId, merchant, estimatedCents, description, execute } = opts;
 
@@ -53,28 +51,16 @@ export async function runCheckout(opts: CheckoutOptions): Promise<CheckoutResult
     const getCvv = async (): Promise<string | null> => {
       // Dynamically import to avoid circular dependency
       const { createRunHumanIntervention } = await import('../db/run-human-interventions');
-      const intervention = createRunHumanIntervention(runId, {
+      createRunHumanIntervention(runId, {
         interventionType: 'unknown',
         target: merchant,
-        summary: `CVV required to complete purchase at ${merchant} — $${(estimatedCents / 100).toFixed(2)}`,
-        instructions: 'Enter the 3-digit security code from the back of your card.',
-        request: { merchant, amountCents: estimatedCents },
+        summary: `CVV required to complete purchase at ${merchant} — $${(estimatedCents / 100).toFixed(2)}. Enter your card's security code in the app.`,
+        instructions: 'Enter the 3-digit security code from the back of your card to proceed.',
+        request: { merchant, amountCents: estimatedCents, cvvRequired: true },
       });
-
-      // Poll for resolution (max 5 minutes)
-      const deadline = Date.now() + CVV_TIMEOUT_MS;
-      while (Date.now() < deadline) {
-        await new Promise(r => setTimeout(r, 2000));
-        const { getRunHumanInterventionRecord } = await import('../db/run-human-interventions');
-        const updated = getRunHumanInterventionRecord(intervention.id);
-        if (updated?.status === 'resolved') {
-          return (updated.request as Record<string, unknown>)?.cvv as string ?? null;
-        }
-        if (updated?.status === 'dismissed') return null;
-      }
-      // Timeout — dismiss and return null
-      const { resolveRunHumanIntervention } = await import('../db/run-human-interventions');
-      resolveRunHumanIntervention(intervention.id, 'dismissed');
+      // The intervention system does not currently support response payloads.
+      // CVV must be provided via the execute() callback's own mechanism.
+      // Return null to indicate no stored CVV is available from this path.
       return null;
     };
 
