@@ -152,6 +152,21 @@ textarea { field-sizing: content; }
   font-weight: 500; letter-spacing: 0.02em;
 }
 
+/* ── Inline shimmer indicator ── */
+.inline-shimmer {
+  font-size: 13px;
+  background: linear-gradient(90deg,
+    rgba(120, 120, 136, 0.5) 0%, rgba(120, 120, 136, 0.5) 35%,
+    rgba(200, 200, 215, 0.9) 50%, rgba(120, 120, 136, 0.5) 65%,
+    rgba(120, 120, 136, 0.5) 100%);
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: status-shimmer 2s linear infinite;
+  display: inline-block;
+}
+
 /* ── Terminal log strip — scoped 3px scrollbar ── */
 .terminal-log-strip ::-webkit-scrollbar { width: 3px; }
 .terminal-log-strip ::-webkit-scrollbar-track { background: transparent; }
