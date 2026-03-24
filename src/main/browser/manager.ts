@@ -1750,6 +1750,6 @@ export function setOnNewUserTabCallback(cb: (wc: import('electron').WebContents)
 }
 
 /** Called internally by createTab for non-isolated tabs. */
-export function _notifyNewUserTab(wc: import('electron').WebContents): void {
+function _notifyNewUserTab(wc: import('electron').WebContents): void {
   _onNewUserTabCb?.(wc);
 }
