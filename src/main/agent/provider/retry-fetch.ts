@@ -49,14 +49,20 @@ function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
       return;
     }
 
-    const timer = setTimeout(resolve, ms);
-
-    if (!signal) return;
+    if (!signal) {
+      setTimeout(resolve, ms);
+      return;
+    }
 
     const onAbort = () => {
       clearTimeout(timer);
       reject(new DOMException('Aborted', 'AbortError'));
     };
+
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
 
     signal.addEventListener('abort', onAbort, { once: true });
   });

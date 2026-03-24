@@ -84,11 +84,15 @@ describe('retryFetch()', () => {
     vi.stubGlobal('fetch', mockFetch);
 
     const promise = retryFetch('https://example.com', {}, { signal: controller.signal });
+    // Attach rejection handler immediately so it's not unhandled
+    const rejectCapture = promise.catch(() => 'aborted');
+
     // Abort during the retry delay (before the 1s backoff expires)
     controller.abort();
     await vi.runAllTimersAsync();
 
-    await expect(promise).rejects.toThrow();
+    const result = await rejectCapture;
+    expect(result).toBe('aborted');
     // Should not have retried after abort
     expect(mockFetch).toHaveBeenCalledOnce();
 
