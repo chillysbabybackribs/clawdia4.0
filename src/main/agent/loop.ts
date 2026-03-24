@@ -11,6 +11,8 @@
  */
 
 import type { BrowserWindow } from 'electron';
+import * as fs from 'fs';
+import * as path from 'path';
 import { classify, type TaskProfile, type ToolGroup } from './classifier';
 import { applyAgentProfileOverride } from './agent-profile-override';
 import { isFilesystemQuoteLookupTask } from './filesystem-agent-routing';
@@ -40,9 +42,10 @@ import { prepareHarnessExecutionFromMessage } from '../browser/site-harness';
 import { calendarList } from '../db/calendar';
 import type { NormalizedMessageContentBlock } from './provider/types';
 import * as graphExecutor from './graph-executor';
+import { EXECUTION_PLANNING_ENABLED, LOOP_MAX_WALL_MS } from './runtime-constraints';
+import { getSystemAwarenessBlock } from './system-audit';
 
 const MAX_ITERATIONS = 50;
-const MAX_WALL_MS = 10 * 60 * 1000;
 const MAX_HISTORY_TURNS = 16;
 const MAX_HISTORY_TOKENS = 80_000;
 const WRAP_UP_THRESHOLD = 25;
@@ -172,6 +175,8 @@ export interface LoopOptions {
   forcedAgentProfile?: AgentProfile;
   allowedTools?: string[];
   graphExecutionMode?: 'auto' | 'disabled';
+  parentSignal?: AbortSignal;
+  maxIterations?: number;
   apiKey: string;
   model?: string;
   onStreamText?: (text: string) => void;
@@ -304,6 +309,7 @@ export async function runAgentLoop(
 
   const runKey = getRunKey(runId);
   const control = createRunControl(runKey);
+  const detachParentAbort = bindParentAbort(control.abortController, options.parentSignal);
   ensureRegistry();
 
   // ── Classify ──
@@ -393,6 +399,7 @@ export async function runAgentLoop(
       options.onStreamText?.('Extractor requires a provider that supports nested agent loops (Anthropic). Switch providers to use it.');
       options.onStreamEnd?.();
       cleanupRunControl(runKey);
+      detachParentAbort();
       return { response: '', toolCalls: [] };
     }
     let ytdlpResult: YtdlpResult;
@@ -412,6 +419,7 @@ export async function runAgentLoop(
     options.onStreamText?.(summary);
     options.onStreamEnd?.();
     cleanupRunControl(runKey);
+    detachParentAbort();
     return { response: summary, toolCalls: [] };
   }
 
@@ -442,6 +450,7 @@ export async function runAgentLoop(
             });
           }
           cleanupRunControl(runKey);
+          detachParentAbort();
           return { response: harnessRun, toolCalls: [] };
         }
       }
@@ -465,6 +474,7 @@ export async function runAgentLoop(
         });
       }
       cleanupRunControl(runKey);
+      detachParentAbort();
       return { response: executorRun.response, toolCalls: [] };
     }
 
@@ -502,6 +512,7 @@ export async function runAgentLoop(
     agentProfile: profile.agentProfile,
     model: modelId,
     toolGroup: profile.toolGroup,
+    projectRoot: shouldInjectProjectContext(userMessage, profile) ? detectWorkspaceRoot(process.cwd()) : undefined,
     calendarContext: calendarContext || undefined,
     memoryContext: setup.memoryContext,
     recallContext: setup.recallContext,
@@ -512,6 +523,7 @@ export async function runAgentLoop(
     executionGraphContext: setup.executionGraphContext,
     desktopContext: setup.desktopContext,
     executionConstraint: executionPlan?.constraint,
+    systemAwarenessContext: getSystemAwarenessBlock() || undefined,
     shortcutContext: setup.shortcutContext,
     guiStateContext: setup.guiStateContext,
     isGreeting: profile.isGreeting,
@@ -540,6 +552,7 @@ export async function runAgentLoop(
           forcedAgentProfile: workerOptions.forcedAgentProfile,
           allowedTools: workerOptions.allowedTools,
           graphExecutionMode: workerOptions.graphExecutionMode,
+          parentSignal: control.abortController.signal,
           model: workerOptions.model,
           onStreamText: workerOptions.onStreamText,
           onThinking: workerOptions.onThinking,
@@ -579,6 +592,7 @@ export async function runAgentLoop(
         onStreamText?.(graphResult.response);
         onStreamEnd?.();
         cleanupRunControl(runKey);
+        detachParentAbort();
         return { response: graphResult.response, toolCalls: [] };
       }
       if (isDependentGraphChain) {
@@ -598,6 +612,7 @@ export async function runAgentLoop(
         onStreamText?.(failureMessage);
         onStreamEnd?.();
         cleanupRunControl(runKey);
+        detachParentAbort();
         return { response: failureMessage, toolCalls: [] };
       }
     } catch (error: any) {
@@ -618,6 +633,7 @@ export async function runAgentLoop(
         onStreamText?.(failureMessage);
         onStreamEnd?.();
         cleanupRunControl(runKey);
+        detachParentAbort();
         return { response: failureMessage, toolCalls: [] };
       }
       console.warn(`[GraphExecutor] Falling back to classic loop: ${error?.message || String(error)}`);
@@ -631,7 +647,7 @@ export async function runAgentLoop(
     }
   }
 
-  if (false && shouldCreateExecutionPlan(userMessage, profile)) { // DISABLED: plan creation commented out
+  if (EXECUTION_PLANNING_ENABLED && shouldCreateExecutionPlan(userMessage, profile)) {
     let executionPlanText: string | null = null;
     let planRevisionRound = 0;
 
@@ -689,6 +705,9 @@ export async function runAgentLoop(
         payload: { workflowStage: 'planning' },
       });
       onStreamEnd?.();
+      cleanupRunControl(runKey);
+      clearNestedCancel();
+      detachParentAbort();
       return {
         response: 'Execution stopped because the plan approval was denied.',
         toolCalls: [],
@@ -736,6 +755,7 @@ export async function runAgentLoop(
     toolCallCount: 0,
     allToolCalls: [],
     allVerifications: [],
+    iterationIndex: 0,
     onToolActivity,
     onToolStream,
   };
@@ -757,13 +777,14 @@ export async function runAgentLoop(
   let currentBrowserSketchStep = 0;
   let announcedBrowserSketchStep = -1;
   let swarmCompleted = false;
+  const maxIterations = Math.max(1, options.maxIterations ?? MAX_ITERATIONS);
 
   // ═══════════════════════════════════
   // Iteration Loop
   // ═══════════════════════════════════
 
-  for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-    if (Date.now() - startTime > MAX_WALL_MS) {
+  for (let iteration = 0; iteration < maxIterations; iteration++) {
+    if (Date.now() - startTime > LOOP_MAX_WALL_MS) {
       console.warn(`[Agent] Wall time limit reached at iteration ${iteration}`);
       break;
     }
@@ -864,7 +885,7 @@ export async function runAgentLoop(
     }
 
     if (dispatchCtx.toolCallCount >= wrapUpThreshold && !profile.isGreeting) {
-      messages.push({ role: 'user', content: `[SYSTEM] ${dispatchCtx.toolCallCount} tool calls used (limit: ${MAX_ITERATIONS}). Wrap up.` });
+      messages.push({ role: 'user', content: `[SYSTEM] ${dispatchCtx.toolCallCount} tool calls used (limit: ${maxIterations}). Wrap up.` });
     }
 
     if (browserExecutionSketch
@@ -926,7 +947,7 @@ export async function runAgentLoop(
       const cleanResponseText = stripStepDoneMarkers(responseText);
       const isShortNarration = iteration === 0 && responseText.length < 300 && NARRATION_RE.test(responseText) && dispatchCtx.toolCallCount === 0;
 
-      if (isShortNarration && iteration < MAX_ITERATIONS - 1) {
+      if (isShortNarration && iteration < maxIterations - 1) {
         onStreamText?.('\n\n__RESET__');
         messages.push({ role: 'assistant', content: response.content as any });
         messages.push({ role: 'user', content: '[SYSTEM] You described a plan but did not execute it. Use your tools now.' });
@@ -941,7 +962,7 @@ export async function runAgentLoop(
       }
 
       const continuationInstruction = shouldForceContinuationAfterPartialExecution(userMessage, dispatchCtx.allToolCalls);
-      if (continuationInstruction && iteration < MAX_ITERATIONS - 1) {
+      if (continuationInstruction && iteration < maxIterations - 1) {
         onStreamText?.('\n\n__RESET__');
         messages.push({ role: 'assistant', content: response.content as any });
         messages.push({ role: 'user', content: `[SYSTEM] ${continuationInstruction}` });
@@ -972,7 +993,7 @@ export async function runAgentLoop(
           }
 
           // More steps remain — continue to the next one
-          if (iteration < MAX_ITERATIONS - 1) {
+          if (iteration < maxIterations - 1) {
             onStreamText?.('\n\n__RESET__');
             messages.push({ role: 'assistant', content: cleanResponseText || `[STEP ${completedSketchStep} COMPLETE]` });
             messages.push({
@@ -981,7 +1002,7 @@ export async function runAgentLoop(
             });
             continue;
           }
-        } else if (currentBrowserSketchStep < totalSteps - 1 && iteration < MAX_ITERATIONS - 1) {
+        } else if (currentBrowserSketchStep < totalSteps - 1 && iteration < maxIterations - 1) {
           onStreamText?.('\n\n__RESET__');
           messages.push({ role: 'assistant', content: cleanResponseText || response.content as any });
           messages.push({
@@ -1007,6 +1028,7 @@ export async function runAgentLoop(
     if (iterationText) onStreamText?.('\n\n__RESET__');
     messages.push({ role: 'assistant', content: response.content as any });
 
+    dispatchCtx.iterationIndex = iteration;
     const toolResults = await dispatchTools(toolUseBlocks, dispatchCtx);
     messages.push({ role: 'user', content: toolResults as any });
 
@@ -1034,7 +1056,7 @@ export async function runAgentLoop(
       });
     }
 
-    if (iteration === MAX_ITERATIONS - 1) {
+    if (iteration === maxIterations - 1) {
       finalText = responseText || '[Reached iteration limit.]';
     }
   }
@@ -1061,14 +1083,17 @@ export async function runAgentLoop(
         });
       }
       finalText = await runRecoveryIteration(issue, finalText, {
+        runId,
         client,
         messages,
         tools: dispatchCtx.tools,
         staticPrompt,
         dynamicPrompt,
         signal: control.abortController.signal,
+        iterationIndex: dispatchCtx.iterationIndex,
         onStreamText,
         onToolActivity,
+        onToolStream,
         allToolCalls: dispatchCtx.allToolCalls,
         toolCallCount: dispatchCtx.toolCallCount,
       });
@@ -1227,6 +1252,7 @@ export async function runAgentLoop(
   // Clean up
   cleanupRunControl(runKey);
   clearNestedCancel();  // guard: clears any registered nested cancel fn on all exit paths
+  detachParentAbort();
 
   return { response: finalText, toolCalls: dispatchCtx.allToolCalls };
 }
@@ -1259,4 +1285,37 @@ function cleanupRunControl(runKey: string): void {
     state.pauseResolve = null;
   }
   runControls.delete(runKey);
+}
+
+function bindParentAbort(abortController: AbortController, parentSignal?: AbortSignal): () => void {
+  if (!parentSignal) return () => {};
+  if (parentSignal.aborted) {
+    abortController.abort();
+    return () => {};
+  }
+  const onAbort = () => abortController.abort();
+  parentSignal.addEventListener('abort', onAbort, { once: true });
+  return () => parentSignal.removeEventListener('abort', onAbort);
+}
+
+function shouldInjectProjectContext(userMessage: string, profile: TaskProfile): boolean {
+  if (profile.promptModules.has('coding') || profile.agentProfile === 'filesystem') return true;
+  return /\b(?:repo|repository|project|workspace|codebase|clawdia)\b/i.test(userMessage);
+}
+
+function detectWorkspaceRoot(cwd: string): string | undefined {
+  const candidates = [cwd, path.resolve(cwd, '..')];
+  for (const candidate of candidates) {
+    if (looksLikeWorkspaceRoot(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+function looksLikeWorkspaceRoot(candidate: string): boolean {
+  try {
+    if (!fs.existsSync(path.join(candidate, 'package.json'))) return false;
+    return fs.existsSync(path.join(candidate, 'src', 'main')) || fs.existsSync(path.join(candidate, '.git'));
+  } catch {
+    return false;
+  }
 }

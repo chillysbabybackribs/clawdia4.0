@@ -6,6 +6,7 @@
  */
 
 import { getDb } from './database';
+import { deleteAuditToolTelemetryForRun } from './audit-tool-telemetry';
 import type { ProviderId, WorkflowStage } from '../../shared/types';
 import { maybeRecordSequence } from '../agent/bloodhound/recorder';
 
@@ -172,6 +173,7 @@ export function deleteRun(id: string): void {
   db.prepare('DELETE FROM run_file_locks WHERE run_id = ?').run(id);
   db.prepare('DELETE FROM run_changes WHERE run_id = ?').run(id);
   db.prepare('DELETE FROM run_events WHERE run_id = ?').run(id);
+  deleteAuditToolTelemetryForRun(id);
   db.prepare('DELETE FROM task_sequences WHERE run_id = ?').run(id);
   db.prepare('DELETE FROM runs WHERE id = ?').run(id);
 }
@@ -193,6 +195,7 @@ export function evictOldRuns(maxHistory: number): void {
   const delLocks = db.prepare('DELETE FROM run_file_locks WHERE run_id = ?');
   const delChanges = db.prepare('DELETE FROM run_changes WHERE run_id = ?');
   const delEvents = db.prepare('DELETE FROM run_events WHERE run_id = ?');
+  const delAudit = db.prepare('DELETE FROM audit_tool_telemetry WHERE run_id = ?');
   const delTaskSequences = db.prepare('DELETE FROM task_sequences WHERE run_id = ?');
   const tx = db.transaction((rows: Array<{ id: string }>) => {
     for (const row of rows) {
@@ -201,6 +204,7 @@ export function evictOldRuns(maxHistory: number): void {
       delLocks.run(row.id);
       delChanges.run(row.id);
       delEvents.run(row.id);
+      delAudit.run(row.id);
       delTaskSequences.run(row.id);
       del.run(row.id);
     }

@@ -20,6 +20,7 @@ interface ManagedAccountView {
   phoneMethod: string;
   status: 'active' | 'suspended' | 'unverified';
   accessType: 'session' | 'vault' | 'managed';
+  source: 'managed' | 'session';
   createdAt: string;
   notes: string;
 }
@@ -204,18 +205,20 @@ export default function IdentitySection() {
             </thead>
             <tbody>
               {accounts.map(acc => (
-                <tr key={acc.id} className="group border-t border-surface-2 hover:bg-white/[0.02]">
+                <tr key={acc.source === 'session' ? acc.serviceName : String(acc.id)} className="group border-t border-surface-2 hover:bg-white/[0.02]">
                   <td className="px-1 py-1.5 text-text-primary text-xs">{acc.serviceName}</td>
                   <td className="px-1 py-1.5 text-text-secondary text-xs">{acc.username || acc.emailUsed || '—'}</td>
                   <td className="px-1 py-1.5">{accessPill(acc.accessType)}</td>
                   <td className="px-1 py-1.5 text-right">
-                    <button
-                      onClick={() => handleDeleteAccount(acc.serviceName)}
-                      className="w-6 h-6 rounded flex items-center justify-center text-text-muted hover:bg-red-500/10 hover:text-red-400 transition-colors cursor-pointer"
-                      title="Remove account"
-                    >
-                      ✕
-                    </button>
+                    {acc.source === 'managed' ? (
+                      <button
+                        onClick={() => handleDeleteAccount(acc.serviceName)}
+                        className="w-6 h-6 rounded flex items-center justify-center text-text-muted hover:bg-red-500/10 hover:text-red-400 transition-colors cursor-pointer"
+                        title="Remove account"
+                      >
+                        ✕
+                      </button>
+                    ) : null}
                   </td>
                 </tr>
               ))}

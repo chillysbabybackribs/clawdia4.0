@@ -58,6 +58,7 @@ export function buildDynamicPrompt(opts: {
   agentProfile?: AgentProfile;
   model: string;
   toolGroup: ToolGroup;
+  projectRoot?: string;
   browserUrl?: string;
   memoryContext?: string;
   recallContext?: string;
@@ -68,6 +69,7 @@ export function buildDynamicPrompt(opts: {
   executionGraphContext?: string;
   desktopContext?: string;
   executionConstraint?: string;
+  systemAwarenessContext?: string;
   shortcutContext?: string;
   guiStateContext?: string;
   calendarContext?: string;
@@ -81,19 +83,23 @@ export function buildDynamicPrompt(opts: {
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local';
 
   const desktopDir = path.join(os.homedir(), 'Desktop');
-  const appRoot = path.join(os.homedir(), 'Desktop', 'clawdia4.0');
   const lines: string[] = [
     `DATE: ${date} | TIME: ${time} | TZ: ${tz} | YEAR: ${year}`,
     `SYSTEM: ${os.type()} ${os.release()} (${os.arch()}) | ${os.userInfo().username}@${os.hostname()}`,
     `HOME: ${os.homedir()} | CWD: ${desktopDir} (shell starts here)`,
-    `PRIMARY PROJECT ROOT: ${appRoot}`,
-    `PRIMARY PROJECT SOURCE: ${path.join(appRoot, 'src')}`,
     `MODEL: ${opts.model}`,
     `TOOLS: ${opts.toolGroup} group active`,
     'FILESYSTEM GROUNDING: "." and relative shell paths resolve from the current shell cwd, which starts at ~/Desktop unless you change it with cd.',
     'FILESYSTEM GROUNDING: file_read/file_write/file_edit should use absolute paths whenever the target matters.',
-    'FILESYSTEM GROUNDING: if the user says "this repo", "this repository", "this project", or asks about Clawdia\'s codebase without another path, treat that as ~/Desktop/clawdia4.0.',
   ];
+
+  if (opts.projectRoot) {
+    lines.push(`WORKSPACE ROOT: ${opts.projectRoot}`);
+    lines.push(`WORKSPACE SOURCE: ${path.join(opts.projectRoot, 'src')}`);
+    lines.push(`FILESYSTEM GROUNDING: when the current task is about this workspace or repository, use ${opts.projectRoot} as the project root.`);
+  } else {
+    lines.push('FILESYSTEM GROUNDING: no workspace root is being injected for this task. Do not assume one unless the user or runtime context provides it.');
+  }
 
   if (opts.agentProfile) {
     lines.push(`AGENT PROFILE: ${opts.agentProfile}`);
@@ -120,6 +126,10 @@ export function buildDynamicPrompt(opts: {
   // Execution constraint from registry routing — HIGHEST PRIORITY
   if (opts.executionConstraint) {
     lines.push('', opts.executionConstraint);
+  }
+
+  if (opts.systemAwarenessContext) {
+    lines.push('', opts.systemAwarenessContext);
   }
 
   // Shortcut reference for detected app

@@ -154,15 +154,32 @@ export function findHarnessByUrl(url: string): SiteHarness | null {
   const harnesses = getHarnessesForDomain(domain);
   // Try to match URL pattern
   for (const h of harnesses) {
-    const pattern = h.urlPattern
-      .replace(/\{[^}]+\}/g, '[^/]+')  // {param} → wildcard
-      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')  // Escape regex chars (except our wildcard)
-      .replace(/\\\[\\^\/\\\]\\\+/g, '[^/]+');  // Restore wildcard
     try {
-      if (new RegExp(pattern).test(url)) return h;
+      if (urlPatternToRegExp(h.urlPattern).test(url)) return h;
     } catch { /* invalid pattern, skip */ }
   }
   return null;
+}
+
+function urlPatternToRegExp(urlPattern: string): RegExp {
+  const placeholderRe = /\{[^}]+\}/g;
+  let lastIndex = 0;
+  let pattern = '^';
+
+  for (const match of urlPattern.matchAll(placeholderRe)) {
+    const start = match.index ?? 0;
+    pattern += escapeRegex(urlPattern.slice(lastIndex, start));
+    pattern += '[^/?#]+';
+    lastIndex = start + match[0].length;
+  }
+
+  pattern += escapeRegex(urlPattern.slice(lastIndex));
+  pattern += '$';
+  return new RegExp(pattern);
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 export function prepareHarnessExecutionFromMessage(

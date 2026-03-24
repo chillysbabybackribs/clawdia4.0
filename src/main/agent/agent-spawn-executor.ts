@@ -4,7 +4,7 @@
  * Each spawned agent gets:
  *   - Its own runId (child-${parentRunId}-${index})
  *   - A scoped role profile (scout, builder, analyst, etc.)
- *   - A token budget enforced via MAX_ITERATIONS cap
+ *   - A role-specific iteration budget enforced at the child loop boundary
  *   - Clean history (no parent conversation bleed)
  *   - Its own AbortController tied to the parent's signal
  *
@@ -81,10 +81,16 @@ export interface SpawnOptions {
   signal?: AbortSignal;  // parent's abort signal
 }
 
+export function getRoleMaxIterations(role: string): number {
+  const resolvedRole = resolveRole(role);
+  return ROLE_MAX_ITERATIONS[resolvedRole] ?? ROLE_MAX_ITERATIONS.general ?? 12;
+}
+
 export async function spawnAgent(opts: SpawnOptions): Promise<{ result: string; toolCallCount: number }> {
   const { parentRunId, agentIndex, role, goal, context, signal } = opts;
   const resolvedRole = resolveRole(role);
   const subRunId = `${parentRunId}-sub${agentIndex}-${resolvedRole}`;
+  const maxIterations = getRoleMaxIterations(resolvedRole);
 
   // Build the agent's message — goal + any extra context
   const agentMessage = context
@@ -110,6 +116,14 @@ export async function spawnAgent(opts: SpawnOptions): Promise<{ result: string; 
   let toolCallCount = 0;
 
   try {
+    if (signal?.aborted) {
+      if (agentEntry) {
+        agentEntry.status = 'cancelled';
+        agentEntry.completedAt = Date.now();
+        broadcastSwarm(parentRunId);
+      }
+      return { result: '[Cancelled by parent run]', toolCallCount: 0 };
+    }
     allocateIsolatedTab(subRunId);
     const loopResult = await runAgentLoop(
       agentMessage,
@@ -120,11 +134,11 @@ export async function spawnAgent(opts: SpawnOptions): Promise<{ result: string; 
         apiKey,
         forcedAgentProfile: resolvedRole,
         graphExecutionMode: 'disabled',
+        parentSignal: signal,
+        maxIterations,
         model: modelTier, // undefined = use stored model (sonnet)
         onStreamText: (text) => { result += text; },
         onToolActivity: () => { toolCallCount++; },
-        // Wire up abort from parent signal
-        ...(signal ? {} : {}), // AbortController managed inside loop
       },
     );
 
@@ -132,7 +146,7 @@ export async function spawnAgent(opts: SpawnOptions): Promise<{ result: string; 
     toolCallCount = loopResult.toolCalls.length;
 
     if (agentEntry) {
-      agentEntry.status = 'done';
+      agentEntry.status = signal?.aborted || result.startsWith('[Cancelled') ? 'cancelled' : 'done';
       agentEntry.completedAt = Date.now();
       agentEntry.toolCallCount = toolCallCount;
       agentEntry.result = result.slice(0, 300);
@@ -143,12 +157,15 @@ export async function spawnAgent(opts: SpawnOptions): Promise<{ result: string; 
   } catch (err: any) {
     const errMsg = err?.message || String(err);
     if (agentEntry) {
-      agentEntry.status = 'failed';
+      agentEntry.status = signal?.aborted ? 'cancelled' : 'failed';
       agentEntry.completedAt = Date.now();
       agentEntry.error = errMsg.slice(0, 200);
       broadcastSwarm(parentRunId);
     }
-    return { result: `[Agent ${resolvedRole} failed: ${errMsg}]`, toolCallCount };
+    return {
+      result: signal?.aborted ? '[Cancelled by parent run]' : `[Agent ${resolvedRole} failed: ${errMsg}]`,
+      toolCallCount,
+    };
   } finally {
     releaseIsolatedTab(subRunId);
   }

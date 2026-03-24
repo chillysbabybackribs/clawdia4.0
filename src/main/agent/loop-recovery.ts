@@ -10,9 +10,8 @@
 
 import type { ProviderClient } from './client';
 import type { LLMResponse, NormalizedMessage, NormalizedTextBlock, NormalizedToolDefinition, NormalizedToolResultBlock, NormalizedToolUseBlock } from './client';
-import { executeTool } from './tool-builder';
 import { type VerificationResult } from './verification';
-import { summarizeInput } from './loop-dispatch';
+import { dispatchTools, type DispatchContext } from './loop-dispatch';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -95,14 +94,17 @@ export function verifyFileOutcomes(
 // ═══════════════════════════════════
 
 export interface RecoveryOptions {
+  runId?: string;
   client: ProviderClient;
   messages: NormalizedMessage[];
   tools: NormalizedToolDefinition[];
   staticPrompt: string;
   dynamicPrompt: string;
   signal?: AbortSignal;
+  iterationIndex: number;
   onStreamText?: (text: string) => void;
   onToolActivity?: (activity: { name: string; status: string; detail?: string }) => void;
+  onToolStream?: (payload: { toolId: string; toolName: string; chunk: string }) => void;
   allToolCalls: { name: string; status: string; detail?: string; input?: Record<string, any> }[];
   toolCallCount: number;
 }
@@ -143,23 +145,24 @@ export async function runRecoveryIteration(
 
     if (recoveryToolUses.length > 0) {
       messages.push({ role: 'assistant', content: recoveryResponse.content as any });
-      const recoveryResults: NormalizedToolResultBlock[] = [];
-
-      for (const toolUse of recoveryToolUses) {
-        opts.toolCallCount++;
-        const detail = summarizeInput(toolUse.name, toolUse.input as any);
-        onToolActivity?.({ name: toolUse.name, status: 'running', detail });
-        let result: string;
-        try {
-          result = await executeTool(toolUse.name, toolUse.input as any);
-        } catch (err: any) {
-          result = `[Error] ${err.message}`;
-        }
-        const status = result.startsWith('[Error') ? 'error' : 'success';
-        onToolActivity?.({ name: toolUse.name, status, detail });
-        allToolCalls.push({ name: toolUse.name, status, detail, input: toolUse.input as Record<string, any> });
-        recoveryResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: result });
-      }
+      const dispatchCtx: DispatchContext = {
+        runId: opts.runId,
+        signal,
+        tools,
+        executionPlan: null,
+        toolGroup: 'full',
+        iterationIndex: opts.iterationIndex,
+        filesystemQuoteLookupMode: false,
+        strongFilesystemQuoteMatch: false,
+        escalatedToFull: false,
+        toolCallCount: opts.toolCallCount,
+        allToolCalls,
+        allVerifications: [],
+        onToolActivity,
+        onToolStream: opts.onToolStream,
+      };
+      const recoveryResults = await dispatchTools(recoveryToolUses, dispatchCtx);
+      opts.toolCallCount = dispatchCtx.toolCallCount;
 
       messages.push({ role: 'user', content: recoveryResults as any });
 

@@ -4,6 +4,7 @@ import { appendRunEvent } from '../db/run-events';
 import { upsertRunArtifact } from '../db/run-artifacts';
 import type { PerformanceStance } from '../../shared/types';
 import { requestApproval, waitForApproval } from './approval-manager';
+import { EXECUTION_PLANNING_ENABLED } from './runtime-constraints';
 
 function buildPlanningPrompt(
   userMessage: string,
@@ -92,6 +93,7 @@ function sanitizeExecutionPlan(markdown: string): string {
 }
 
 export function shouldCreateExecutionPlan(userMessage: string, profile: TaskProfile): boolean {
+  if (!EXECUTION_PLANNING_ENABLED) return false;
   const text = userMessage.trim();
 
   if (!text || profile.isGreeting) return false;

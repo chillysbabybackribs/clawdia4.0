@@ -10,6 +10,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import * as os from 'os';
 import * as path from 'path';
 import { randomBytes } from 'crypto';
+import { DEFAULT_SHELL_TIMEOUT_SECONDS, MAX_SHELL_TIMEOUT_SECONDS } from '../../runtime-constraints';
 
 // ═══════════════════════════════════
 // Persistent Shell Process
@@ -125,8 +126,8 @@ async function executeShellExecSerial(
   input: Record<string, any>,
   onChunk?: (chunk: string) => void,
 ): Promise<string> {
-  const { command, timeout = 30 } = input;
-  const timeoutMs = Math.min(Number(timeout) || 30, 300) * 1000;
+  const { command, timeout = DEFAULT_SHELL_TIMEOUT_SECONDS } = input;
+  const timeoutMs = Math.min(Number(timeout) || DEFAULT_SHELL_TIMEOUT_SECONDS, MAX_SHELL_TIMEOUT_SECONDS) * 1000;
 
   const finalCommand = autoDetachGuiCommand(command);
   const sentinel = makeSentinel();

@@ -19,7 +19,9 @@ import { guardFileMutation, noteFileMutationSuccess, noteFileRead } from './file
 import { spawnSwarm } from './agent-spawn-executor';
 import { SCREENSHOT_PREFIX } from './executors/browser-executors';
 import { noteProcessSpecializedTool } from './process-manager';
+import { requestHumanIntervention, waitForHumanIntervention } from './human-intervention-manager';
 import { getUnrestrictedMode } from '../store';
+import { recordToolTelemetry } from './system-audit';
 import * as fs from 'fs';
 
 // ═══════════════════════════════════
@@ -99,6 +101,7 @@ export interface DispatchContext {
   tools: NormalizedToolDefinition[];
   executionPlan: ExecutionPlan | null;
   toolGroup: string;
+  iterationIndex: number;
   filesystemQuoteLookupMode?: boolean;
   strongFilesystemQuoteMatch?: boolean;
   escalatedToFull: boolean;
@@ -203,7 +206,32 @@ export async function dispatchTools(
       );
 
       if (humanIntervention) {
-        result = `[Error] ${humanIntervention.summary}`;
+        if (ctx.runId) {
+          const intervention = requestHumanIntervention(ctx.runId, {
+            interventionType: humanIntervention.type,
+            target: humanIntervention.target,
+            summary: humanIntervention.summary,
+            instructions: humanIntervention.instructions,
+            request: {
+              toolName: toolUse.name,
+              toolUseId: toolUse.id,
+              input: toolUse.input as Record<string, any>,
+              detectedFrom: humanIntervention.detectedFrom,
+              resultPreview: truncate(result, 500),
+            },
+          });
+          ctx.onToolActivity?.({
+            name: toolUse.name,
+            status: 'needs_human',
+            detail: humanIntervention.summary,
+          });
+          const decision = await waitForHumanIntervention(intervention.id);
+          result = decision === 'resolved'
+            ? `[Human intervention completed] ${humanIntervention.summary}`
+            : `[Error] Human intervention dismissed: ${humanIntervention.summary}`;
+        } else {
+          result = `[Error] ${humanIntervention.summary}`;
+        }
       }
 
       // Mid-loop escalation: upgrade tool group if a known tool was missing
@@ -256,6 +284,15 @@ export async function dispatchTools(
             resultPreview: result.startsWith(SCREENSHOT_PREFIX) ? '[screenshot image]' : result.slice(0, 500),
             status,
           },
+        });
+        recordToolTelemetry({
+          runId: ctx.runId,
+          iterationIndex: ctx.iterationIndex,
+          toolName: toolUse.name,
+          toolCategory: inferToolCategory(toolUse.name),
+          success: status === 'success',
+          durationMs,
+          errorType: status === 'error' ? inferErrorType(result) : null,
         });
       }
       console.log(`[Agent] Result (${durationMs}ms): ${result.startsWith(SCREENSHOT_PREFIX) ? '[screenshot image]' : result.slice(0, 200)}`);
@@ -363,7 +400,7 @@ async function executeApprovedTool(
   // ── agent_spawn: needs runId from ctx, handled here before generic dispatch ──
   if (toolUse.name === 'agent_spawn') {
     const input = toolUse.input as { tasks: Array<{ role: string; goal: string; context?: string }> };
-    const swarmResult = await spawnSwarm(ctx.runId ?? `swarm-${Date.now()}`, input.tasks ?? []);
+    const swarmResult = await spawnSwarm(ctx.runId ?? `swarm-${Date.now()}`, input.tasks ?? [], ctx.signal);
     const summary = [
       `Swarm complete: ${swarmResult.agentCount} agents, ${swarmResult.totalToolCalls} tool calls, ${Math.round(swarmResult.durationMs / 1000)}s`,
       '',
@@ -575,6 +612,21 @@ function inferSurface(toolName: string): string {
   if (toolName.startsWith('memory_') || toolName === 'recall_context') return 'memory';
   if (toolName === 'create_document') return 'document';
   return 'agent';
+}
+
+function inferToolCategory(toolName: string): string {
+  return inferSurface(toolName);
+}
+
+function inferErrorType(result: string): string {
+  if (result.startsWith('[Approval denied]')) return 'approval_denied';
+  if (result.startsWith('[Blocked by policy]') || result.startsWith('[Blocked]')) return 'policy_blocked';
+  if (/^\[Timed out after \d+s\]/.test(result)) return 'timeout';
+  if (/Unknown tool/i.test(result)) return 'unknown_tool';
+  if (/file lock/i.test(result)) return 'file_lock_conflict';
+  if (/\b(captcha|two-factor|2fa|verification code|one-time code)\b/i.test(result)) return 'needs_human';
+  if (/^\[Exit \d+\]/.test(result)) return 'process_exit';
+  return 'error';
 }
 
 function captureFileBefore(toolName: string, input: Record<string, any>): { path: string; content: string | null; existed: boolean } | null {

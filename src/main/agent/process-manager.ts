@@ -35,6 +35,8 @@ import { appendRunEvent, getLastSpecializedTool, getRunAgentProfile } from '../d
 import { clearRunFileState, initFileLockManager } from './file-lock-manager';
 import { setBrowserExecutionMode } from '../browser/manager';
 import type { AgentProfile, ProviderId, WorkflowStage } from '../../shared/types';
+import { createStreamBatcher, type StreamBatcher } from './stream-batcher';
+import { finalizeRunAudit } from './system-audit';
 
 // ═══════════════════════════════════
 // Types
@@ -73,6 +75,9 @@ let attachedId: string | null = null;
 let win: BrowserWindow | null = null;
 const MAX_HISTORY = 20;
 const MAX_BUFFER = 1500;
+
+// Per-process stream batcher: coalesces CHAT_STREAM_TEXT chunks into 16ms windows
+const streamBatchers: Map<string, StreamBatcher> = new Map();
 
 // ═══════════════════════════════════
 // Init
@@ -162,6 +167,7 @@ export function completeProcess(processId: string, status: 'completed' | 'failed
   const proc = processes.get(processId);
   if (!proc) {
     completeRun(processId, status, error);
+    finalizeRunAudit(processId, status);
     evictOldRuns(MAX_HISTORY);
     return;
   }
@@ -170,11 +176,15 @@ export function completeProcess(processId: string, status: 'completed' | 'failed
   if (error) proc.error = error;
   completeRun(processId, status, error);
   clearRunFileState(processId);
+  // Flush any buffered stream text before completing
+  streamBatchers.get(processId)?.flushImmediate();
+  streamBatchers.delete(processId);
   appendRunEvent(processId, {
     kind: status === 'completed' ? 'run_completed' : status === 'cancelled' ? 'run_cancelled' : 'run_failed',
     phase: 'lifecycle',
     payload: { error },
   });
+  finalizeRunAudit(processId, status);
 
   // If this was attached and completed, auto-detach so user isn't stuck
   // (they might have already started a new chat)
@@ -336,6 +346,10 @@ export function attachTo(processId: string): { process: ProcessInfo; buffer: Arr
 /**
  * Route an event from the agent loop. If the process is attached,
  * send to renderer. Always buffer.
+ *
+ * CHAT_STREAM_TEXT chunks are micro-batched into 16ms windows before
+ * sending to reduce IPC overhead during high-frequency token streaming.
+ * All other events are sent immediately.
  */
 export function routeEvent(processId: string, ipcChannel: string, data: any): void {
   const proc = processes.get(processId);
@@ -347,10 +361,28 @@ export function routeEvent(processId: string, ipcChannel: string, data: any): vo
     proc.outputBuffer = proc.outputBuffer.slice(-MAX_BUFFER + 500);
   }
 
-  // Send to renderer if attached
-  if (processId === attachedId && win) {
-    win.webContents.send(ipcChannel, data);
+  if (processId !== attachedId || !win) return;
+
+  // Stream text: coalesce chunks within a 16ms window into one IPC send
+  if (ipcChannel === IPC_EVENTS.CHAT_STREAM_TEXT && typeof data === 'string') {
+    let batcher = streamBatchers.get(processId);
+    if (!batcher) {
+      batcher = createStreamBatcher((combined) => {
+        win?.webContents.send(IPC_EVENTS.CHAT_STREAM_TEXT, combined);
+      }, 16);
+      streamBatchers.set(processId, batcher);
+    }
+    batcher.push(data);
+    return;
   }
+
+  // Stream end: flush any buffered text first, then send the end event
+  if (ipcChannel === IPC_EVENTS.CHAT_STREAM_END) {
+    streamBatchers.get(processId)?.flushImmediate();
+    streamBatchers.delete(processId);
+  }
+
+  win.webContents.send(ipcChannel, data);
 }
 
 /**

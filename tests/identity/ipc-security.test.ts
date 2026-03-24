@@ -28,13 +28,14 @@ interface ManagedAccountView {
   phoneMethod: string;
   status: 'active' | 'suspended' | 'unverified';
   accessType: 'session' | 'vault' | 'managed';
+  source: 'managed' | 'session';
   createdAt: string;
   notes: string;
 }
 
 function stripPassword(account: ManagedAccount, accessType: 'session' | 'vault' | 'managed'): ManagedAccountView {
   const { passwordPlain: _omit, ...view } = account;
-  return { ...view, accessType };
+  return { ...view, accessType, source: 'managed' };
 }
 
 const mockAccount: ManagedAccount = {
@@ -64,6 +65,7 @@ describe('IDENTITY_ACCOUNTS_LIST DTO', () => {
     expect(view.serviceName).toBe('reddit.com');
     expect(view.username).toBe('dp_user');
     expect(view.accessType).toBe('vault');
+    expect(view.source).toBe('managed');
   });
 
   it('accessType is set by the caller, not read from the account', () => {

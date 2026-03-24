@@ -69,4 +69,11 @@ describe('autonomy migrations', () => {
     const row = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_task_runs'").get();
     expect(row).toBeTruthy();
   });
+
+  it('creates audit_tool_telemetry table', async () => {
+    const { getDb } = await import('../../src/main/db/database');
+    const db = getDb();
+    const row = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='audit_tool_telemetry'").get();
+    expect(row).toBeTruthy();
+  });
 });

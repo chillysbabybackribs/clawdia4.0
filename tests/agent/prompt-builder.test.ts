@@ -11,4 +11,34 @@ describe('buildDynamicPrompt()', () => {
     expect(prompt).toContain('[EXECUTION GRAPH SCAFFOLD]');
     expect(prompt).toContain('Summary: demo');
   });
+
+  it('includes system awareness context when provided', () => {
+    const prompt = buildDynamicPrompt({
+      model: 'test-model',
+      toolGroup: 'full',
+      systemAwarenessContext: '[SYSTEM AWARENESS]\n- Max runtime per run is 10 minutes.',
+    });
+    expect(prompt).toContain('[SYSTEM AWARENESS]');
+    expect(prompt).toContain('Max runtime per run is 10 minutes.');
+  });
+
+  it('does not inject a hardcoded workspace root by default', () => {
+    const prompt = buildDynamicPrompt({
+      model: 'test-model',
+      toolGroup: 'full',
+    });
+    expect(prompt).not.toContain('PRIMARY PROJECT ROOT');
+    expect(prompt).toContain('no workspace root is being injected');
+    expect(prompt).not.toContain('clawdia4.0');
+  });
+
+  it('injects runtime workspace context only when explicitly provided', () => {
+    const prompt = buildDynamicPrompt({
+      model: 'test-model',
+      toolGroup: 'full',
+      projectRoot: '/tmp/example-workspace',
+    });
+    expect(prompt).toContain('WORKSPACE ROOT: /tmp/example-workspace');
+    expect(prompt).toContain('WORKSPACE SOURCE: /tmp/example-workspace/src');
+  });
 });

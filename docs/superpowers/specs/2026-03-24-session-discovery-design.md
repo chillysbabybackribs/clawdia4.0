@@ -1,7 +1,7 @@
 # Session Discovery — Design Spec
 
 **Date:** 2026-03-24
-**Status:** Draft
+**Status:** In Review
 **Scope:** Auto-populate the Identity Accounts table from existing browser session cookies
 
 ---
@@ -11,6 +11,8 @@
 The Identity Accounts table currently shows only accounts explicitly saved to `managed_accounts` (via manual add or the login interceptor). However, the user may already be logged into many sites in Clawdia's persistent browser (`persist:browser` partition). This spec adds **session discovery**: on every `IDENTITY_ACCOUNTS_LIST` request, the main process scans all cookies, extracts unique domains, and merges them with the managed accounts list — so sites the user is already logged into appear automatically, no action required.
 
 Nothing is written to the database. Discovered sessions are computed fresh on each call and discarded after the IPC response is sent.
+
+This design should reuse a shared domain-discovery helper rather than duplicating cookie-scan logic in multiple IPC handlers. `browser:list-sessions` already scans the same cookie jar; session discovery should build on the same normalization and filtering path so the two features stay aligned.
 
 ---
 
@@ -26,8 +28,8 @@ The existing handler:
 Extended handler:
 1. Fetches all rows from `managed_accounts` — build a Set of their **normalized** `serviceName` values (apply `normalizeCookieDomain` to each `serviceName` before inserting into the Set, so `www.reddit.com` and `reddit.com` both map to the same key)
 2. Get the browser session via `getBrowserSession()` — **if it returns null/undefined, skip the cookie scan and return only the managed rows**
-3. Calls `session.cookies.get({})` — get all cookies. Per-account `accessType` computation for managed rows (checking `session.cookies.get({ domain: account.serviceName })` and `credential_vault`) is **unchanged** — the bulk `cookies.get({})` call is used only for discovering new domains, not for replacing per-account access type logic.
-4. Extracts unique normalized domains from cookie `.domain` field (apply `normalizeCookieDomain`)
+3. Calls a shared helper such as `listSessionDomains(session)` which internally does `session.cookies.get({})`, normalizes domains, and filters noise. Per-account `accessType` computation for managed rows (checking `session.cookies.get({ domain: account.serviceName })` and `credential_vault`) is **unchanged** — the bulk cookie scan is used only for discovering new domains, not for replacing per-account access type logic.
+4. Extracts unique normalized domains from the helper result
 5. For domains **not already in the managed Set**, create a synthetic `ManagedAccountView` with `source: 'session'`
 6. Returns the merged list: managed rows first, synthetic session rows appended
 
@@ -63,11 +65,15 @@ For synthetic session-only rows:
 - `source: 'session'`
 - `createdAt: ''`
 
+For managed rows returned from `IDENTITY_ACCOUNTS_LIST`, set `source: 'managed'`.
+
+For consistency, `IDENTITY_ACCOUNT_ADD` should also return `source: 'managed'` in its response payload even though the current renderer reloads the list immediately after add.
+
 ### Domain normalization
 
 ```typescript
 function normalizeCookieDomain(domain: string): string {
-  return domain.replace(/^\./, '').replace(/^www\./, '');
+  return domain.trim().toLowerCase().replace(/^\./, '').replace(/^www\./, '');
 }
 ```
 
@@ -84,6 +90,8 @@ Not all cookie domains are useful accounts. Filter out:
 
 This static blocklist reduces noise without requiring a separate service registry.
 
+Implementation detail: keep the blocklist and normalization logic in the shared helper used by both `browser:list-sessions` and `IDENTITY_ACCOUNTS_LIST`, so the browser settings view and the identity settings view do not diverge over time.
+
 ### Renderer change — hide delete for session-only rows
 
 `IdentitySection.tsx` changes required:
@@ -94,7 +102,7 @@ This static blocklist reduces noise without requiring a separate service registr
 
 3. **Hide the delete button** for rows where `source === 'session'` — there is no `managed_accounts` row to delete.
 
-The "Add Account" inline form remains available for all rows — the user can promote a session-only entry to a managed account by filling in credentials.
+The current "Add account manually" form remains a global action below the table. This spec does **not** add row-level promotion, prefill, or one-click "save this session as managed" behavior.
 
 ---
 
@@ -107,9 +115,7 @@ IDENTITY_ACCOUNTS_LIST request
   → normalize serviceName values → build exclusion Set
   → session = getBrowserSession()
   → if session is null: return managedRows only
-  → session.cookies.get({})                            // all cookies for domain discovery
-  → normalize cookie domains
-  → filter: no dot, numeric IP, blocklist domains
+  → listSessionDomains(session)                        // shared helper used by browser:list-sessions too
   → filter: already in exclusion Set
   → for each remaining domain: build synthetic ManagedAccountView (source:'session')
   → return [...managedRows, ...syntheticRows]
@@ -121,23 +127,35 @@ IDENTITY_ACCOUNTS_LIST request
 
 | File | Change |
 |------|--------|
-| `src/main/main.ts` | Extend `IDENTITY_ACCOUNTS_LIST` handler to merge synthetic session rows |
+| `src/main/main.ts` | Extract shared session-domain helper, reuse it in `browser:list-sessions`, extend `IDENTITY_ACCOUNTS_LIST`, and return `source` for account DTOs |
 | `src/renderer/components/IdentitySection.tsx` | Hide delete button when `source === 'session'` |
+| `tests/identity/ipc-security.test.ts` | Update DTO expectations for `source` |
+| `tests/...` | Add focused tests for session-domain discovery and merged account listing |
 
-No changes to `identity-store.ts`, `ipc-channels.ts`, or `preload.ts`.
+No changes to `identity-store.ts`, `ipc-channels.ts`, or `preload.ts` are required.
 
 ---
 
 ## Testing
 
-- Unit test for `IDENTITY_ACCOUNTS_LIST` handler:
+- Unit test the shared session-domain helper:
+  - Leading dot, uppercase, and `www.` domains normalize to a single lowercase key
+  - Known tracker domains (e.g. `doubleclick.net`) are excluded
+  - Domains without a dot (e.g. `localhost`) are excluded
+  - Numeric hosts (e.g. `192.168.1.1`) are excluded
+
+- Unit or integration test for `IDENTITY_ACCOUNTS_LIST` merge logic:
   - Given 2 managed accounts and 5 cookie domains (2 overlap, 3 new), returns 5 rows total
   - Synthetic rows have `source: 'session'`, managed rows have `source: 'managed'`
-  - Known tracker domains (e.g. `doubleclick.net`) are excluded from results
-  - Domains without a dot (e.g. `localhost`) are excluded
   - Managed rows always appear before synthetic rows in the response
+  - If `getBrowserSession()` is unavailable, only managed rows are returned
+  - `IDENTITY_ACCOUNT_ADD` returns `source: 'managed'`
 
-- Renderer test:
+- DTO security test update:
+  - `passwordPlain` is still omitted
+  - `source` is present on the renderer-facing DTO
+
+- Renderer test if the repo already has a renderer test harness; otherwise defer renderer coverage and verify via a narrow manual check:
   - Delete button is rendered for `source: 'managed'` rows
   - Delete button is hidden for `source: 'session'` rows
 
@@ -149,3 +167,4 @@ No changes to `identity-store.ts`, `ipc-channels.ts`, or `preload.ts`.
 - Inferring username from cookies (cookie values are opaque)
 - Deduplicating subdomains (e.g. `mail.google.com` and `accounts.google.com` both appear — grouping under `google.com` is a future enhancement)
 - Auto-refreshing the accounts table when cookies change (requires cookie change listener; deferred)
+- Row-level promotion UX for session-only entries

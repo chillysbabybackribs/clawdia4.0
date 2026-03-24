@@ -62,6 +62,11 @@ import { calendarList } from './db/calendar';
 import type { MessageAttachment } from '../shared/types';
 import { buildUserMessageContent } from './db/conversations';
 import { identityStore } from './autonomy/identity-store';
+import {
+  listSessionDomains,
+  mergeDiscoveredSessionAccounts,
+  toManagedAccountView,
+} from './autonomy/session-discovery';
 import { proactiveDetector } from './autonomy/proactive-detector';
 import { taskScheduler } from './autonomy/task-scheduler';
 import { attachToWebContents } from './autonomy/login-interceptor';
@@ -508,13 +513,7 @@ function setupIpcHandlers(): void {
 
   // ── Browser session management ──
   ipcMain.handle('browser:list-sessions', async () => {
-    const cookies = await getBrowserSession().cookies.get({});
-    const domains = new Set<string>();
-    for (const cookie of cookies) {
-      const domain = String(cookie.domain || '').replace(/^\./, '').toLowerCase();
-      if (domain) domains.add(domain);
-    }
-    return Array.from(domains).sort();
+    return listSessionDomains(getBrowserSession());
   });
 
   ipcMain.handle('browser:clear-session', async (_event, domain: string) => {
@@ -540,30 +539,33 @@ function setupIpcHandlers(): void {
   ipcMain.handle(IPC.IDENTITY_ACCOUNTS_LIST, async () => {
     const accounts = identityStore.listAccounts();
     const session = getBrowserSession();
-    return Promise.all(accounts.map(async (account) => {
-      const { passwordPlain: _omit, ...view } = account;
+    const managedViews = await Promise.all(accounts.map(async (account) => {
       let accessType: 'session' | 'vault' | 'managed' = 'managed';
-      if (session) {
-        try {
-          const cookies = await session.cookies.get({ domain: account.serviceName });
-          if (cookies.length > 0) {
-            accessType = 'session';
-          } else {
-            const cred = identityStore.getCredential(account.serviceName, account.serviceName);
-            if (cred) accessType = 'vault';
-          }
-        } catch {
-          // cookie check failed — fall through to 'managed'
+      try {
+        const cookies = await session.cookies.get({ domain: account.serviceName });
+        if (cookies.length > 0) {
+          accessType = 'session';
+        } else {
+          const cred = identityStore.getCredential(account.serviceName, account.serviceName);
+          if (cred) accessType = 'vault';
         }
+      } catch {
+        // cookie check failed — fall through to 'managed'
       }
-      return { ...view, accessType };
+      return toManagedAccountView(account, accessType);
     }));
+
+    try {
+      const discoveredDomains = await listSessionDomains(session);
+      return mergeDiscoveredSessionAccounts(managedViews, discoveredDomains);
+    } catch {
+      return managedViews;
+    }
   });
 
   ipcMain.handle(IPC.IDENTITY_ACCOUNT_ADD, (_e, input: any) => {
     const account = identityStore.saveAccount({ ...input, status: 'active' });
-    const { passwordPlain: _omit, ...view } = account;
-    return { ...view, accessType: 'managed' as const };
+    return toManagedAccountView(account, 'managed');
   });
 
   ipcMain.handle(IPC.IDENTITY_ACCOUNT_DELETE, (_e, serviceName: string) => {

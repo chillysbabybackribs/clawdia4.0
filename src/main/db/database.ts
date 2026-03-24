@@ -31,6 +31,7 @@
  *   scheduled_tasks, scheduled_task_runs — task scheduler (v26)
  *   site_harnesses.intervention_hint + is_signup_harness — signup annotation (v27)
  *   task_sequences — distilled multi-surface task recordings for Bloodhound v2 (v28)
+ *   audit_tool_telemetry — rolling per-tool runtime audit facts (v29)
  */
 
 import Database from 'better-sqlite3';
@@ -759,5 +760,30 @@ function runMigrations(db: Database.Database): void {
     `);
   }
 
-  console.log(`[DB] Schema at version ${Math.max(currentVersion, 28)}`);
+  if (currentVersion < 29) {
+    console.log('[DB] Running migration v29: audit_tool_telemetry');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS audit_tool_telemetry (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id          TEXT NOT NULL REFERENCES runs(id),
+        timestamp       TEXT NOT NULL,
+        iteration_index INTEGER NOT NULL,
+        tool_name       TEXT NOT NULL,
+        tool_category   TEXT,
+        success         INTEGER NOT NULL CHECK(success IN (0, 1)),
+        duration_ms     INTEGER NOT NULL DEFAULT 0,
+        error_type      TEXT,
+        loop_outcome    TEXT CHECK(loop_outcome IN ('completed', 'failed', 'aborted', 'cancelled'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_audit_tool_telemetry_timestamp
+        ON audit_tool_telemetry(timestamp DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_audit_tool_telemetry_run
+        ON audit_tool_telemetry(run_id, timestamp ASC);
+      CREATE INDEX IF NOT EXISTS idx_audit_tool_telemetry_tool
+        ON audit_tool_telemetry(tool_name, timestamp DESC);
+      INSERT INTO schema_version (version) VALUES (29);
+    `);
+  }
+
+  console.log(`[DB] Schema at version ${Math.max(currentVersion, 29)}`);
 }
