@@ -86,9 +86,13 @@ This static blocklist reduces noise without requiring a separate service registr
 
 ### Renderer change — hide delete for session-only rows
 
-`IdentitySection.tsx` already renders a delete button per row. For rows where `source === 'session'`, hide the delete button (there is no `managed_accounts` row to delete).
+`IdentitySection.tsx` changes required:
 
-The table row `key` prop must be updated to use `acc.source === 'session' ? acc.serviceName : String(acc.id)` — synthetic rows share `id: 0` and would produce duplicate React keys if keyed by `id` alone.
+1. **Update the `ManagedAccountView` interface** at the top of the file — add `source: 'managed' | 'session'` to the interface declaration (without this, `acc.source` references below will be TypeScript errors).
+
+2. **Update the table row `key` prop** to `acc.source === 'session' ? acc.serviceName : String(acc.id)` — synthetic rows share `id: 0` and would produce duplicate React keys if keyed by `id` alone.
+
+3. **Hide the delete button** for rows where `source === 'session'` — there is no `managed_accounts` row to delete.
 
 The "Add Account" inline form remains available for all rows — the user can promote a session-only entry to a managed account by filling in credentials.
 
