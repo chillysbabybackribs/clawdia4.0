@@ -798,7 +798,7 @@ function runMigrations(db: Database.Database): void {
         is_preferred    INTEGER NOT NULL DEFAULT 0,
         is_backup       INTEGER NOT NULL DEFAULT 0,
         is_active       INTEGER NOT NULL DEFAULT 1,
-        created_at      TEXT NOT NULL
+        created_at      TEXT NOT NULL DEFAULT (datetime('now'))
       );
 
       CREATE TABLE IF NOT EXISTS spending_budgets (
@@ -807,7 +807,7 @@ function runMigrations(db: Database.Database): void {
         limit_usd   INTEGER NOT NULL,
         is_active   INTEGER NOT NULL DEFAULT 1,
         reset_day   INTEGER,
-        created_at  TEXT NOT NULL
+        created_at  TEXT NOT NULL DEFAULT (datetime('now'))
       );
 
       CREATE TABLE IF NOT EXISTS spending_transactions (
@@ -817,9 +817,9 @@ function runMigrations(db: Database.Database): void {
         amount_usd        INTEGER NOT NULL,
         description       TEXT,
         payment_method_id INTEGER REFERENCES payment_methods(id) ON DELETE SET NULL,
-        status            TEXT NOT NULL,
+        status            TEXT NOT NULL CHECK(status IN ('pending','completed','failed','refunded')),
         is_estimated      INTEGER NOT NULL DEFAULT 0,
-        created_at        TEXT NOT NULL
+        created_at        TEXT NOT NULL DEFAULT (datetime('now'))
       );
 
       INSERT INTO schema_version (version) VALUES (29);
