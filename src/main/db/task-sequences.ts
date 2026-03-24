@@ -30,6 +30,7 @@ export interface TaskSequence {
   outcome: 'success' | 'partial' | 'failed';
   toolCallCount: number;
   durationMs: number;
+  // Updated by Bloodhound retrieval/replay sub-projects (deferred)
   successCount: number;
   failCount: number;
   lastUsed: string | null;
@@ -79,13 +80,17 @@ export function listTaskSequences(limit = 100): TaskSequence[] {
   return rows.map(rowToTaskSequence);
 }
 
+function bufferToFloat32Array(buf: Buffer): Float32Array {
+  return new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / Float32Array.BYTES_PER_ELEMENT);
+}
+
 function rowToTaskSequence(row: any): TaskSequence {
   return {
     id: row.id,
     runId: row.run_id,
     goal: row.goal,
     goalEmbedding: row.goal_embedding
-      ? (() => { const buf = Buffer.from(row.goal_embedding); return new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / Float32Array.BYTES_PER_ELEMENT); })()
+      ? bufferToFloat32Array(Buffer.from(row.goal_embedding))
       : null,
     surfaces: JSON.parse(row.surfaces || '[]'),
     steps: JSON.parse(row.steps || '[]'),

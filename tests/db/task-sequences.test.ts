@@ -109,4 +109,29 @@ describe('task-sequences CRUD', () => {
     const calledWith = runMock.mock.calls[0];
     expect(calledWith[0]).toBeInstanceOf(Buffer);
   });
+
+  it('listTaskSequences returns mapped rows', async () => {
+    allMock.mockReturnValue([
+      {
+        id: 1,
+        run_id: 'run-1',
+        goal: 'test',
+        goal_embedding: null,
+        surfaces: JSON.stringify(['browser']),
+        steps: JSON.stringify([]),
+        outcome: 'success',
+        tool_call_count: 3,
+        duration_ms: 1000,
+        success_count: 0,
+        fail_count: 0,
+        last_used: null,
+        created_at: '2026-03-24T00:00:00.000Z',
+      },
+    ]);
+    const { listTaskSequences } = await import('../../src/main/db/task-sequences');
+    const results = listTaskSequences();
+    expect(results).toHaveLength(1);
+    expect(results[0].runId).toBe('run-1');
+    expect(allMock).toHaveBeenCalledOnce();
+  });
 });
