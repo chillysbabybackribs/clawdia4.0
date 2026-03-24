@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS spending_transactions (
   merchant          TEXT NOT NULL,
   amount_usd        INTEGER NOT NULL,   -- in cents
   description       TEXT,
-  payment_method_id INTEGER REFERENCES payment_methods(id),
+  payment_method_id INTEGER REFERENCES payment_methods(id) ON DELETE SET NULL,
   status            TEXT NOT NULL,      -- 'pending' | 'completed' | 'failed' | 'refunded'
   is_estimated      INTEGER NOT NULL DEFAULT 0,  -- 1 = pre-task estimate, 0 = actual
   created_at        TEXT NOT NULL
@@ -184,12 +184,14 @@ CVV is received via the intervention resolution channel, used once to fill the f
 
 Four new IPC notification events sent from main → renderer via existing `ipc-channels.ts`:
 
+Event names use the `namespace:kebab-case` convention consistent with `ipc-channels.ts`.
+
 | Event | Trigger | Message |
 |-------|---------|---------|
-| `spending.purchase_complete` | Transaction confirmed | "Purchased [description] at [merchant] for $X.XX — $Y.YY remaining this month" |
-| `spending.low_balance` | Remaining < 20% of any active limit after a purchase | "Spending limit running low — $Y.YY remaining [this week/month/today]" |
-| `spending.budget_exceeded` | Purchase would exceed a limit | "Purchase blocked — $X.XX would exceed your [daily/weekly/monthly] limit ($Y.YY remaining)" |
-| `spending.cvv_required` | CVV needed at checkout | Delivered via human_intervention system, not a toast |
+| `spending:purchase-complete` | Transaction confirmed | "Purchased [description] at [merchant] for $X.XX — $Y.YY remaining this month" |
+| `spending:low-balance` | Remaining < 20% of any active limit after a purchase | "Spending limit running low — $Y.YY remaining [this week/month/today]" |
+| `spending:budget-exceeded` | Purchase would exceed a limit | "Purchase blocked — $X.XX would exceed your [daily/weekly/monthly] limit ($Y.YY remaining)" |
+| `spending:cvv-required` | CVV needed at checkout | Delivered via human_intervention system, not a toast |
 
 ---
 
