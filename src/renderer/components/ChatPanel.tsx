@@ -355,11 +355,11 @@ function AttachmentGallery({ attachments }: { attachments: MessageAttachment[] }
 }
 
 const AssistantMessage = React.memo(function AssistantMessage({ message, shimmerText }: { message: Message; shimmerText?: string }) {
-  // Live path: flat append-only feed
-  if (message.feed && message.feed.length > 0) {
+  // Live path: active streaming message (feed may be empty while shimmer is showing)
+  if (message.isStreaming || (message.feed && message.feed.length > 0)) {
     const textItems: Array<{ text: string; isStreaming?: boolean; idx: number }> = [];
-    for (let i = 0; i < message.feed.length; i++) {
-      const item = message.feed[i];
+    for (let i = 0; i < (message.feed?.length ?? 0); i++) {
+      const item = message.feed![i];
       if (item.kind === 'text') {
         if (!item.text.trim()) continue;
         textItems.push({ text: item.text, isStreaming: item.isStreaming, idx: i });
