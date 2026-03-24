@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { PolicyProfile, PerformanceStance } from '../../shared/types';
 import { DEFAULT_MODEL_BY_PROVIDER, DEFAULT_PROVIDER, getModelsForProvider, PROVIDERS, type ProviderId } from '../../shared/model-registry';
+import IdentitySection from './IdentitySection';
 
 interface SettingsViewProps {
   onBack: () => void;
@@ -224,6 +225,9 @@ export default function SettingsView({ onBack }: SettingsViewProps) {
               ))}
             </div>
           </section>
+
+          <div className="h-px bg-border-subtle" />
+          <IdentitySection />
 
           <button
             onClick={handleSave}
