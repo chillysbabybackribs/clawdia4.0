@@ -91,6 +91,8 @@ export function attachToWebContents(wc: WebContents): void {
     }
   });
 
+  wc.once('destroyed', () => pendingCaptures.delete(wc.id));
+
   wc.on('did-navigate', (_event, newUrl) => {
     const pending = pendingCaptures.get(wc.id);
     if (!pending) return;
