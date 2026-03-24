@@ -108,12 +108,14 @@ describe('distillSteps()', () => {
 
   it('strips sensitive keys from input before storing', () => {
     const events = [
-      makeEvent({ kind: 'tool_started', seq: 0, toolName: 'browser_navigate', payload: { toolUseId: 'c', input: { url: 'https://x.com', token: 'secret123', password: 'hunter2' }, ordinal: 0, detail: '' } }),
+      makeEvent({ kind: 'tool_started', seq: 0, toolName: 'browser_navigate', payload: { toolUseId: 'c', input: { url: 'https://x.com', token: 'secret123', password: 'hunter2', authorization: 'Bearer abc', apiKey: 'sk-abcdefghijklmnopqrstuvwxyz' }, ordinal: 0, detail: '' } }),
       makeEvent({ kind: 'tool_completed', seq: 1, toolName: 'browser_navigate', payload: { toolUseId: 'c', resultPreview: 'ok', durationMs: 100, detail: '' } }),
     ];
     const steps = distillSteps(events);
     expect(steps[0].input.token).toBe('[redacted]');
     expect(steps[0].input.password).toBe('[redacted]');
+    expect(steps[0].input.authorization).toBe('[redacted]'); // contains 'auth'
+    expect(steps[0].input.apiKey).toBe('[redacted]');       // value matches sk- pattern
     expect(steps[0].input.url).toBe('https://x.com');
   });
 

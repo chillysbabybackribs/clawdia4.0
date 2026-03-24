@@ -44,13 +44,13 @@ function toolToSurface(toolName: string): Surface {
 // Input sanitization
 // ═══════════════════════════════════
 
-const REDACT_KEYS = new Set(['password', 'token', 'api_key', 'secret', 'auth', 'cookie', 'credential']);
+const REDACT_KEY_WORDS = ['password', 'token', 'api_key', 'secret', 'auth', 'cookie', 'credential'];
 const REDACT_VALUE_RE = /^sk-[a-zA-Z0-9]{20,}/;
 
 function sanitizeInput(input: Record<string, any>): Record<string, any> {
   const result: Record<string, any> = {};
   for (const [k, v] of Object.entries(input)) {
-    if (REDACT_KEYS.has(k.toLowerCase())) {
+    if (REDACT_KEY_WORDS.some(w => k.toLowerCase().includes(w))) {
       result[k] = '[redacted]';
     } else if (typeof v === 'string' && REDACT_VALUE_RE.test(v)) {
       result[k] = '[redacted]';
