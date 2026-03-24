@@ -360,29 +360,16 @@ const AssistantMessage = React.memo(function AssistantMessage({ message, streamM
 
   // Live path: flat append-only feed
   if (message.feed && message.feed.length > 0) {
-    // Collapse consecutive tool items into groups for rendering
-    type RenderGroup =
-      | { kind: 'tools'; tools: ToolCall[]; startIdx: number }
-      | { kind: 'text'; text: string; isStreaming?: boolean; idx: number };
-
-    const groups: RenderGroup[] = [];
+    const textItems: Array<{ text: string; isStreaming?: boolean; idx: number }> = [];
     for (let i = 0; i < message.feed.length; i++) {
       const item = message.feed[i];
-      if (item.kind === 'tool') {
-        const last = groups[groups.length - 1];
-        if (last && last.kind === 'tools') {
-          last.tools.push(item.tool);
-        } else {
-          groups.push({ kind: 'tools', tools: [item.tool], startIdx: i });
-        }
-      } else {
-        if (!item.text.trim()) continue; // skip empty text — don't break tool grouping
-        groups.push({ kind: 'text', text: item.text, isStreaming: item.isStreaming, idx: i });
+      if (item.kind === 'text') {
+        if (!item.text.trim()) continue;
+        textItems.push({ text: item.text, isStreaming: item.isStreaming, idx: i });
       }
     }
 
-    const textGroups = groups.filter(g => g.kind === 'text') as Array<{ kind: 'text'; text: string; isStreaming?: boolean; idx: number }>;
-    const hasText = textGroups.length > 0;
+    const hasText = textItems.length > 0;
 
     return (
       <div className="flex justify-start animate-slide-up group">
@@ -391,7 +378,7 @@ const AssistantMessage = React.memo(function AssistantMessage({ message, streamM
           {message.isStreaming && shimmerText && !hasText && (
             <InlineShimmer text={shimmerText} />
           )}
-          {textGroups.map(g => (
+          {textItems.map(g => (
             <MarkdownRenderer key={g.idx} content={g.text} isStreaming={g.isStreaming === true} />
           ))}
           {!message.isStreaming && message.content && (
@@ -407,8 +394,7 @@ const AssistantMessage = React.memo(function AssistantMessage({ message, streamM
 
   // Fallback: DB-loaded historical messages
   const hasContent = !!message.content?.trim();
-  const hasTools = !!message.toolCalls?.length;
-  if (!hasContent && !hasTools) return null;
+  if (!hasContent) return null;
   return (
     <div className="flex justify-start animate-slide-up group">
       <div className="max-w-[92%] px-1 py-2 text-text-primary">
@@ -488,7 +474,6 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
-  const [statusText, setStatusText] = useState('');
   const [shimmerText, setShimmerText] = useState<string>('');
   const [streamMap, setStreamMap] = useState<ToolStreamMap>({});
   const [pendingApprovalRunId, setPendingApprovalRunId] = useState<string | null>(null);
@@ -1035,7 +1020,6 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
               </div>
             </div>
           )}
-          {isStreaming && <StatusLine text={statusText} />}
           <div className="h-2" />
         </div>
       </div>
