@@ -91,6 +91,48 @@ export function cancelPendingHumanInterventions(
   }
 }
 
+/**
+ * Poll the BrowserView's webContents to detect when a DOM blocker is resolved.
+ * Uses executeJavaScript polling — consistent with waits.ts patterns.
+ * When the selector disappears (or page navigates), calls resolveHumanIntervention.
+ *
+ * @param view         The BrowserView currently showing the blocked page
+ * @param interventionId  The ID of the pending intervention record
+ * @param blockerSelector CSS selector for the element that indicates the blocker is present.
+ *                        When this element is gone, the blocker is resolved.
+ * @param timeoutMs    Max time to wait before giving up (default 10 minutes)
+ */
+export async function watchForInterventionResolution(
+  view: import('electron').BrowserView,
+  interventionId: number,
+  blockerSelector: string,
+  timeoutMs = 10 * 60 * 1_000,
+): Promise<'resolved' | 'timeout'> {
+  const { wait } = await import('../browser/waits');
+  const deadline = Date.now() + timeoutMs;
+  const wc = view.webContents;
+
+  while (Date.now() < deadline) {
+    if (wc.isDestroyed()) break;
+    try {
+      const blockerStillPresent = await wc.executeJavaScript(`
+        (() => !!document.querySelector(${JSON.stringify(blockerSelector)}))()
+      `);
+      if (!blockerStillPresent) {
+        resolveHumanIntervention(interventionId);
+        return 'resolved';
+      }
+    } catch {
+      // Page navigated or context destroyed — treat as resolved
+      resolveHumanIntervention(interventionId);
+      return 'resolved';
+    }
+    await wait(1_000);
+  }
+
+  return 'timeout';
+}
+
 function settleIntervention(
   interventionId: number,
   decision: InterventionDecision,

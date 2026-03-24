@@ -17,7 +17,7 @@ export interface RunHumanInterventionRecord {
   id: number;
   runId: string;
   status: 'pending' | 'resolved' | 'dismissed';
-  interventionType: 'password' | 'otp' | 'captcha' | 'native_dialog' | 'site_confirmation' | 'conflict_resolution' | 'manual_takeover' | 'unknown';
+  interventionType: 'password' | 'otp' | 'captcha' | 'native_dialog' | 'site_confirmation' | 'conflict_resolution' | 'manual_takeover' | 'phone_required' | 'unexpected_form' | 'unknown';
   target?: string;
   summary: string;
   instructions?: string;
