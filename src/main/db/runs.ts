@@ -17,11 +17,14 @@ export interface RunRow {
   conversation_id: string;
   title: string;
   goal: string;
+  scenario_id: string | null;
   status: RunStatus;
   started_at: string;
   updated_at: string;
   completed_at: string | null;
   tool_call_count: number;
+  tool_completed_count: number;
+  tool_failed_count: number;
   error: string | null;
   was_detached: number;
   provider: string | null;
@@ -34,11 +37,14 @@ export interface RunRecord {
   conversationId: string;
   title: string;
   goal: string;
+  scenarioId?: string;
   status: RunStatus;
   startedAt: number;
   updatedAt: number;
   completedAt?: number;
   toolCallCount: number;
+  toolCompletedCount: number;
+  toolFailedCount: number;
   error?: string;
   wasDetached: boolean;
   provider?: ProviderId;
@@ -46,28 +52,38 @@ export interface RunRecord {
   workflowStage?: WorkflowStage;
 }
 
-export function createRun(id: string, conversationId: string, goal: string, provider?: ProviderId, model?: string): RunRow {
+export function createRun(
+  id: string,
+  conversationId: string,
+  goal: string,
+  provider?: ProviderId,
+  model?: string,
+  scenarioId?: string,
+): RunRow {
   const db = getDb();
   const now = new Date().toISOString();
   const title = goal.length > 80 ? goal.slice(0, 77) + '...' : goal;
 
   db.prepare(`
     INSERT INTO runs (
-      id, conversation_id, title, goal, status,
-      started_at, updated_at, tool_call_count, was_detached, provider, model, workflow_stage
-    ) VALUES (?, ?, ?, ?, 'running', ?, ?, 0, 0, ?, ?, 'starting')
-  `).run(id, conversationId, title, goal, now, now, provider || null, model || null);
+      id, conversation_id, title, goal, scenario_id, status,
+      started_at, updated_at, tool_call_count, tool_completed_count, tool_failed_count, was_detached, provider, model, workflow_stage
+    ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, 0, 0, 0, 0, ?, ?, 'starting')
+  `).run(id, conversationId, title, goal, scenarioId || null, now, now, provider || null, model || null);
 
   return {
     id,
     conversation_id: conversationId,
     title,
     goal,
+    scenario_id: scenarioId || null,
     status: 'running',
     started_at: now,
     updated_at: now,
     completed_at: null,
     tool_call_count: 0,
+    tool_completed_count: 0,
+    tool_failed_count: 0,
     error: null,
     was_detached: 0,
     provider: provider || null,
@@ -78,6 +94,11 @@ export function createRun(id: string, conversationId: string, goal: string, prov
 
 export function getRun(id: string): RunRow | null {
   return (getDb().prepare('SELECT * FROM runs WHERE id = ?').get(id) as RunRow) || null;
+}
+
+export function runExists(id: string): boolean {
+  const row = getDb().prepare('SELECT 1 AS ok FROM runs WHERE id = ? LIMIT 1').get(id) as { ok?: number } | undefined;
+  return row?.ok === 1;
 }
 
 export function listRuns(limit = 100): RunRow[] {
@@ -95,13 +116,17 @@ export function listRunRecords(limit = 100): RunRecord[] {
   return listRuns(limit).map(toRunRecord);
 }
 
+function terminalWorkflowStage(status: Exclude<RunStatus, 'running' | 'awaiting_approval' | 'needs_human'>): WorkflowStage {
+  return status;
+}
+
 export function completeRun(id: string, status: Exclude<RunStatus, 'running' | 'awaiting_approval' | 'needs_human'>, error?: string): void {
   const now = new Date().toISOString();
   getDb().prepare(`
     UPDATE runs
-    SET status = ?, error = ?, completed_at = ?, updated_at = ?
+    SET status = ?, error = ?, completed_at = ?, updated_at = ?, workflow_stage = ?
     WHERE id = ?
-  `).run(status, error || null, now, now, id);
+  `).run(status, error || null, now, now, terminalWorkflowStage(status), id);
 
   // Non-blocking — Bloodhound records qualifying runs async
   maybeRecordSequence(id, status).catch(err =>
@@ -128,6 +153,16 @@ export function incrementRunToolCount(id: string): void {
         updated_at = ?
     WHERE id = ?
   `).run(new Date().toISOString(), id);
+}
+
+export function incrementRunToolOutcome(id: string, outcome: 'completed' | 'failed', amount = 1): void {
+  const column = outcome === 'completed' ? 'tool_completed_count' : 'tool_failed_count';
+  getDb().prepare(`
+    UPDATE runs
+    SET ${column} = ${column} + ?,
+        updated_at = ?
+    WHERE id = ?
+  `).run(amount, new Date().toISOString(), id);
 }
 
 export function setRunDetached(id: string, wasDetached: boolean): void {
@@ -218,11 +253,14 @@ function toRunRecord(row: RunRow): RunRecord {
     conversationId: row.conversation_id,
     title: row.title,
     goal: row.goal,
+    scenarioId: row.scenario_id || undefined,
     status: row.status,
     startedAt: new Date(row.started_at).getTime(),
     updatedAt: new Date(row.updated_at).getTime(),
     completedAt: row.completed_at ? new Date(row.completed_at).getTime() : undefined,
     toolCallCount: row.tool_call_count,
+    toolCompletedCount: row.tool_completed_count || 0,
+    toolFailedCount: row.tool_failed_count || 0,
     error: row.error || undefined,
     wasDetached: !!row.was_detached,
     provider: (row.provider as ProviderId | null) || undefined,

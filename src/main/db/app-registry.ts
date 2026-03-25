@@ -432,13 +432,18 @@ function extractCandidateWords(message: string): string[] {
 /** Cache of binary-existence checks (populated by discoverApps). */
 const binaryCache: Record<string, boolean> = {};
 
+function isExplicitClaudeCodeInvocation(message: string): boolean {
+  return /\b(?:use|run|launch|open|start|invoke|ask|have)\s+claude(?:\s+code|-code)\b/i.test(message)
+    || /\bclaude(?:\s+code|-code)\s+(?:to|for)\s+(?:review|inspect|analyze|check|fix|edit|write|run)\b/i.test(message);
+}
+
 /**
  * Synchronous extraction — checks registry DB + programmatic aliases.
  * This is the fast path called on every desktop-classified message.
  */
 export function extractAppName(message: string): string | null {
   const normalized = message.toLowerCase();
-  if (/\bclaude(?:\s+code|-code)\b/.test(normalized)) return 'claude';
+  if (/\bclaude(?:\s+code|-code)\b/.test(normalized) && isExplicitClaudeCodeInvocation(message)) return 'claude';
 
   const candidates = extractCandidateWords(message);
 

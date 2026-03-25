@@ -8,6 +8,24 @@ import * as crypto from 'crypto';
 import type { PerformanceStance, ProviderId } from '../shared/types';
 import { DEFAULT_MODEL_BY_PROVIDER, DEFAULT_PROVIDER } from '../shared/model-registry';
 
+export interface PersistedBrowserTab {
+  url: string;
+  title?: string;
+}
+
+export interface BrowserSessionSnapshot {
+  tabs: PersistedBrowserTab[];
+  activeIndex: number;
+}
+
+export interface UiSessionState {
+  activeConversationId: string | null;
+  activeView: 'chat' | 'conversations' | 'settings' | 'processes';
+  browserVisible: boolean;
+  calendarOpen: boolean;
+  browserTabs: BrowserSessionSnapshot;
+}
+
 // Generate a machine-specific encryption key from hostname + username.
 // Not bulletproof security, but prevents trivial key extraction from source.
 const machineId = `${os.hostname()}-${os.userInfo().username}-clawdia4`;
@@ -21,6 +39,48 @@ interface StoreSchema {
   unrestrictedMode: boolean;
   selectedPolicyProfile: string;
   selectedPerformanceStance: PerformanceStance;
+  uiSession: UiSessionState;
+}
+
+const DEFAULT_UI_SESSION: UiSessionState = {
+  activeConversationId: null,
+  activeView: 'chat',
+  browserVisible: true,
+  calendarOpen: false,
+  browserTabs: {
+    tabs: [],
+    activeIndex: 0,
+  },
+};
+
+function normalizeUiSession(raw: unknown): UiSessionState {
+  const session = (raw && typeof raw === 'object') ? raw as Partial<UiSessionState> : {};
+  const rawBrowserTabs = (session.browserTabs && typeof session.browserTabs === 'object')
+    ? session.browserTabs as Partial<BrowserSessionSnapshot>
+    : {};
+  const tabs = Array.isArray(rawBrowserTabs.tabs)
+    ? rawBrowserTabs.tabs
+      .filter((tab): tab is PersistedBrowserTab => !!tab && typeof tab.url === 'string' && tab.url.trim().length > 0)
+      .map((tab) => ({ url: tab.url, title: typeof tab.title === 'string' ? tab.title : undefined }))
+    : [];
+  const activeIndex = Number.isInteger(rawBrowserTabs.activeIndex)
+    ? Math.max(0, Math.min(Number(rawBrowserTabs.activeIndex), Math.max(0, tabs.length - 1)))
+    : 0;
+
+  return {
+    activeConversationId: typeof session.activeConversationId === 'string' && session.activeConversationId.trim()
+      ? session.activeConversationId
+      : null,
+    activeView: session.activeView === 'conversations' || session.activeView === 'settings' || session.activeView === 'processes'
+      ? session.activeView
+      : 'chat',
+    browserVisible: typeof session.browserVisible === 'boolean' ? session.browserVisible : DEFAULT_UI_SESSION.browserVisible,
+    calendarOpen: typeof session.calendarOpen === 'boolean' ? session.calendarOpen : DEFAULT_UI_SESSION.calendarOpen,
+    browserTabs: {
+      tabs,
+      activeIndex,
+    },
+  };
 }
 
 export const store = new Store<StoreSchema>({
@@ -37,6 +97,7 @@ export const store = new Store<StoreSchema>({
     unrestrictedMode: false,
     selectedPolicyProfile: 'standard',
     selectedPerformanceStance: 'standard',
+    uiSession: DEFAULT_UI_SESSION,
   },
   encryptionKey,
 });
@@ -126,4 +187,25 @@ export function getSelectedPerformanceStance(): PerformanceStance {
 
 export function setSelectedPerformanceStance(stance: PerformanceStance): void {
   store.set('selectedPerformanceStance', stance || 'standard');
+}
+
+export function getUiSession(): UiSessionState {
+  return normalizeUiSession(store.get('uiSession', DEFAULT_UI_SESSION));
+}
+
+export function setUiSession(next: UiSessionState): void {
+  store.set('uiSession', normalizeUiSession(next));
+}
+
+export function patchUiSession(partial: Partial<UiSessionState>): UiSessionState {
+  const current = getUiSession();
+  const merged = normalizeUiSession({
+    ...current,
+    ...partial,
+    browserTabs: partial.browserTabs
+      ? { ...current.browserTabs, ...partial.browserTabs }
+      : current.browserTabs,
+  });
+  store.set('uiSession', merged);
+  return merged;
 }

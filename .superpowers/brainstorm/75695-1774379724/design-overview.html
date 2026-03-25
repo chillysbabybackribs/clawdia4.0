@@ -1,0 +1,233 @@
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif; }
+
+  .chat-demo {
+    background: #0f0f13;
+    border-radius: 10px;
+    padding: 20px 24px;
+    max-width: 560px;
+    margin: 0 auto;
+    font-family: inherit;
+  }
+  .user-msg {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 18px;
+  }
+  .user-bubble {
+    background: #2a2a35;
+    color: #d0d0d0;
+    border-radius: 14px 14px 4px 14px;
+    padding: 10px 14px;
+    font-size: 13px;
+    max-width: 75%;
+    line-height: 1.5;
+  }
+  .assistant-area {
+    min-height: 32px;
+    margin-bottom: 8px;
+  }
+
+  /* Shimmer text — the only in-chat indicator */
+  .shimmer-line {
+    font-size: 13px;
+    color: #555;
+    background: linear-gradient(90deg, #3a3a3a 25%, #787878 50%, #3a3a3a 75%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: shimmer 2s linear infinite;
+    display: inline-block;
+  }
+  @keyframes shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  /* Response text that appears after */
+  .response-text {
+    font-size: 13px;
+    color: #c8c8c8;
+    line-height: 1.65;
+  }
+
+  .divider {
+    border: none;
+    border-top: 1px solid #1e1e2a;
+    margin: 28px 0;
+  }
+
+  .phase-tag {
+    display: inline-block;
+    font-size: 10px;
+    color: #444;
+    background: #16161e;
+    border: 1px solid #222;
+    border-radius: 4px;
+    padding: 2px 7px;
+    margin-left: 8px;
+    vertical-align: middle;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .removed-item {
+    text-decoration: line-through;
+    color: #444;
+    font-size: 12px;
+  }
+  .added-item {
+    color: #888;
+    font-size: 12px;
+  }
+  .change-list {
+    list-style: none;
+    padding: 0;
+    margin: 12px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .change-list li { display: flex; align-items: baseline; gap: 8px; }
+  .tag-rm { color: #c06060; font-size: 10px; font-weight: 600; }
+  .tag-add { color: #60a060; font-size: 10px; font-weight: 600; }
+  .tag-keep { color: #5588bb; font-size: 10px; font-weight: 600; }
+
+  .section-label {
+    font-size: 11px;
+    color: #555;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin: 0 0 10px;
+  }
+
+  .before-after {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin: 16px 0;
+  }
+  .ba-panel {
+    background: #0d0d12;
+    border: 1px solid #1a1a24;
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .ba-label {
+    font-size: 10px;
+    color: #444;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    margin-bottom: 10px;
+  }
+  .tool-card-mock {
+    background: #13131a;
+    border: 1px solid #222;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 11px;
+    color: #555;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .tool-card-mock .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #2a5a2a;
+    flex-shrink: 0;
+  }
+
+  .arrow-connector {
+    text-align: center;
+    font-size: 11px;
+    color: #333;
+    margin: 4px 0;
+  }
+</style>
+
+<h2>Design: Universal shimmer indicator</h2>
+<p class="subtitle">Replacing all tool cards + status bar with a single inline shimmer line during any active run</p>
+
+<hr class="divider">
+
+<div class="section-label">What changes</div>
+
+<ul class="change-list">
+  <li><span class="tag-rm">REMOVE</span> <span style="color:#888;font-size:13px;">ToolActivity cards (dark boxes with tool output)</span></li>
+  <li><span class="tag-rm">REMOVE</span> <span style="color:#888;font-size:13px;">StatusLine bar (bottom-of-chat shimmer dot + text)</span></li>
+  <li><span class="tag-rm">REMOVE</span> <span style="color:#888;font-size:13px;">ThinkingIndicator (3 animated dots)</span></li>
+  <li><span class="tag-add">ADD</span> <span style="color:#888;font-size:13px;">Single inline shimmer text in the assistant message area</span></li>
+  <li><span class="tag-keep">KEEP</span> <span style="color:#888;font-size:13px;">ToolCall data stored internally (for Bloodhound + DB) — just not rendered</span></li>
+  <li><span class="tag-keep">KEEP</span> <span style="color:#888;font-size:13px;">All existing IPC events, feed logic, process-manager — no backend changes</span></li>
+</ul>
+
+<hr class="divider">
+
+<div class="section-label">Before → After</div>
+<div class="before-after">
+  <div class="ba-panel">
+    <div class="ba-label">Before (current)</div>
+    <div style="font-size:11px;color:#666;margin-bottom:8px;">User message</div>
+    <div class="tool-card-mock"><span class="dot"></span> shell_exec — find /src…</div>
+    <div class="tool-card-mock"><span class="dot" style="background:#5a3a3a"></span> browser_navigate — github…</div>
+    <div class="tool-card-mock"><span class="dot"></span> browser_extract — listing…</div>
+    <div style="font-size:11px;color:#444;margin-top:8px;font-style:italic;">+ status bar at bottom</div>
+  </div>
+  <div class="ba-panel">
+    <div class="ba-label">After (new)</div>
+    <div style="font-size:11px;color:#666;margin-bottom:8px;">User message</div>
+    <div style="padding: 6px 0;">
+      <span class="shimmer-line">Navigating to github.com…</span>
+    </div>
+    <div style="font-size:11px;color:#444;margin-top:8px;font-style:italic;">— nothing else —</div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<div class="section-label">Phase text — derived from tool activity events</div>
+<div style="background:#0d0d12;border:1px solid #1a1a24;border-radius:8px;padding:14px 16px;font-size:12px;color:#666;line-height:2;">
+  <code style="color:#555;font-size:11px;">shell_exec</code> → <span class="shimmer-line" style="font-size:12px;">Running command…</span><br>
+  <code style="color:#555;font-size:11px;">browser_navigate { url }</code> → <span class="shimmer-line" style="font-size:12px;">Navigating to github.com…</span><br>
+  <code style="color:#555;font-size:11px;">file_read</code> → <span class="shimmer-line" style="font-size:12px;">Reading file…</span><br>
+  <code style="color:#555;font-size:11px;">directory_tree</code> → <span class="shimmer-line" style="font-size:12px;">Scanning directory…</span><br>
+  <code style="color:#555;font-size:11px;">browser_extract</code> → <span class="shimmer-line" style="font-size:12px;">Extracting page content…</span><br>
+  <code style="color:#555;font-size:11px;">agent_spawn</code> → <span class="shimmer-line" style="font-size:12px;">Spawning agent…</span><br>
+  <code style="color:#555;font-size:11px;">(LLM thinking, no tool)</code> → <span class="shimmer-line" style="font-size:12px;">Thinking…</span>
+</div>
+
+<hr class="divider">
+
+<div class="section-label">Live demo — full run lifecycle</div>
+<div class="chat-demo">
+  <div class="user-msg">
+    <div class="user-bubble">List all .ts files and find which ones import 'anthropic'</div>
+  </div>
+
+  <!-- Phase 1: tool active -->
+  <div class="assistant-area">
+    <span class="shimmer-line">Running command…</span>
+  </div>
+
+  <div class="arrow-connector">↓ LLM text starts arriving → shimmer instantly replaced</div>
+
+  <!-- Phase 2: response text -->
+  <div class="assistant-area">
+    <span class="response-text">Found 3 files that import from <code style="font-size:12px;color:#aaa">'anthropic'</code>:<br><br>
+    • src/main/agent/provider/anthropic-adapter.ts<br>
+    • src/main/llm/client.ts<br>
+    • src/main/agent/loop.ts</span>
+  </div>
+</div>
+
+<hr class="divider">
+
+<div class="section-label">Files touched</div>
+<div style="font-size:12px;color:#666;line-height:2;">
+  <span style="color:#888">Modify:</span> <code style="color:#aaa">ChatPanel.tsx</code> — replace feed tool rendering + remove StatusLine + ThinkingIndicator<br>
+  <span style="color:#888">Modify:</span> <code style="color:#aaa">ChatPanel.tsx</code> — add inline shimmer state driven by CHAT_TOOL_ACTIVITY<br>
+  <span style="color:#888">Keep:</span> <code style="color:#aaa">ToolActivity.tsx</code>, <code style="color:#aaa">StatusLine.tsx</code>, <code style="color:#aaa">ThinkingIndicator.tsx</code> — files stay, just no longer rendered<br>
+  <span style="color:#888">Keep:</span> All IPC, process-manager, loop — zero backend changes
+</div>

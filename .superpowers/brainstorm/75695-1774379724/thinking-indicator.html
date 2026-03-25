@@ -1,0 +1,161 @@
+<style>
+  .chat-demo {
+    background: #0f0f13;
+    border-radius: 10px;
+    padding: 20px 24px;
+    max-width: 620px;
+    margin: 0 auto;
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+  }
+  .user-msg {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 20px;
+  }
+  .user-bubble {
+    background: #2a2a35;
+    color: #e0e0e0;
+    border-radius: 14px 14px 4px 14px;
+    padding: 10px 14px;
+    font-size: 13px;
+    max-width: 75%;
+  }
+  .assistant-msg {
+    margin-bottom: 16px;
+  }
+
+  /* OPTION A — shimmer text crawl */
+  .shimmer-text {
+    font-size: 13px;
+    color: #555;
+    letter-spacing: 0.01em;
+    background: linear-gradient(90deg, #444 25%, #888 50%, #444 75%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: shimmer-crawl 1.8s linear infinite;
+    display: inline-block;
+    min-width: 120px;
+  }
+  @keyframes shimmer-crawl {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  /* OPTION B — fading ellipsis */
+  .fade-ellipsis {
+    font-size: 13px;
+    color: #666;
+    letter-spacing: 0.02em;
+  }
+  .fade-ellipsis span {
+    animation: fade-in-out 1.4s ease-in-out infinite;
+    display: inline-block;
+  }
+  .fade-ellipsis span:nth-child(2) { animation-delay: 0.2s; }
+  .fade-ellipsis span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes fade-in-out {
+    0%, 100% { opacity: 0.2; }
+    50% { opacity: 1; }
+  }
+
+  /* OPTION C — typewriter cursor blink on text */
+  .typewriter-thinking {
+    font-size: 13px;
+    color: #666;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .typewriter-thinking .label {
+    font-size: 12px !important;
+    text-transform: none !important;
+    color: #666 !important;
+    letter-spacing: 0 !important;
+    font-weight: 400 !important;
+  }
+  .cursor-blink {
+    display: inline-block;
+    width: 1.5px;
+    height: 13px;
+    background: #555;
+    animation: blink 1s step-end infinite;
+    vertical-align: middle;
+    border-radius: 1px;
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  .option-label {
+    font-size: 11px;
+    color: #444;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 10px;
+    padding-left: 2px;
+  }
+  .demo-block {
+    background: #13131a;
+    border: 1px solid #1e1e28;
+    border-radius: 8px;
+    padding: 18px 20px 20px;
+    margin-bottom: 12px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .demo-block:hover { border-color: #333; }
+  .demo-block.selected { border-color: #555 !important; }
+
+  .demo-note {
+    font-size: 11px;
+    color: #444;
+    margin-top: 10px;
+    line-height: 1.5;
+  }
+</style>
+
+<h2>Thinking indicator — which style?</h2>
+<p class="subtitle">Shown inline in chat while the agent is working, before any response text appears. Click your favourite.</p>
+
+<div class="options" style="display:block; gap:0;">
+
+  <div class="demo-block option" data-choice="a" onclick="toggleSelect(this)" style="margin-bottom:16px;">
+    <div class="option-label">A — shimmer sweep</div>
+    <div class="chat-demo">
+      <div class="user-msg"><div class="user-bubble">List all .ts files and find which import 'anthropic'</div></div>
+      <div class="assistant-msg">
+        <span class="shimmer-text">Searching through files…</span>
+      </div>
+    </div>
+    <div class="demo-note">Text with a light-to-dark shimmer sweep moving left→right continuously. Text updates as phases change ("Searching…", "Reading files…", "Analysing…").</div>
+  </div>
+
+  <div class="demo-block option" data-choice="b" onclick="toggleSelect(this)" style="margin-bottom:16px;">
+    <div class="option-label">B — fading dots</div>
+    <div class="chat-demo">
+      <div class="user-msg"><div class="user-bubble">List all .ts files and find which import 'anthropic'</div></div>
+      <div class="assistant-msg">
+        <span class="fade-ellipsis"><span>•</span><span>•</span><span>•</span></span>
+      </div>
+    </div>
+    <div class="demo-note">Three dots that fade in and out in sequence — minimal, no text. Pure "I'm working" signal with no label.</div>
+  </div>
+
+  <div class="demo-block option" data-choice="c" onclick="toggleSelect(this)" style="margin-bottom:16px;">
+    <div class="option-label">C — cursor blink with phase text</div>
+    <div class="chat-demo">
+      <div class="user-msg"><div class="user-bubble">List all .ts files and find which import 'anthropic'</div></div>
+      <div class="assistant-msg">
+        <div class="typewriter-thinking">
+          <span class="cursor-blink"></span>
+          <span class="label">Searching through files…</span>
+        </div>
+      </div>
+    </div>
+    <div class="demo-note">A blinking cursor followed by dim phase text. Feels like the assistant is "about to type" — phase label updates as the task progresses.</div>
+  </div>
+
+</div>

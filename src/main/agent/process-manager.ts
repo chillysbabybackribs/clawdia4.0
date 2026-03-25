@@ -21,6 +21,7 @@ import {
   deleteRun,
   evictOldRuns,
   getRun,
+  incrementRunToolOutcome,
   incrementRunToolCount,
   listRuns,
   reconcileInterruptedRuns,
@@ -31,7 +32,7 @@ import {
 } from '../db/runs';
 import { reconcilePendingRunApprovals } from '../db/run-approvals';
 import { reconcilePendingRunHumanInterventions } from '../db/run-human-interventions';
-import { appendRunEvent, getLastSpecializedTool, getRunAgentProfile } from '../db/run-events';
+import { appendRunEvent, closeDanglingToolExecutions, getLastSpecializedTool, getRunAgentProfile, hasRunEventKind, hasWorkflowStageEvent } from '../db/run-events';
 import { clearRunFileState, initFileLockManager } from './file-lock-manager';
 import { setBrowserExecutionMode } from '../browser/manager';
 import type { AgentProfile, ProviderId, WorkflowStage } from '../../shared/types';
@@ -52,6 +53,8 @@ export interface ProcessInfo {
   startedAt: number;
   completedAt?: number;
   toolCallCount: number;
+  toolCompletedCount?: number;
+  toolFailedCount?: number;
   error?: string;
   isAttached: boolean;
   wasDetached: boolean;
@@ -75,6 +78,58 @@ let attachedId: string | null = null;
 let win: BrowserWindow | null = null;
 const MAX_HISTORY = 20;
 const MAX_BUFFER = 1500;
+
+function terminalWorkflowStage(status: 'completed' | 'failed' | 'cancelled'): WorkflowStage {
+  return status;
+}
+
+function terminalRunEventKind(status: 'completed' | 'failed' | 'cancelled'): 'run_completed' | 'run_failed' | 'run_cancelled' {
+  return status === 'completed' ? 'run_completed' : status === 'cancelled' ? 'run_cancelled' : 'run_failed';
+}
+
+function ensureTerminalAuditEnvelope(processId: string, status: 'completed' | 'failed' | 'cancelled', error?: string): void {
+  const synthesizedToolFailures = closeDanglingToolExecutions(processId, status);
+  if (synthesizedToolFailures > 0) {
+    incrementRunToolOutcome(processId, 'failed', synthesizedToolFailures);
+    const proc = processes.get(processId);
+    if (proc) proc.toolFailedCount = (proc.toolFailedCount || 0) + synthesizedToolFailures;
+  }
+  const workflowStage = terminalWorkflowStage(status);
+  if (!hasRunEventKind(processId, 'harness_run_summary')) {
+    appendRunEvent(processId, {
+      kind: 'harness_run_summary',
+      phase: 'lifecycle',
+      payload: {
+        synthesized: true,
+        terminalStatus: status,
+        completedWithResponse: status === 'completed',
+        danglingToolClosureCount: synthesizedToolFailures,
+        hadInLoopAdaptation: false,
+        inLoopAdjustmentCount: 0,
+        inLoopAdjustmentIds: [],
+        goalAdjustmentCount: 0,
+        goalAdjustmentIds: [],
+        strategyShiftCount: 0,
+        strategyShiftIds: [],
+      },
+    });
+  }
+  if (!hasWorkflowStageEvent(processId, workflowStage)) {
+    appendRunEvent(processId, {
+      kind: 'workflow_stage_changed',
+      phase: 'lifecycle',
+      payload: { workflowStage },
+    });
+  }
+  const runEventKind = terminalRunEventKind(status);
+  if (!hasRunEventKind(processId, runEventKind)) {
+    appendRunEvent(processId, {
+      kind: runEventKind,
+      phase: 'lifecycle',
+      payload: { error },
+    });
+  }
+}
 
 // Per-process stream batcher: coalesces CHAT_STREAM_TEXT chunks into 16ms windows
 const streamBatchers: Map<string, StreamBatcher> = new Map();
@@ -101,7 +156,13 @@ export function initProcessManager(mainWindow: BrowserWindow): void {
  * Register a new process when the agent loop starts.
  * Called from the CHAT_SEND handler in main.ts.
  */
-export function registerProcess(conversationId: string, message: string, provider?: ProviderId, model?: string): string {
+export function registerProcess(
+  conversationId: string,
+  message: string,
+  provider?: ProviderId,
+  model?: string,
+  scenarioId?: string,
+): string {
   const id = `proc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
   if (attachedId) {
@@ -131,6 +192,8 @@ export function registerProcess(conversationId: string, message: string, provide
     summary: message.length > 80 ? message.slice(0, 77) + '...' : message,
     startedAt: Date.now(),
     toolCallCount: 0,
+    toolCompletedCount: 0,
+    toolFailedCount: 0,
     isAttached: true,
     wasDetached: false,
     provider,
@@ -142,7 +205,7 @@ export function registerProcess(conversationId: string, message: string, provide
   };
 
   processes.set(id, proc);
-  createRun(id, conversationId, message, provider, model);
+  createRun(id, conversationId, message, provider, model, scenarioId);
   setBrowserExecutionMode('headed', 'run_attached');
   appendRunEvent(id, {
     kind: 'run_started',
@@ -167,23 +230,21 @@ export function completeProcess(processId: string, status: 'completed' | 'failed
   const proc = processes.get(processId);
   if (!proc) {
     completeRun(processId, status, error);
+    ensureTerminalAuditEnvelope(processId, status, error);
     finalizeRunAudit(processId, status);
     evictOldRuns(MAX_HISTORY);
     return;
   }
   proc.status = status;
   proc.completedAt = Date.now();
+  proc.workflowStage = terminalWorkflowStage(status);
   if (error) proc.error = error;
   completeRun(processId, status, error);
   clearRunFileState(processId);
   // Flush any buffered stream text before completing
   streamBatchers.get(processId)?.flushImmediate();
   streamBatchers.delete(processId);
-  appendRunEvent(processId, {
-    kind: status === 'completed' ? 'run_completed' : status === 'cancelled' ? 'run_cancelled' : 'run_failed',
-    phase: 'lifecycle',
-    payload: { error },
-  });
+  ensureTerminalAuditEnvelope(processId, status, error);
   finalizeRunAudit(processId, status);
 
   // If this was attached and completed, auto-detach so user isn't stuck
@@ -206,6 +267,17 @@ export function recordToolCall(processId: string): void {
   const proc = processes.get(processId);
   if (proc) proc.toolCallCount++;
   incrementRunToolCount(processId);
+}
+
+export function recordToolOutcome(processId: string, status: 'success' | 'error'): void {
+  const proc = processes.get(processId);
+  if (status === 'success') {
+    if (proc) proc.toolCompletedCount = (proc.toolCompletedCount || 0) + 1;
+    incrementRunToolOutcome(processId, 'completed');
+    return;
+  }
+  if (proc) proc.toolFailedCount = (proc.toolFailedCount || 0) + 1;
+  incrementRunToolOutcome(processId, 'failed');
 }
 
 export function setProcessAgentProfile(processId: string, agentProfile: AgentProfile): boolean {
@@ -462,6 +534,8 @@ function serialize(proc: InternalProcess): ProcessInfo {
     startedAt: proc.startedAt,
     completedAt: proc.completedAt,
     toolCallCount: proc.toolCallCount,
+    toolCompletedCount: proc.toolCompletedCount,
+    toolFailedCount: proc.toolFailedCount,
     error: proc.error,
     isAttached: proc.id === attachedId,
     wasDetached: proc.wasDetached,
@@ -501,6 +575,8 @@ function hydratePersistedRuns(): void {
       startedAt: new Date(row.started_at).getTime(),
       completedAt: row.completed_at ? new Date(row.completed_at).getTime() : undefined,
       toolCallCount: row.tool_call_count,
+      toolCompletedCount: row.tool_completed_count || 0,
+      toolFailedCount: row.tool_failed_count || 0,
       error: row.error || undefined,
       isAttached: false,
       wasDetached: !!row.was_detached,

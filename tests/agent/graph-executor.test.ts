@@ -156,6 +156,54 @@ describe('graph-executor', () => {
     expect(parseStructuredWorkerOutput('No JSON here')).toBeNull();
   });
 
+  it('does not pass synthetic child run ids into graph worker loops', async () => {
+    const task = 'Research two quiet office keyboards and write a markdown summary file in this repo';
+    const scaffold = compileTaskExecutionGraphScaffold(task);
+    let callCount = 0;
+    const runWorkerLoop = async (options: any) => {
+      callCount += 1;
+      expect(options.runId).toBeUndefined();
+      return {
+        response: JSON.stringify({
+          findings: [
+            {
+              title: 'Logitech MX Keys S Review',
+              url: 'https://www.rtings.com/keyboard/reviews/logitech/mx-keys-s',
+              facts: ['Quiet office use', 'Strong typing experience', 'Low-profile design'],
+              confidence: 0.91,
+            },
+            {
+              title: 'Logitech MX Keys S Product Page',
+              url: 'https://www.amazon.com/dp/B0BKW3LB2B',
+              facts: ['Current pricing available', 'Full product specs available', 'Direct purchase page'],
+              confidence: 0.87,
+            },
+          ],
+          recommendedNextUrls: [],
+          blockers: [],
+        }),
+        toolCalls: [{ name: 'browser_extract', status: 'success' }],
+      };
+    };
+
+    const result = await executeGraphScaffold({
+      scaffold,
+      originalUserMessage: task,
+      client: {} as any,
+      staticPrompt: '',
+      dynamicPrompt: '',
+      runWorkerLoop,
+      workerBaseOptions: {
+        runId: 'proc-parent',
+        provider: 'openai',
+        apiKey: 'test-key',
+        model: 'gpt-5.4',
+      },
+    });
+
+    expect(callCount).toBeGreaterThan(0);
+  });
+
   it('normalizes browser research payloads from product-style output into findings', () => {
     const task = 'Research two quiet office keyboards and write a markdown summary file in this repo';
     const scaffold = compileTaskExecutionGraphScaffold(task);

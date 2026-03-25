@@ -21,6 +21,10 @@ const MODEL_MAX_OUTPUT: Record<string, number> = {
 };
 const OPENAI_MAX_OUTPUT_FALLBACK = 16384;
 
+export function getOpenAIMaxTokensField(model: string): 'max_tokens' | 'max_completion_tokens' {
+  return model.startsWith('gpt-5') ? 'max_completion_tokens' : 'max_tokens';
+}
+
 interface OpenAIChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content?: string | Array<{
@@ -285,7 +289,7 @@ export class OpenAIProviderClient implements ProviderClient {
     };
 
     const maxTokens = options?.maxTokens ?? lookupModelMaxOutput(this.model, MODEL_MAX_OUTPUT, OPENAI_MAX_OUTPUT_FALLBACK);
-    body.max_tokens = maxTokens;
+    body[getOpenAIMaxTokensField(this.model)] = maxTokens;
 
     const response = await retryFetch(
       'https://api.openai.com/v1/chat/completions',
@@ -386,7 +390,9 @@ export class OpenAIProviderClient implements ProviderClient {
         cacheReadTokens,
         cacheCreateTokens: 0,
       },
-      thinkingText: reasoningTokens > 0 ? `[Reasoning: ~${reasoningTokens} tokens]` : undefined,
+      // Chat Completions exposes reasoning token counts here, not human-readable
+      // thought text. Do not surface token metadata as chat thinking content.
+      thinkingText: undefined,
     };
   }
 }

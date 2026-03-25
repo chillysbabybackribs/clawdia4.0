@@ -1,0 +1,26 @@
+[
+  {
+    "kind": "tool_result",
+    "iterationIndex": 0,
+    "toolName": "browser_navigate",
+    "toolFamily": "browser",
+    "success": true,
+    "detail": "Navigated to signup page"
+  },
+  {
+    "kind": "tool_result",
+    "iterationIndex": 1,
+    "toolName": "browser_detect_form",
+    "toolFamily": "browser",
+    "success": true,
+    "detail": "Located signup form"
+  },
+  {
+    "kind": "tool_result",
+    "iterationIndex": 2,
+    "toolName": "browser_click",
+    "toolFamily": "browser",
+    "success": true,
+    "detail": "Submitted form"
+  }
+]

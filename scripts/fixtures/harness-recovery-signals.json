@@ -1,0 +1,20 @@
+[
+  {
+    "kind": "tool_result",
+    "iterationIndex": 0,
+    "toolName": "browser_extract",
+    "toolFamily": "browser",
+    "success": true,
+    "detail": "Collected initial state"
+  },
+  {
+    "kind": "recovery_invoked",
+    "iterationIndex": 1,
+    "detail": "Initial recovery requested"
+  },
+  {
+    "kind": "recovery_invoked",
+    "iterationIndex": 2,
+    "detail": "Second recovery requested"
+  }
+]

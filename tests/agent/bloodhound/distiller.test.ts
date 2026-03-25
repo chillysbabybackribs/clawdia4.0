@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { distillSteps } from '../../../src/main/agent/bloodhound/distiller';
+import { __testing, distillSteps } from '../../../src/main/agent/bloodhound/distiller';
 import type { RunEventRecord } from '../../../src/main/db/run-events';
 
 // Helper to build minimal RunEventRecord for tests
@@ -127,5 +127,23 @@ describe('distillSteps()', () => {
     ];
     const steps = distillSteps(events);
     expect(steps[0].outputSummary.length).toBeLessThanOrEqual(200);
+  });
+});
+
+describe('parseJsonArrayFromLLMText()', () => {
+  it('parses bare JSON arrays', () => {
+    expect(__testing.parseJsonArrayFromLLMText('[{"seq":0}]')).toEqual([{ seq: 0 }]);
+  });
+
+  it('parses fenced json arrays', () => {
+    expect(__testing.parseJsonArrayFromLLMText('```json\n[{"seq":0}]\n```')).toEqual([{ seq: 0 }]);
+  });
+
+  it('extracts the array when the model adds extra text', () => {
+    expect(__testing.parseJsonArrayFromLLMText('Here is the cleaned output:\n```json\n[{"seq":0}]\n```\nDone.')).toEqual([{ seq: 0 }]);
+  });
+
+  it('throws when no json array is present', () => {
+    expect(() => __testing.parseJsonArrayFromLLMText('not json')).toThrow('LLM did not return a valid JSON array');
   });
 });

@@ -4,6 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 // These functions are exported for testing — if the import fails,
 // the exports need to be added to openai-adapter.ts.
 import {
+  getOpenAIMaxTokensField,
   toOpenAIMessages,
   toOpenAITools,
   stringifyToolResultContent,
@@ -232,5 +233,18 @@ describe('OpenAI supportsHarnessGeneration', () => {
     const { OpenAIProviderClient } = await import('../../../src/main/agent/provider/openai-adapter');
     const client = new OpenAIProviderClient('test-key');
     expect(client.supportsHarnessGeneration).toBe(true);
+  });
+});
+
+describe('getOpenAIMaxTokensField', () => {
+  it('uses max_completion_tokens for GPT-5 family models', () => {
+    expect(getOpenAIMaxTokensField('gpt-5.4')).toBe('max_completion_tokens');
+    expect(getOpenAIMaxTokensField('gpt-5.4-mini')).toBe('max_completion_tokens');
+    expect(getOpenAIMaxTokensField('gpt-5.4-2026-03-01')).toBe('max_completion_tokens');
+  });
+
+  it('keeps max_tokens for older chat-completions models', () => {
+    expect(getOpenAIMaxTokensField('gpt-4o')).toBe('max_tokens');
+    expect(getOpenAIMaxTokensField('gpt-4.1-mini')).toBe('max_tokens');
   });
 });

@@ -36,6 +36,16 @@ describe('classify() — tool group routing', () => {
     expect(classify('launch blender').toolGroup).toBe('full');
   });
 
+  it('does not treat Claude Code mentions in analysis questions as desktop app tasks', () => {
+    const result = classify('analyze the clawdia codebase and compare it to a Claude Code harness repo');
+    expect(result.promptModules.has('desktop_apps')).toBe(false);
+  });
+
+  it('still treats explicit Claude Code invocations as desktop app tasks', () => {
+    const result = classify('use Claude Code to review this repo');
+    expect(result.promptModules.has('desktop_apps')).toBe(true);
+  });
+
   it('routes document creation to full group', () => {
     expect(classify('create a PDF report of my findings').toolGroup).toBe('full');
   });

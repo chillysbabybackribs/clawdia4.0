@@ -27,6 +27,7 @@ import { fireNestedCancel, registerNestedCancel, clearNestedCancel } from './loo
 import { runYtdlpPipeline, type YtdlpResult } from './loop-ytdlp';
 import { runPreLLMSetup } from './loop-setup';
 import { dispatchTools, type DispatchContext } from './loop-dispatch';
+import { buildEvidenceLedgerPromptBlock, createEvidenceLedgerState } from './evidence-ledger';
 import { verifyFileOutcomes, runRecoveryIteration, logVerificationSummary } from './loop-recovery';
 import { createExecutionPlan, requireExecutionPlanApproval, shouldCreateExecutionPlan } from './workflow';
 import { buildBrowserStepControllerPrompt, extractStepDoneMarker, stripStepDoneMarkers } from './task-compiler';
@@ -34,6 +35,7 @@ import { cancelPendingApprovals } from './approval-manager';
 import { cancelPendingHumanInterventions } from './human-intervention-manager';
 import { appendRunEvent } from '../db/run-events';
 import { upsertRunArtifact } from '../db/run-artifacts';
+import { runExists } from '../db/runs';
 import { getSelectedPerformanceStance, getUnrestrictedMode } from '../store';
 import type { AgentProfile, PerformanceStance, ProviderId } from '../../shared/types';
 import { setProcessAgentProfile, setProcessExecutionInfo, setProcessWorkflowStage } from './process-manager';
@@ -43,7 +45,18 @@ import { calendarList } from '../db/calendar';
 import type { NormalizedMessageContentBlock } from './provider/types';
 import * as graphExecutor from './graph-executor';
 import { EXECUTION_PLANNING_ENABLED, LOOP_MAX_WALL_MS } from './runtime-constraints';
-import { getSystemAwarenessBlock } from './system-audit';
+import { getSystemAuditSummary, getSystemAwarenessBlock } from './system-audit';
+import {
+  applyInLoopHarnessAdjustment,
+  applyHarnessPromptModules,
+  applyHarnessToolPolicy,
+  buildHarnessDirectiveBlock,
+  createRuntimeHarnessReactiveState,
+  formatResolvedHarnessDebug,
+  resolveHarness,
+  type HarnessResolutionInput,
+  type RuntimeHarnessSignal,
+} from './harness-resolver';
 
 const MAX_ITERATIONS = 50;
 const MAX_HISTORY_TURNS = 16;
@@ -71,6 +84,15 @@ function ensureRegistry(): void {
   } catch (e) {
     console.warn('[Registry] Seed failed:', e);
   }
+}
+
+function shouldRunGraphScaffold(setup: Awaited<ReturnType<typeof runPreLLMSetup>>): boolean {
+  if (!graphExecutor.canExecuteGraphScaffold(setup.executionGraphScaffold)) return false;
+  const workerCount = setup.executionGraphScaffold?.planner.graph.nodes.filter((node) => node.kind === 'worker').length || 0;
+  // Single-worker graph runs duplicate the classic loop without adding user-visible value
+  // when they later fail verifier/merge checks. Reserve graph execution for true multi-worker
+  // or dependency-chain scaffolds.
+  return workerCount > 1;
 }
 
 function resolveGraphExecutorFns() {
@@ -330,7 +352,74 @@ export async function runAgentLoop(
     setProcessAgentProfile(runId, profile.agentProfile);
   }
 
-  const modelId = pickModel(options.provider, profile.model, options.model, profile.isGreeting);
+  const baseModelId = pickModel(options.provider, profile.model, options.model, profile.isGreeting);
+  const harnessInput: HarnessResolutionInput = {
+    userMessage,
+    profile,
+    provider: options.provider,
+    initialModel: baseModelId,
+    forcedAgentProfile: options.forcedAgentProfile,
+    allowedTools: options.allowedTools,
+    systemAuditSummary: getSystemAuditSummary(),
+  };
+  let currentHarness = resolveHarness(harnessInput);
+  const runtimeHarnessState = createRuntimeHarnessReactiveState();
+  const modelId = options.model ? baseModelId : currentHarness.selectedModel;
+  if (options.model && currentHarness.selectedModel !== modelId) {
+    currentHarness.selectedModel = modelId;
+    currentHarness.providerStrategyNote = `${currentHarness.providerStrategyNote} Explicit model selection preserved.`;
+  }
+  console.log(`[Harness] ${formatResolvedHarnessDebug(currentHarness).replace(/\n/g, ' | ')}`);
+  if (runId) {
+    appendRunEvent(runId, {
+      kind: 'harness_resolved',
+      phase: 'classification',
+      payload: {
+        harnessId: currentHarness.id,
+        baseHarnessId: currentHarness.baseHarnessId,
+        baseGoal: currentHarness.baseGoal,
+        currentGoal: currentHarness.currentGoal,
+        baseSubGoalPlan: currentHarness.baseSubGoalPlan,
+        currentSubGoal: currentHarness.currentSubGoal,
+        completedSubGoals: currentHarness.completedSubGoals,
+        subGoalConfidence: currentHarness.subGoalConfidence,
+        goalConfidence: currentHarness.goalConfidence,
+        learningPatternKey: currentHarness.learningPatternKey,
+        learningConfidence: currentHarness.learningConfidence || null,
+        learningEvidenceSummary: currentHarness.learningEvidenceSummary,
+        appliedLearningHints: currentHarness.appliedLearningHints,
+        learningInfluencedStart: currentHarness.learningInfluencedStart,
+        baseStrategy: currentHarness.baseStrategy,
+        currentStrategy: currentHarness.currentStrategy,
+        requestedExecutionMode: currentHarness.requestedExecutionMode,
+        actualExecutionMode: currentHarness.actualExecutionMode,
+        downgradeReason: currentHarness.downgradeReason || null,
+        selectedModel: currentHarness.selectedModel,
+        preferFamilies: currentHarness.toolPolicy.preferFamilies || [],
+        discourageFamilies: currentHarness.toolPolicy.discourageFamilies || [],
+        suppressFamilies: currentHarness.toolPolicy.suppressFamilies || [],
+        demotedTools: currentHarness.toolPolicy.demotedTools || [],
+        deterministicBrowserFirst: currentHarness.toolPolicy.deterministicBrowserFirst === true,
+        elevatedApproval: currentHarness.safetyPolicy.elevatedApproval === true,
+        elevatedVerification: currentHarness.safetyPolicy.elevatedVerification === true,
+        retryGuidance: currentHarness.retryGuidance,
+        branchingGuidance: currentHarness.branchingGuidance,
+        reactiveNotes: currentHarness.reactiveNotes,
+        adaptationReasons: currentHarness.adaptationReasons,
+        goalAwareNotes: currentHarness.goalAwareNotes,
+        goalAdjustments: currentHarness.goalAdjustments,
+        goalDriftSignals: currentHarness.goalDriftSignals,
+        subGoalAdjustments: currentHarness.subGoalAdjustments,
+        subGoalProgressSignals: currentHarness.subGoalProgressSignals,
+        stageAwareNotes: currentHarness.stageAwareNotes,
+        auditSignalsUsed: currentHarness.auditSignalsUsed,
+        reactiveAdjustments: currentHarness.reactiveAdjustments,
+        strategyShiftHistory: currentHarness.strategyShiftHistory,
+        providerStrategyNote: currentHarness.providerStrategyNote,
+      },
+    });
+  }
+
   if (runId) setProcessExecutionInfo(runId, options.provider, modelId);
   const defaultPerformanceStance = getSelectedPerformanceStance();
   const initialPerformanceDirective = detectPerformanceStanceDirective(userMessage);
@@ -353,13 +442,16 @@ export async function runAgentLoop(
   }
 
   const client = createProviderClient(options.provider, apiKey, modelId);
-  const staticPrompt = buildStaticPrompt(profile.toolGroup, profile.promptModules);
+  const harnessPromptModules = applyHarnessPromptModules(profile.promptModules, currentHarness.promptPolicy);
+  const staticPrompt = buildStaticPrompt(profile.toolGroup, harnessPromptModules);
 
   if (runId) setProcessWorkflowStage(runId, 'starting');
 
   // ── Pre-LLM Setup (extracted to loop-setup.ts) ──
   const setup = await runPreLLMSetup(userMessage, profile, client, options.onProgress, {
-    enableExecutionGraphScaffold: (options.graphExecutionMode ?? 'auto') !== 'disabled',
+    enableExecutionGraphScaffold:
+      (options.graphExecutionMode ?? 'auto') !== 'disabled'
+      && currentHarness.actualExecutionMode === 'step_controlled',
     allowedTools: options.allowedTools,
   });
   const { executionPlan } = setup;
@@ -507,8 +599,9 @@ export async function runAgentLoop(
       return `Today is ${weekday} ${dateStr}. Your schedule:\n${lines.join('\n')}`;
     } catch { return ''; }
   })();
+  const evidenceLedgerState = createEvidenceLedgerState();
 
-  const dynamicPrompt = buildDynamicPrompt({
+  const buildCurrentDynamicPrompt = (): string => buildDynamicPrompt({
     agentProfile: profile.agentProfile,
     model: modelId,
     toolGroup: profile.toolGroup,
@@ -524,17 +617,46 @@ export async function runAgentLoop(
     desktopContext: setup.desktopContext,
     executionConstraint: executionPlan?.constraint,
     systemAwarenessContext: getSystemAwarenessBlock() || undefined,
+    harnessDirectiveContext: buildHarnessDirectiveBlock(currentHarness),
+    evidenceLedgerContext: buildEvidenceLedgerPromptBlock(evidenceLedgerState),
     shortcutContext: setup.shortcutContext,
     guiStateContext: setup.guiStateContext,
     isGreeting: profile.isGreeting,
     performanceStance: control.performanceStance,
   });
+  let dynamicPrompt = buildCurrentDynamicPrompt();
 
   const graphExecutorFns = resolveGraphExecutorFns();
-  if ((options.graphExecutionMode ?? 'auto') !== 'disabled' && graphExecutorFns.canExecuteGraphScaffold?.(setup.executionGraphScaffold)) {
+  if ((options.graphExecutionMode ?? 'auto') !== 'disabled' && shouldRunGraphScaffold(setup)) {
     const graph = setup.executionGraphScaffold!.planner.graph;
     const workerNodes = graph.nodes.filter((node) => node.kind === 'worker');
     const isDependentGraphChain = !!graphExecutorFns.getWorkerDependencyChain?.(graph, workerNodes);
+    const graphTelemetryEnabled = !!runId && runExists(runId);
+    const safeAppendGraphEvent = (event: { kind: string; phase?: string; payload?: Record<string, any> }) => {
+      if (!runId || !graphTelemetryEnabled) return;
+      try {
+        appendRunEvent(runId, {
+          kind: event.kind,
+          phase: event.phase,
+          payload: event.payload,
+        });
+      } catch (error: any) {
+        console.warn(`[GraphExecutor] Skipping graph event persistence: ${error?.message || String(error)}`);
+      }
+    };
+    const safeUpsertGraphState = (snapshot: unknown) => {
+      if (!runId || !graphTelemetryEnabled) return;
+      try {
+        upsertRunArtifact(
+          runId,
+          'execution_graph_state',
+          'Execution Graph State',
+          JSON.stringify(snapshot, null, 2),
+        );
+      } catch (error: any) {
+        console.warn(`[GraphExecutor] Skipping graph state persistence: ${error?.message || String(error)}`);
+      }
+    };
     try {
       if (!graphExecutorFns.executeGraphScaffold) {
         throw new Error('graph executor export unavailable');
@@ -572,21 +694,8 @@ export async function runAgentLoop(
           onProgress: undefined,
           graphExecutionMode: 'disabled',
         },
-        onGraphEvent: runId ? (event) => {
-          appendRunEvent(runId, {
-            kind: event.kind,
-            phase: event.phase,
-            payload: event.payload,
-          });
-        } : undefined,
-        onGraphState: runId ? (snapshot) => {
-          upsertRunArtifact(
-            runId,
-            'execution_graph_state',
-            'Execution Graph State',
-            JSON.stringify(snapshot, null, 2),
-          );
-        } : undefined,
+        onGraphEvent: graphTelemetryEnabled ? (event) => safeAppendGraphEvent(event) : undefined,
+        onGraphState: graphTelemetryEnabled ? (snapshot) => safeUpsertGraphState(snapshot) : undefined,
       });
       if (graphResult.handled && graphResult.response) {
         onStreamText?.(graphResult.response);
@@ -598,17 +707,15 @@ export async function runAgentLoop(
       if (isDependentGraphChain) {
         const failureMessage = 'Graph execution could not validate the dependent worker chain, so the run was stopped before falling back into the legacy loop. Check the graph state and verification events in the run detail view.';
         console.warn('[GraphExecutor] Dependent graph chain failed verification; stopping instead of falling back to classic loop.');
-        if (runId) {
-          appendRunEvent(runId, {
-            kind: 'execution_graph_chain_stopped',
-            phase: 'reviewing',
-            payload: {
-              message: failureMessage,
-              graphId: graph.id,
-              workerNodeIds: workerNodes.map((node) => node.id),
-            },
-          });
-        }
+        safeAppendGraphEvent({
+          kind: 'execution_graph_chain_stopped',
+          phase: 'reviewing',
+          payload: {
+            message: failureMessage,
+            graphId: graph.id,
+            workerNodeIds: workerNodes.map((node) => node.id),
+          },
+        });
         onStreamText?.(failureMessage);
         onStreamEnd?.();
         cleanupRunControl(runKey);
@@ -619,17 +726,15 @@ export async function runAgentLoop(
       if (isDependentGraphChain) {
         const failureMessage = `Graph execution failed before the dependent worker chain could complete: ${error?.message || String(error)}`;
         console.warn(`[GraphExecutor] ${failureMessage}`);
-        if (runId) {
-          appendRunEvent(runId, {
-            kind: 'execution_graph_chain_stopped',
-            phase: 'reviewing',
-            payload: {
-              message: failureMessage,
-              graphId: graph.id,
-              workerNodeIds: workerNodes.map((node) => node.id),
-            },
-          });
-        }
+        safeAppendGraphEvent({
+          kind: 'execution_graph_chain_stopped',
+          phase: 'reviewing',
+          payload: {
+            message: failureMessage,
+            graphId: graph.id,
+            workerNodeIds: workerNodes.map((node) => node.id),
+          },
+        });
         onStreamText?.(failureMessage);
         onStreamEnd?.();
         cleanupRunControl(runKey);
@@ -637,13 +742,11 @@ export async function runAgentLoop(
         return { response: failureMessage, toolCalls: [] };
       }
       console.warn(`[GraphExecutor] Falling back to classic loop: ${error?.message || String(error)}`);
-      if (runId) {
-        appendRunEvent(runId, {
-          kind: 'execution_graph_scaffold_fallback',
-          phase: 'planning',
-          payload: { message: error?.message || String(error) },
-        });
-      }
+      safeAppendGraphEvent({
+        kind: 'execution_graph_scaffold_fallback',
+        phase: 'planning',
+        payload: { message: error?.message || String(error) },
+      });
     }
   }
 
@@ -733,6 +836,7 @@ export async function runAgentLoop(
   if (executionPlan && executionPlan.disallowedTools.length > 0) {
     tools = filterTools(tools, executionPlan.disallowedTools);
   }
+  tools = applyHarnessToolPolicy(tools, currentHarness.toolPolicy);
   const filesystemQuoteLookupMode = profile.agentProfile === 'filesystem' && isFilesystemQuoteLookupTask(userMessage);
   if (filesystemQuoteLookupMode) {
     tools = filterTools(tools, ['shell_exec']);
@@ -749,6 +853,7 @@ export async function runAgentLoop(
     tools,
     executionPlan,
     toolGroup: profile.toolGroup,
+    recoveryMode: false,
     filesystemQuoteLookupMode,
     strongFilesystemQuoteMatch: false,
     escalatedToFull: false,
@@ -756,9 +861,48 @@ export async function runAgentLoop(
     allToolCalls: [],
     allVerifications: [],
     iterationIndex: 0,
+    lastToolFamily: undefined,
+    evidenceLedger: evidenceLedgerState,
     onToolActivity,
     onToolStream,
   };
+
+  const applyRuntimeHarnessSignal = (signal: RuntimeHarnessSignal): void => {
+    const { adjustments, strategyShifts, goalAdjustments, subGoalAdjustments } = applyInLoopHarnessAdjustment(currentHarness, runtimeHarnessState, signal, harnessInput);
+    if (adjustments.length === 0 && strategyShifts.length === 0 && goalAdjustments.length === 0 && subGoalAdjustments.length === 0) return;
+    dispatchCtx.tools = applyHarnessToolPolicy(dispatchCtx.tools, currentHarness.toolPolicy);
+    dynamicPrompt = buildCurrentDynamicPrompt();
+    if (runId) {
+      appendRunEvent(runId, {
+        kind: 'harness_in_loop_adjusted',
+        phase: 'execution',
+        payload: {
+          baseHarnessId: currentHarness.baseHarnessId,
+          harnessId: currentHarness.id,
+          baseGoal: currentHarness.baseGoal,
+          currentGoal: currentHarness.currentGoal,
+          baseSubGoalPlan: currentHarness.baseSubGoalPlan,
+          currentSubGoal: currentHarness.currentSubGoal,
+          completedSubGoals: currentHarness.completedSubGoals,
+          learningPatternKey: currentHarness.learningPatternKey,
+          learningConfidence: currentHarness.learningConfidence || null,
+          appliedLearningHints: currentHarness.appliedLearningHints,
+          baseStrategy: currentHarness.baseStrategy,
+          currentStrategy: currentHarness.currentStrategy,
+          signal,
+          retryGuidance: currentHarness.retryGuidance,
+          branchingGuidance: currentHarness.branchingGuidance,
+          suppressFamilies: currentHarness.toolPolicy.suppressFamilies || [],
+          demotedTools: currentHarness.toolPolicy.demotedTools || [],
+          adjustments,
+          goalAdjustments,
+          subGoalAdjustments,
+          strategyShifts,
+        },
+      });
+    }
+  };
+  dispatchCtx.onRuntimeSignal = applyRuntimeHarnessSignal;
 
   let guiBatchNudgeSent = false;
   const guiBatchNudgeAt = control.performanceStance === 'aggressive'
@@ -864,7 +1008,7 @@ export async function runAgentLoop(
       }
     }
 
-    onThinking?.('Thinking...');
+    onThinking?.('Reviewing context and deciding the next step...');
     if (runId) {
       appendRunEvent(runId, {
         kind: 'thinking',
@@ -901,6 +1045,7 @@ export async function runAgentLoop(
     // ── LLM Call ──
     let iterationText = '';
     let response: LLMResponse;
+    dynamicPrompt = buildCurrentDynamicPrompt();
 
     try {
       response = await client.chat(messages, profile.isGreeting || swarmCompleted ? [] : dispatchCtx.tools, staticPrompt, dynamicPrompt, (chunk) => {
@@ -1088,7 +1233,8 @@ export async function runAgentLoop(
         messages,
         tools: dispatchCtx.tools,
         staticPrompt,
-        dynamicPrompt,
+        dynamicPrompt: buildCurrentDynamicPrompt(),
+        getDynamicPrompt: buildCurrentDynamicPrompt,
         signal: control.abortController.signal,
         iterationIndex: dispatchCtx.iterationIndex,
         onStreamText,
@@ -1096,6 +1242,7 @@ export async function runAgentLoop(
         onToolStream,
         allToolCalls: dispatchCtx.allToolCalls,
         toolCallCount: dispatchCtx.toolCallCount,
+        onRuntimeSignal: applyRuntimeHarnessSignal,
       });
       onStreamEnd?.();
       if (runId) {
@@ -1111,10 +1258,49 @@ export async function runAgentLoop(
   if (runId) setProcessWorkflowStage(runId, 'completed');
   if (runId) {
     appendRunEvent(runId, {
+      kind: 'harness_run_summary',
+      phase: 'lifecycle',
+      payload: {
+        baseHarnessId: currentHarness.baseHarnessId,
+        harnessId: currentHarness.id,
+        baseGoal: currentHarness.baseGoal,
+        currentGoal: currentHarness.currentGoal,
+        baseSubGoalPlan: currentHarness.baseSubGoalPlan,
+        currentSubGoal: currentHarness.currentSubGoal,
+        completedSubGoals: currentHarness.completedSubGoals,
+        learningPatternKey: currentHarness.learningPatternKey,
+        learningConfidence: currentHarness.learningConfidence || null,
+        appliedLearningHints: currentHarness.appliedLearningHints,
+        learningInfluencedStart: currentHarness.learningInfluencedStart,
+        baseStrategy: currentHarness.baseStrategy,
+        currentStrategy: currentHarness.currentStrategy,
+        hadInLoopAdaptation: currentHarness.hadInLoopAdaptation,
+        inLoopAdjustmentCount: currentHarness.inLoopAdjustments.length,
+        inLoopAdjustmentIds: currentHarness.inLoopAdjustments.map((adjustment) => adjustment.id),
+        goalAdjustmentCount: currentHarness.goalAdjustments.length,
+        goalAdjustmentIds: currentHarness.goalAdjustments.map((adjustment) => adjustment.id),
+        subGoalAdjustmentCount: currentHarness.subGoalAdjustments.length,
+        subGoalAdjustmentIds: currentHarness.subGoalAdjustments.map((adjustment) => adjustment.id),
+        strategyShiftCount: currentHarness.strategyShiftHistory.length,
+        strategyShiftIds: currentHarness.strategyShiftHistory.map((shift) => shift.id),
+        retryGuidance: currentHarness.retryGuidance,
+        branchingGuidance: currentHarness.branchingGuidance,
+        completedWithResponse: !!finalText,
+      },
+    });
+    appendRunEvent(runId, {
       kind: 'workflow_stage_changed',
       phase: 'lifecycle',
       payload: { workflowStage: 'completed' },
     });
+    if (evidenceLedgerState.facts.length > 0) {
+      upsertRunArtifact(
+        runId,
+        'evidence_ledger',
+        'Evidence Ledger',
+        JSON.stringify({ facts: evidenceLedgerState.facts }, null, 2),
+      );
+    }
   }
 
   // ── Background memory extraction ──

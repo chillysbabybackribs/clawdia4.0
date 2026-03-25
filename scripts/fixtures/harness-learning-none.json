@@ -1,0 +1,28 @@
+{
+  "windowSize": 100,
+  "observedToolCalls": 0,
+  "observedRuns": 0,
+  "mostReliableTools": [],
+  "leastReliableTools": [],
+  "averageDurationByTool": {},
+  "repeatedRecentFailures": [],
+  "recoveryHeavyTools": [],
+  "rarelyUsedTools": [],
+  "categoryReliability": [],
+  "interventionObservedRecently": false,
+  "interventionResolvedRecently": false,
+  "subAgentSpawnObservedRecently": false,
+  "approvalObservedRecently": false,
+  "capabilityHealth": [],
+  "capabilityCategories": [],
+  "scenarioSummaries": [],
+  "workflowSummary": {
+    "strongestWorkflows": [],
+    "weakestWorkflows": [],
+    "highestFrictionWorkflows": [],
+    "sparseDataWarnings": []
+  },
+  "overallScore": 0,
+  "autoTuningHints": [],
+  "harnessLearningSummaries": []
+}

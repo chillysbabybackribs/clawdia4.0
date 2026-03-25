@@ -649,7 +649,10 @@ async function runGraphWorkerNode(
 ): Promise<GraphWorkerPayload> {
   const result = await runWorkerLoop({
     ...workerBaseOptions,
-    runId: workerBaseOptions.runId ? `${workerBaseOptions.runId}-${workerNode.id}` : undefined,
+    // Graph workers currently report through parent graph state/events only.
+    // Passing synthetic child run IDs causes FK failures because those runs are
+    // not registered in the durable runs table.
+    runId: undefined,
     userMessage,
     history: [],
     forcedAgentProfile: mapExecutorToAgentProfile(workerNode),

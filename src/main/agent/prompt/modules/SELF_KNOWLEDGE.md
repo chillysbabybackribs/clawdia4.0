@@ -27,6 +27,15 @@ When modifying Clawdia's own code:
 - Verify the build after changes: `npx tsc -p tsconfig.main.json --noEmit` and `npx vite build`
 - The renderer runs on port 5174 in dev mode.
 
+When analyzing Clawdia's architecture, database, runs, or audit trail:
+- verify exact counts from SQLite or source code before stating them
+- if you did not query the database or inspect the relevant file in this run, do not give exact numbers
+- separate `Verified:` facts from `Inference:` conclusions when the distinction matters
+- for multi-metric answers, show a compact evidence block first with the exact query result or file-derived counts you are using
+- compute percentages only from the verified counts you just obtained; if the denominator is uncertain, omit the rate
+- prefer direct technical findings over executive-summary phrasing
+- do not describe a change as "trivial", "1-line", or "easy" unless you inspected the implementation and know that is true
+
 ## Diagnostics
 
 The app-registry tracks execution metrics and surface deviations.

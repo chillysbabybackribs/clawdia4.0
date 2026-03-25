@@ -18,10 +18,12 @@ import { maybeRequireApproval, recordPolicyBlocked, requestApproval, waitForAppr
 import { guardFileMutation, noteFileMutationSuccess, noteFileRead } from './file-lock-manager';
 import { spawnSwarm } from './agent-spawn-executor';
 import { SCREENSHOT_PREFIX } from './executors/browser-executors';
-import { noteProcessSpecializedTool } from './process-manager';
+import { noteProcessSpecializedTool, recordToolOutcome } from './process-manager';
 import { requestHumanIntervention, waitForHumanIntervention } from './human-intervention-manager';
 import { getUnrestrictedMode } from '../store';
 import { recordToolTelemetry } from './system-audit';
+import { inferToolFamily, type RuntimeHarnessSignal, type ToolFamily } from './harness-resolver';
+import { ingestToolEvidence, type EvidenceLedgerState } from './evidence-ledger';
 import * as fs from 'fs';
 
 // ═══════════════════════════════════
@@ -102,12 +104,16 @@ export interface DispatchContext {
   executionPlan: ExecutionPlan | null;
   toolGroup: string;
   iterationIndex: number;
+  recoveryMode?: boolean;
   filesystemQuoteLookupMode?: boolean;
   strongFilesystemQuoteMatch?: boolean;
   escalatedToFull: boolean;
   toolCallCount: number;
   allToolCalls: { name: string; status: string; detail?: string; input?: Record<string, any>; durationMs?: number }[];
   allVerifications: VerificationResult[];
+  lastToolFamily?: ToolFamily;
+  evidenceLedger?: EvidenceLedgerState;
+  onRuntimeSignal?: (signal: RuntimeHarnessSignal) => void;
   onToolActivity?: (activity: { name: string; status: string; detail?: string }) => void;
   onToolStream?: (payload: { toolId: string; toolName: string; chunk: string }) => void;
 }
@@ -158,6 +164,9 @@ export async function dispatchTools(
       console.log(`[Agent] Tool #${ctx.toolCallCount}: ${toolUse.name}(${JSON.stringify(toolUse.input).slice(0, 100)})`);
 
       let result: string;
+      const approvalRequired = approvalDecision?.effect === 'require_approval';
+      let interventionTriggered = false;
+      let interventionResolved = false;
       try {
         if (approvalDecision?.effect === 'deny' && ctx.runId) {
           recordPolicyBlocked(ctx.runId, approvalDecision);
@@ -205,7 +214,15 @@ export async function dispatchTools(
         result,
       );
 
-      if (humanIntervention) {
+      if (humanIntervention && !getUnrestrictedMode()) {
+        interventionTriggered = true;
+        ctx.onRuntimeSignal?.({
+          kind: 'human_intervention_required',
+          iterationIndex: ctx.iterationIndex,
+          toolName: toolUse.name,
+          toolFamily: inferToolFamily(toolUse.name),
+          detail: humanIntervention.summary,
+        });
         if (ctx.runId) {
           const intervention = requestHumanIntervention(ctx.runId, {
             interventionType: humanIntervention.type,
@@ -226,6 +243,7 @@ export async function dispatchTools(
             detail: humanIntervention.summary,
           });
           const decision = await waitForHumanIntervention(intervention.id);
+          interventionResolved = decision === 'resolved';
           result = decision === 'resolved'
             ? `[Human intervention completed] ${humanIntervention.summary}`
             : `[Error] Human intervention dismissed: ${humanIntervention.summary}`;
@@ -263,6 +281,10 @@ export async function dispatchTools(
 
       const durationMs = Date.now() - startMs;
       const status = result.startsWith('[Error') || result.startsWith('[Approval denied]') ? 'error' : 'success';
+      const toolFamily = inferToolFamily(toolUse.name);
+      const failedTransition = status === 'error' && ctx.lastToolFamily && ctx.lastToolFamily !== toolFamily
+        ? `${ctx.lastToolFamily} -> ${toolFamily}`
+        : undefined;
 
       if (ctx.filesystemQuoteLookupMode && toolUse.name === 'fs_quote_lookup' && inferStrongFilesystemQuoteMatch(result)) {
         ctx.strongFilesystemQuoteMatch = true;
@@ -293,9 +315,34 @@ export async function dispatchTools(
           success: status === 'success',
           durationMs,
           errorType: status === 'error' ? inferErrorType(result) : null,
+          approvalRequired,
+          recoveryInvoked: !!ctx.recoveryMode,
+          interventionTriggered,
+          interventionResolved,
+          subAgentSpawned: toolUse.name === 'agent_spawn',
         });
       }
       console.log(`[Agent] Result (${durationMs}ms): ${result.startsWith(SCREENSHOT_PREFIX) ? '[screenshot image]' : result.slice(0, 200)}`);
+      if (ctx.evidenceLedger) {
+        ingestToolEvidence(ctx.evidenceLedger, {
+          toolName: toolUse.name,
+          detail,
+          input: toolUse.input as Record<string, any>,
+          result,
+          iterationIndex: ctx.iterationIndex,
+        });
+      }
+      if (ctx.runId) recordToolOutcome(ctx.runId, status === 'success' ? 'success' : 'error');
+      ctx.onRuntimeSignal?.({
+        kind: 'tool_result',
+        iterationIndex: ctx.iterationIndex,
+        toolName: toolUse.name,
+        toolFamily,
+        success: status === 'success',
+        detail,
+        transition: failedTransition,
+      });
+      ctx.lastToolFamily = toolFamily;
 
       if (ctx.runId && status === 'success') {
         persistStructuredChange(ctx.runId, completionEventId, toolUse.name, toolUse.input as Record<string, any>, fileBefore);
@@ -312,6 +359,14 @@ export async function dispatchTools(
           logVerification(toolUse.name, toolUse.input as Record<string, any>, vResult);
           ctx.allVerifications.push(vResult);
           if (!vResult.passed) {
+            ctx.onRuntimeSignal?.({
+              kind: 'verification_failed',
+              iterationIndex: ctx.iterationIndex,
+              toolName: toolUse.name,
+              toolFamily,
+              verificationType: vRule.type,
+              detail: vResult.actual,
+            });
             result += `\n[Verification failed: ${vRule.type} — expected "${vRule.expected.slice(0, 60)}" but got "${vResult.actual.slice(0, 80)}"]`;
           }
         }

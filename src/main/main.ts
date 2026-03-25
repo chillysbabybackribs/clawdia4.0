@@ -10,6 +10,7 @@ import * as os from 'os';
 import { IPC, IPC_EVENTS } from '../shared/ipc-channels';
 import { runAgentLoop, cancelLoop, pauseLoop, resumeLoop, addContext } from './agent/loop';
 import { parseManualAgentProfileOverride } from './agent/agent-profile-override';
+import { parseScenarioTag } from './agent/scenario-tagging';
 import {
   initProcessManager,
   detachCurrent, attachTo, cancelProcess as cancelProc, dismissProcess,
@@ -38,6 +39,8 @@ import {
   setSelectedPerformanceStance,
   getUnrestrictedMode,
   setUnrestrictedMode,
+  getUiSession,
+  patchUiSession,
 } from './store';
 import { getDb, closeDb } from './db/database';
 import {
@@ -78,6 +81,7 @@ import { scanBrowserCards } from './agent/browser-card-scanner';
 import { proactiveDetector } from './autonomy/proactive-detector';
 import { taskScheduler } from './autonomy/task-scheduler';
 import { attachToWebContents } from './autonomy/login-interceptor';
+import { getCapabilityScorecard } from './agent/system-audit';
 import { getAllUserTabWebContents, setOnNewUserTabCallback } from './browser/manager';
 
 const gotLock = app.requestSingleInstanceLock();
@@ -85,7 +89,12 @@ if (!gotLock) app.quit();
 
 let mainWindow: BrowserWindow | null = null;
 const isDev = process.env.NODE_ENV === 'development';
-let activeConversationId: string | null = null;
+let activeConversationId: string | null = getUiSession().activeConversationId;
+
+function setActiveConversationId(nextConversationId: string | null): void {
+  activeConversationId = nextConversationId;
+  patchUiSession({ activeConversationId: nextConversationId });
+}
 
 function isDevToolsShortcut(input: Electron.Input): boolean {
   return input.type === 'keyDown' &&
@@ -110,6 +119,29 @@ function createWindow(): void {
     show: false,
   });
 
+  const initializeWindowServices = () => {
+    if (!mainWindow) return;
+    initBrowser(mainWindow);
+    for (const wc of getAllUserTabWebContents()) {
+      attachToWebContents(wc);
+    }
+    setOnNewUserTabCallback((wc) => attachToWebContents(wc));
+    initProcessManager(mainWindow);
+    taskScheduler.start(async (prompt, taskId) => {
+      console.log(`[Scheduler] Running task ${taskId}: ${prompt.slice(0, 60)}`);
+      // TODO (Phase 2): wire to process-manager background dispatch
+    });
+    startCalendarWatcher(mainWindow);
+    initAgentSpawnExecutor(mainWindow);
+  };
+
+  let servicesInitialized = false;
+  const ensureWindowServices = () => {
+    if (servicesInitialized) return;
+    servicesInitialized = true;
+    initializeWindowServices();
+  };
+
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (!isDevToolsShortcut(input)) return;
     event.preventDefault();
@@ -131,23 +163,45 @@ function createWindow(): void {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
-    if (mainWindow) {
-      initBrowser(mainWindow);
-      // Wire login interceptor to all current and future user-facing tabs
-      for (const wc of getAllUserTabWebContents()) {
-        attachToWebContents(wc);
-      }
-      setOnNewUserTabCallback((wc) => attachToWebContents(wc));
-      initProcessManager(mainWindow);
-      // Initialize task scheduler — runs stored cron jobs
-      taskScheduler.start(async (prompt, taskId) => {
-        console.log(`[Scheduler] Running task ${taskId}: ${prompt.slice(0, 60)}`);
-        // TODO (Phase 2): wire to process-manager background dispatch
-      });
-      startCalendarWatcher(mainWindow);
-      initAgentSpawnExecutor(mainWindow);
+    ensureWindowServices();
+  });
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (!mainWindow) return;
+    if (!mainWindow.isVisible()) {
+      console.warn('[Window] ready-to-show did not fire; showing window after did-finish-load fallback');
+      mainWindow.show();
+    }
+    ensureWindowServices();
+  });
+
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error(`[Window] Failed to load ${validatedURL}: (${errorCode}) ${errorDescription}`);
+    if (mainWindow && !mainWindow.isVisible()) {
+      mainWindow.show();
     }
   });
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[Window] Renderer process gone:', details);
+  });
+
+  mainWindow.webContents.on('unresponsive', () => {
+    console.error('[Window] Renderer became unresponsive');
+  });
+
+  mainWindow.on('closed', () => {
+    console.warn('[Window] Main window closed');
+    mainWindow = null;
+  });
+
+  setTimeout(() => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      console.warn('[Window] Forcing show fallback after startup timeout');
+      mainWindow.show();
+      ensureWindowServices();
+    }
+  }, 3000);
 
   getDb();
   try {
@@ -200,22 +254,31 @@ function setupIpcHandlers(): void {
         : `Please review the attached file${safeAttachments.length === 1 ? '' : 's'}.`
       : message;
 
-    const { cleanedMessage, forcedAgentProfile } = parseManualAgentProfileOverride(synthesizedMessage);
+    const { cleanedMessage: profileMessage, forcedAgentProfile } = parseManualAgentProfileOverride(synthesizedMessage);
+    const { cleanedMessage, scenarioId } = parseScenarioTag(profileMessage);
     if (!cleanedMessage.trim()) {
       return { error: 'Slash commands require a prompt, for example: /filesystem-agent find the exact file containing "..." , /bloodhound learn the fastest route to GitHub notifications, /claude-code review this repo for TypeScript errors, or /claude-code-edit fix the failing tests in this repo' };
     }
 
+    if (activeConversationId && !getConversation(activeConversationId)) {
+      setActiveConversationId(null);
+    }
     if (!activeConversationId) {
       const conv = createConversation();
-      activeConversationId = conv.id;
+      setActiveConversationId(conv.id);
+    }
+    if (!activeConversationId) {
+      return { error: 'Failed to initialize a conversation.' };
     }
     const conversationId = activeConversationId;
+    const resolvedProvider = provider || getSelectedProvider();
+    const selectedModel = getSelectedModel(resolvedProvider);
 
     // Process registration — only creates trackable processes when
     // detach/background is wired. For now, still register so the
     // infrastructure works, but mark as attached (won't show in sidebar
     // as "completed" since it's the foreground task).
-    const processId = processManager.registerProcess(conversationId, cleanedMessage, provider, getSelectedModel(provider));
+    const processId = processManager.registerProcess(conversationId, cleanedMessage, resolvedProvider, selectedModel, scenarioId);
 
     addMessage(conversationId, 'user', message.trim(), undefined, safeAttachments);
     proactiveDetector.recordMentions(message.trim());
@@ -226,15 +289,15 @@ function setupIpcHandlers(): void {
     try {
       const result = await runAgentLoop(cleanedMessage, history, {
         runId: processId,
-        provider,
+        provider: resolvedProvider,
         forcedAgentProfile,
         apiKey,
-        model: getSelectedModel(provider),
+        model: selectedModel,
         onStreamText: (chunk) => processManager.routeEvent(processId, IPC_EVENTS.CHAT_STREAM_TEXT, chunk),
         onProgress: (text) => processManager.routeEvent(processId, IPC_EVENTS.CHAT_STREAM_TEXT, text),
         onThinking: (thought) => processManager.routeEvent(processId, IPC_EVENTS.CHAT_THINKING, thought),
         onToolActivity: (activity) => {
-          processManager.recordToolCall(processId);
+          if (activity.status === 'running') processManager.recordToolCall(processId);
           processManager.routeEvent(processId, IPC_EVENTS.CHAT_TOOL_ACTIVITY, activity);
         },
         onToolStream: (payload) => processManager.routeEvent(processId, IPC_EVENTS.CHAT_TOOL_STREAM, payload),
@@ -250,7 +313,7 @@ function setupIpcHandlers(): void {
 
       if (result.response) {
         addMessage(conversationId, 'assistant', result.response, result.toolCalls);
-        extractMemoryInBackground(provider, apiKey, message, result.response);
+        extractMemoryInBackground(resolvedProvider, apiKey, message, result.response);
       }
 
       return {
@@ -286,7 +349,7 @@ function setupIpcHandlers(): void {
   ipcMain.handle(IPC.CHAT_NEW, async () => {
     if (getAttachedRunId()) detachCurrent();
     const conv = createConversation();
-    activeConversationId = conv.id;
+    setActiveConversationId(conv.id);
     resetGuiStateForNewConversation();
     return { id: conv.id, title: conv.title };
   });
@@ -302,13 +365,13 @@ function setupIpcHandlers(): void {
     await new Promise<void>((resolve) => setImmediate(resolve));
     const conv = getConversation(id);
     if (!conv) return { error: 'Conversation not found' };
-    activeConversationId = id;
+    setActiveConversationId(id);
     resetGuiStateForNewConversation();
     return { id: conv.id, title: conv.title, messages: getRendererMessages(id) };
   });
   ipcMain.handle(IPC.CHAT_DELETE, async (_e, id: string) => {
     deleteConversation(id);
-    if (activeConversationId === id) activeConversationId = null;
+    if (activeConversationId === id) setActiveConversationId(null);
     return { ok: true };
   });
   ipcMain.handle(IPC.CHAT_OPEN_ATTACHMENT, async (_e, filePath: string) => {
@@ -328,6 +391,7 @@ function setupIpcHandlers(): void {
     if (key === 'unrestrictedMode') return getUnrestrictedMode();
     if (key === 'policyProfile') return getSelectedPolicyProfile();
     if (key === 'performanceStance') return getSelectedPerformanceStance();
+    if (key === 'uiSession') return getUiSession();
     return null;
   });
   ipcMain.handle(IPC.SETTINGS_SET, async (_e, key: string, value: any) => {
@@ -335,6 +399,7 @@ function setupIpcHandlers(): void {
     if (key === 'unrestrictedMode') setUnrestrictedMode(!!value);
     if (key === 'policyProfile') setSelectedPolicyProfile(String(value || 'standard'));
     if (key === 'performanceStance') setSelectedPerformanceStance(value);
+    if (key === 'uiSession' && value && typeof value === 'object') patchUiSession(value);
     return { ok: true };
   });
 
@@ -391,7 +456,7 @@ function setupIpcHandlers(): void {
     const result = attachTo(processId);
     if (!result) return { error: 'Process not found' };
     // Switch active conversation to the process's conversation
-    activeConversationId = result.process.conversationId;
+    setActiveConversationId(result.process.conversationId);
     return { ok: true, ...result };
   });
   ipcMain.handle(IPC.PROCESS_CANCEL, async (_e, processId: string) => {
@@ -416,6 +481,9 @@ function setupIpcHandlers(): void {
   });
   ipcMain.handle(IPC.RUN_CHANGES, async (_e, runId: string) => {
     return listRunChanges(runId);
+  });
+  ipcMain.handle(IPC.RUN_SCORECARD, async () => {
+    return getCapabilityScorecard();
   });
   ipcMain.handle(IPC.RUN_APPROVALS, async (_e, runId: string) => {
     return listApprovalsForRun(runId);

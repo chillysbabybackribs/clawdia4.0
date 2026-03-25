@@ -43,6 +43,7 @@ export const IPC = {
   RUN_EVENTS: 'run:events',
   RUN_ARTIFACTS: 'run:artifacts',
   RUN_CHANGES: 'run:changes',
+  RUN_SCORECARD: 'run:scorecard',
   RUN_APPROVALS: 'run:approvals',
   RUN_APPROVE: 'run:approve',
   RUN_REVISE: 'run:revise',

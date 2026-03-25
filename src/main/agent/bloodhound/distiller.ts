@@ -47,6 +47,23 @@ function toolToSurface(toolName: string): Surface {
 const REDACT_KEY_WORDS = ['password', 'token', 'api_key', 'secret', 'auth', 'cookie', 'credential'];
 const REDACT_VALUE_RE = /^sk-[a-zA-Z0-9]{20,}/;
 
+function parseJsonArrayFromLLMText(text: string): unknown {
+  const trimmed = text.trim();
+  const fenceMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const unwrapped = fenceMatch ? fenceMatch[1].trim() : trimmed;
+
+  try {
+    return JSON.parse(unwrapped);
+  } catch {
+    const start = unwrapped.indexOf('[');
+    const end = unwrapped.lastIndexOf(']');
+    if (start !== -1 && end !== -1 && end > start) {
+      return JSON.parse(unwrapped.slice(start, end + 1));
+    }
+    throw new Error('LLM did not return a valid JSON array');
+  }
+}
+
 function sanitizeInput(input: Record<string, any>): Record<string, any> {
   const result: Record<string, any> = {};
   for (const [k, v] of Object.entries(input)) {
@@ -154,9 +171,13 @@ Return only the JSON array, no markdown, no explanation.`;
     .map((b: any) => b.text)
     .join('');
 
-  const parsed = JSON.parse(text.trim());
+  const parsed = parseJsonArrayFromLLMText(text);
   if (!Array.isArray(parsed) || parsed.length !== steps.length) {
     throw new Error('LLM returned wrong number of steps');
   }
   return parsed as SequenceStep[];
 }
+
+export const __testing = {
+  parseJsonArrayFromLLMText,
+};

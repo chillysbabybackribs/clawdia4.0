@@ -1,0 +1,9 @@
+[
+  {
+    "kind": "human_intervention_required",
+    "iterationIndex": 1,
+    "toolName": "browser_click",
+    "toolFamily": "browser",
+    "detail": "captcha required"
+  }
+]

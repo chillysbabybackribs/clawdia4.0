@@ -1,0 +1,18 @@
+[
+  {
+    "kind": "tool_result",
+    "iterationIndex": 0,
+    "toolName": "shell_exec",
+    "toolFamily": "shell",
+    "success": false,
+    "detail": "Command failed"
+  },
+  {
+    "kind": "tool_result",
+    "iterationIndex": 1,
+    "toolName": "shell_exec",
+    "toolFamily": "shell",
+    "success": false,
+    "detail": "Command failed again"
+  }
+]

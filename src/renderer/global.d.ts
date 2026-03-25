@@ -54,6 +54,7 @@ declare global {
       get: (runId: string) => Promise<any>;
       events: (runId: string) => Promise<any>;
       changes: (runId: string) => Promise<any>;
+      scorecard: () => Promise<any>;
       approvals: (runId: string) => Promise<any>;
       humanInterventions: (runId: string) => Promise<any>;
       approve: (approvalId: number) => Promise<any>;

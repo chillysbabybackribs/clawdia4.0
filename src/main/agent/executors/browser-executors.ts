@@ -93,7 +93,12 @@ function detectLoginState(url: string, title: string, content: string, elements:
 
 export async function executeBrowserNavigate(input: Record<string, any>): Promise<string> {
   try {
-    const result = await navigate(input.url, getBrowserTarget(input));
+    const requestedUrl = String(input.url || '').trim();
+    if (!requestedUrl || /^about:blank(?:[#?].*)?$/i.test(requestedUrl)) {
+      return '[Error: browser_navigate] Refusing blank navigation target. Use a real URL or continue from the current page with browser_read_page/browser_extract.';
+    }
+
+    const result = await navigate(requestedUrl, getBrowserTarget(input));
     // navigate() now returns elements in parallel with content — no extra call needed
     
     let output = `Title: ${result.title}\nURL: ${result.url}\n\n${result.content}`;

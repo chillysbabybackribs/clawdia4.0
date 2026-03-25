@@ -1,0 +1,10 @@
+[
+  {
+    "kind": "tool_result",
+    "iterationIndex": 0,
+    "toolName": "browser_extract",
+    "toolFamily": "browser",
+    "success": false,
+    "detail": "Initial extract failed"
+  }
+]

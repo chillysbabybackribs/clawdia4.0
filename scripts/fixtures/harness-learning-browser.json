@@ -1,0 +1,68 @@
+{
+  "windowSize": 100,
+  "observedToolCalls": 18,
+  "observedRuns": 4,
+  "mostReliableTools": [],
+  "leastReliableTools": [],
+  "averageDurationByTool": {},
+  "repeatedRecentFailures": [],
+  "recoveryHeavyTools": [],
+  "rarelyUsedTools": [],
+  "categoryReliability": [],
+  "interventionObservedRecently": false,
+  "interventionResolvedRecently": false,
+  "subAgentSpawnObservedRecently": false,
+  "approvalObservedRecently": false,
+  "capabilityHealth": [],
+  "capabilityCategories": [],
+  "scenarioSummaries": [],
+  "workflowSummary": {
+    "strongestWorkflows": [],
+    "weakestWorkflows": [],
+    "highestFrictionWorkflows": [],
+    "sparseDataWarnings": []
+  },
+  "overallScore": 6.8,
+  "autoTuningHints": [],
+  "harnessLearningSummaries": [
+    {
+      "patternKey": "browser_transaction:complete_action",
+      "harnessId": "browser_transaction",
+      "baseGoal": "complete_action",
+      "sampleSize": 4,
+      "completionRate": 0.75,
+      "successfulHarnesses": [{ "harnessId": "browser_transaction", "count": 3 }],
+      "failingHarnesses": [{ "harnessId": "browser_transaction", "count": 1 }],
+      "successfulStartingStrategies": [{ "strategy": "browser_over_gui", "count": 2 }],
+      "failingStartingStrategies": [{ "strategy": "direct_balanced", "count": 1 }],
+      "repeatedGoalTightenings": [],
+      "repeatedStageStalls": [],
+      "repeatedFragileTransitions": [],
+      "repeatedFailingToolFamilies": [{ "family": "desktop", "count": 2 }],
+      "optimizationHints": [
+        {
+          "id": "prefer_harness_start",
+          "kind": "prefer_harness_start",
+          "reason": "Recent browser_transaction runs completed reliably.",
+          "effect": "Prefer browser_transaction when this class matches.",
+          "confidence": { "score": 0.8, "sampleSize": 4, "recentWindowSize": 12, "sparse": false },
+          "preferHarnessId": "browser_transaction"
+        },
+        {
+          "id": "prefer_browser_over_gui_start",
+          "kind": "prefer_strategy_start",
+          "reason": "Recent similar runs repeatedly shifted toward browser-over-GUI execution.",
+          "effect": "Start closer to browser_over_gui and demote desktop paths earlier.",
+          "confidence": { "score": 0.8, "sampleSize": 4, "recentWindowSize": 12, "sparse": false },
+          "preferStrategy": "browser_over_gui",
+          "demoteFamily": "desktop"
+        }
+      ],
+      "evidenceSummary": [
+        "browser_transaction:complete_action completed 3/4 recent runs.",
+        "Best recent starting strategy: browser_over_gui."
+      ],
+      "confidence": { "score": 0.8, "sampleSize": 4, "recentWindowSize": 12, "sparse": false }
+    }
+  ]
+}

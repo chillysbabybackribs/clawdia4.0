@@ -22,6 +22,17 @@ describe('buildDynamicPrompt()', () => {
     expect(prompt).toContain('Max runtime per run is 10 minutes.');
   });
 
+  it('includes harness directive context when provided', () => {
+    const prompt = buildDynamicPrompt({
+      model: 'test-model',
+      toolGroup: 'full',
+      harnessDirectiveContext: '[HARNESS]\nid=research\nactual_mode=step_controlled',
+    });
+    expect(prompt).toContain('[HARNESS]');
+    expect(prompt).toContain('id=research');
+    expect(prompt).toContain('actual_mode=step_controlled');
+  });
+
   it('does not inject a hardcoded workspace root by default', () => {
     const prompt = buildDynamicPrompt({
       model: 'test-model',

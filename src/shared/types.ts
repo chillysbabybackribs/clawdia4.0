@@ -97,7 +97,7 @@ export interface SwarmState {
   startedAt: number;
   completedAt?: number;
 }
-export type WorkflowStage = 'starting' | 'planning' | 'executing' | 'reviewing' | 'completed';
+export type WorkflowStage = 'starting' | 'planning' | 'executing' | 'reviewing' | 'completed' | 'failed' | 'cancelled';
 
 export interface ProcessInfo {
   id: string;
@@ -107,6 +107,8 @@ export interface ProcessInfo {
   startedAt: number;
   completedAt?: number;
   toolCallCount: number;
+  toolCompletedCount?: number;
+  toolFailedCount?: number;
   error?: string;
   isAttached: boolean;
   wasDetached: boolean;
@@ -128,6 +130,8 @@ export interface RunSummary {
   startedAt: number;
   completedAt?: number;
   toolCallCount: number;
+  toolCompletedCount?: number;
+  toolFailedCount?: number;
   error?: string;
   wasDetached: boolean;
   provider?: ProviderId;
@@ -138,7 +142,7 @@ export interface RunSummary {
 export interface RunArtifact {
   id: number;
   runId: string;
-  kind: 'execution_plan' | 'execution_graph_scaffold' | 'execution_graph_state';
+  kind: 'execution_plan' | 'execution_graph_scaffold' | 'execution_graph_state' | 'evidence_ledger';
   title: string;
   body: string;
   createdAt: string;

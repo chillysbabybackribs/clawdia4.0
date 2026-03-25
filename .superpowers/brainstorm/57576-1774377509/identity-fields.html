@@ -1,0 +1,42 @@
+<h2>What does the identity form need?</h2>
+<p class="subtitle">Select all fields that should be editable in the settings section</p>
+
+<div class="options" data-multiselect>
+  <div class="option" data-choice="name_email" onclick="toggleSelect(this)">
+    <div class="letter">1</div>
+    <div class="content">
+      <h3>Full name + email</h3>
+      <p>The basics — what Clawdia fills into signup forms as "you"</p>
+    </div>
+  </div>
+  <div class="option" data-choice="username" onclick="toggleSelect(this)">
+    <div class="letter">2</div>
+    <div class="content">
+      <h3>Username pattern</h3>
+      <p>Preferred username style (e.g. "dp_", "dp123") — Clawdia picks from this when choosing a handle</p>
+    </div>
+  </div>
+  <div class="option" data-choice="dob" onclick="toggleSelect(this)">
+    <div class="letter">3</div>
+    <div class="content">
+      <h3>Date of birth</h3>
+      <p>Required by some services during signup</p>
+    </div>
+  </div>
+  <div class="option" data-choice="accounts" onclick="toggleSelect(this)">
+    <div class="letter">4</div>
+    <div class="content">
+      <h3>Managed accounts list</h3>
+      <p>Read-only table of accounts Clawdia has created — service name, username, status</p>
+    </div>
+  </div>
+  <div class="option" data-choice="credentials" onclick="toggleSelect(this)">
+    <div class="letter">5</div>
+    <div class="content">
+      <h3>Saved credentials (API keys, tokens)</h3>
+      <p>View/add credentials stored in the vault — Twilio, etc.</p>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:1.5rem">Select all that apply, then tell me in the terminal.</p>

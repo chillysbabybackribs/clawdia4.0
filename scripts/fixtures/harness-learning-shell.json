@@ -1,0 +1,77 @@
+{
+  "windowSize": 100,
+  "observedToolCalls": 20,
+  "observedRuns": 5,
+  "mostReliableTools": [],
+  "leastReliableTools": [],
+  "averageDurationByTool": {},
+  "repeatedRecentFailures": [],
+  "recoveryHeavyTools": [],
+  "rarelyUsedTools": [],
+  "categoryReliability": [],
+  "interventionObservedRecently": false,
+  "interventionResolvedRecently": false,
+  "subAgentSpawnObservedRecently": false,
+  "approvalObservedRecently": false,
+  "capabilityHealth": [],
+  "capabilityCategories": [],
+  "scenarioSummaries": [],
+  "workflowSummary": {
+    "strongestWorkflows": [],
+    "weakestWorkflows": [],
+    "highestFrictionWorkflows": [],
+    "sparseDataWarnings": []
+  },
+  "overallScore": 6.3,
+  "autoTuningHints": [],
+  "harnessLearningSummaries": [
+    {
+      "patternKey": "coding:modify_workspace",
+      "harnessId": "coding",
+      "baseGoal": "modify_workspace",
+      "sampleSize": 5,
+      "completionRate": 0.6,
+      "successfulHarnesses": [{ "harnessId": "coding", "count": 3 }],
+      "failingHarnesses": [{ "harnessId": "coding", "count": 2 }],
+      "successfulStartingStrategies": [{ "strategy": "low_shell_dependence", "count": 2 }],
+      "failingStartingStrategies": [{ "strategy": "direct_balanced", "count": 2 }],
+      "repeatedGoalTightenings": [{ "goal": "safely_apply_change", "count": 2 }],
+      "repeatedStageStalls": [{ "subGoal": "verify_change", "count": 2 }],
+      "repeatedFragileTransitions": [],
+      "repeatedFailingToolFamilies": [{ "family": "shell", "count": 3 }],
+      "optimizationHints": [
+        {
+          "id": "prefer_harness_start",
+          "kind": "prefer_harness_start",
+          "reason": "Recent coding runs completed better than fallback operator posture.",
+          "effect": "Prefer coding when this class matches.",
+          "confidence": { "score": 1, "sampleSize": 5, "recentWindowSize": 12, "sparse": false },
+          "preferHarnessId": "coding"
+        },
+        {
+          "id": "prefer_low_shell_dependence",
+          "kind": "prefer_strategy_start",
+          "reason": "Recent similar runs repeatedly shifted away from shell-heavy execution.",
+          "effect": "Start with lower shell dependence and stronger filesystem-first caution.",
+          "confidence": { "score": 1, "sampleSize": 5, "recentWindowSize": 12, "sparse": false },
+          "preferStrategy": "low_shell_dependence",
+          "demoteFamily": "shell"
+        },
+        {
+          "id": "demote_family_shell",
+          "kind": "demote_tool_family",
+          "reason": "Recent similar runs repeatedly failed in the shell family.",
+          "effect": "Start with stronger caution around shell tools.",
+          "confidence": { "score": 1, "sampleSize": 5, "recentWindowSize": 12, "sparse": false },
+          "demoteFamily": "shell"
+        }
+      ],
+      "evidenceSummary": [
+        "coding:modify_workspace completed 3/5 recent runs.",
+        "Best recent starting strategy: low_shell_dependence.",
+        "Repeated stage stall: verify_change."
+      ],
+      "confidence": { "score": 1, "sampleSize": 5, "recentWindowSize": 12, "sparse": false }
+    }
+  ]
+}

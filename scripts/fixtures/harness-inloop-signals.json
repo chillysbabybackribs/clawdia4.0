@@ -1,0 +1,40 @@
+[
+  {
+    "kind": "tool_result",
+    "iterationIndex": 0,
+    "toolName": "gui_interact",
+    "toolFamily": "desktop",
+    "success": false,
+    "detail": "Could not find window"
+  },
+  {
+    "kind": "tool_result",
+    "iterationIndex": 1,
+    "toolName": "gui_interact",
+    "toolFamily": "desktop",
+    "success": false,
+    "detail": "Could not find window"
+  },
+  {
+    "kind": "tool_result",
+    "iterationIndex": 2,
+    "toolName": "browser_extract",
+    "toolFamily": "browser",
+    "success": true,
+    "detail": "Extracted page content"
+  },
+  {
+    "kind": "tool_result",
+    "iterationIndex": 3,
+    "toolName": "file_write",
+    "toolFamily": "filesystem",
+    "success": true,
+    "detail": "Wrote report.md"
+  },
+  {
+    "kind": "verification_failed",
+    "iterationIndex": 3,
+    "verificationType": "file_exists",
+    "detail": "report.md missing"
+  }
+]

@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #111114;
+    color: #e4e4e8;
+    font-family: "DM Sans", system-ui, sans-serif;
+    font-size: 14px;
+    display: flex;
+    justify-content: center;
+    padding: 2rem 1rem;
+  }
+
+  .shell {
+    width: 520px;
+    background: #0d0d10;
+    border: 1px solid #1f1f26;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 16px;
+    height: 44px;
+    border-bottom: 1px solid #1a1a22;
+  }
+  .back-btn {
+    width: 28px; height: 28px;
+    border-radius: 8px;
+    background: transparent;
+    border: none;
+    color: #5e5e6a;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+  }
+  .back-btn:hover { background: rgba(255,255,255,0.04); color: #8e8e9a; }
+  .header-title { font-size: 13px; font-weight: 500; color: #8e8e9a; }
+
+  /* Scrollable body */
+  .body {
+    padding: 20px 20px 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    max-height: 600px;
+    overflow-y: auto;
+  }
+
+  /* Section */
+  .section-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #46464f;
+    margin-bottom: 10px;
+  }
+
+  /* Profile form */
+  .field-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 10px;
+  }
+  .field-label {
+    font-size: 11px;
+    color: #5e5e6a;
+  }
+  .field-input {
+    background: #18181f;
+    border: 1px solid #1f1f26;
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: #e4e4e8;
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    width: 100%;
+  }
+  .field-input:focus { border-color: #FF5061; }
+  .field-input.filled { color: #e4e4e8; }
+  .field-input::placeholder { color: #46464f; }
+
+  .field-row-2col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .save-btn {
+    margin-top: 4px;
+    padding: 8px 16px;
+    background: #FF5061;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-family: inherit;
+    font-weight: 500;
+    cursor: pointer;
+    align-self: flex-start;
+  }
+  .save-btn:hover { background: #e8404f; }
+
+  /* Divider */
+  .divider { height: 1px; background: #1a1a22; }
+
+  /* Accounts table */
+  .accounts-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .accounts-table th {
+    text-align: left;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #46464f;
+    padding: 0 8px 8px;
+  }
+  .accounts-table td {
+    padding: 7px 8px;
+    font-size: 12px;
+    border-top: 1px solid #18181f;
+  }
+  .accounts-table tr:hover td { background: rgba(255,255,255,0.02); }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 99px;
+  }
+  .status-pill.session { background: rgba(74,222,128,0.1); color: #4ade80; }
+  .status-pill.vault   { background: rgba(251,191,36,0.1);  color: #fbbf24; }
+  .status-pill.managed { background: rgba(255,80,97,0.1);   color: #FF5061; }
+
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+  .source-badge {
+    font-size: 10px;
+    color: #46464f;
+    background: #18181f;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  /* Vault */
+  .vault-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid #1f1f26;
+    background: #111116;
+    margin-bottom: 6px;
+  }
+  .vault-icon {
+    width: 28px; height: 28px;
+    border-radius: 6px;
+    background: #1a1a22;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px;
+  }
+  .vault-meta { flex: 1; }
+  .vault-name { font-size: 12px; color: #c4c4cc; font-weight: 500; }
+  .vault-type { font-size: 10px; color: #46464f; margin-top: 1px; }
+  .vault-masked { font-size: 11px; color: #46464f; font-family: "JetBrains Mono", monospace; }
+  .vault-del {
+    width: 24px; height: 24px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: #46464f;
+    cursor: pointer;
+    font-size: 14px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .vault-del:hover { background: rgba(248,113,113,0.1); color: #f87171; }
+
+  .add-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #5e5e6a;
+    background: transparent;
+    border: 1px dashed #2a2a34;
+    border-radius: 8px;
+    padding: 7px 12px;
+    cursor: pointer;
+    width: 100%;
+    font-family: inherit;
+    margin-top: 4px;
+  }
+  .add-btn:hover { color: #8e8e9a; border-color: #3a3a46; background: rgba(255,255,255,0.02); }
+</style>
+</head>
+<body>
+<div class="shell">
+  <!-- Header -->
+  <div class="header">
+    <button class="back-btn">←</button>
+    <span class="header-title">Settings</span>
+  </div>
+
+  <div class="body">
+
+    <!-- ── Identity Profile ── -->
+    <div>
+      <div class="section-label">Identity Profile</div>
+      <p style="font-size:11px;color:#5e5e6a;margin-bottom:14px;line-height:1.5">
+        Clawdia uses this when signing up for services on your behalf. Leave fields blank to exclude them.
+      </p>
+
+      <div class="field-row-2col">
+        <div class="field-row">
+          <div class="field-label">Full name</div>
+          <input class="field-input filled" value="dp" />
+        </div>
+        <div class="field-row">
+          <div class="field-label">Email</div>
+          <input class="field-input filled" value="dp@gmail.com" />
+        </div>
+      </div>
+
+      <div class="field-row-2col">
+        <div class="field-row">
+          <div class="field-label">Username pattern</div>
+          <input class="field-input" placeholder="e.g. dp_, dp123" />
+        </div>
+        <div class="field-row">
+          <div class="field-label">Date of birth</div>
+          <input class="field-input" placeholder="YYYY-MM-DD" />
+        </div>
+      </div>
+
+      <button class="save-btn">Save Profile</button>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- ── Managed Accounts ── -->
+    <div>
+      <div class="section-label">Accounts</div>
+      <p style="font-size:11px;color:#5e5e6a;margin-bottom:12px;line-height:1.5">
+        All accounts Clawdia can access. Session cookies take priority over saved credentials.
+      </p>
+      <table class="accounts-table">
+        <thead>
+          <tr>
+            <th>Service</th>
+            <th>Username</th>
+            <th>Access</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="color:#c4c4cc">Reddit</td>
+            <td style="color:#8e8e9a">dp_user</td>
+            <td><span class="status-pill session"><span class="dot"></span>Session</span></td>
+          </tr>
+          <tr>
+            <td style="color:#c4c4cc">GitHub</td>
+            <td style="color:#8e8e9a">dpdev</td>
+            <td><span class="status-pill vault"><span class="dot"></span>Vault</span></td>
+          </tr>
+          <tr>
+            <td style="color:#c4c4cc">mail.tm</td>
+            <td style="color:#8e8e9a">clawdia1774301</td>
+            <td><span class="status-pill managed"><span class="dot"></span>Managed</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <button class="add-btn" style="margin-top:10px">＋ Add account manually</button>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- ── Credential Vault ── -->
+    <div>
+      <div class="section-label">Credential Vault</div>
+      <p style="font-size:11px;color:#5e5e6a;margin-bottom:12px;line-height:1.5">
+        API keys, tokens, and passwords stored encrypted on this device.
+      </p>
+
+      <div class="vault-row">
+        <div class="vault-icon">🔑</div>
+        <div class="vault-meta">
+          <div class="vault-name">twilio-account-sid</div>
+          <div class="vault-type">api_key · twilio</div>
+        </div>
+        <div class="vault-masked">AC••••••••••••3f2a</div>
+        <button class="vault-del">✕</button>
+      </div>
+
+      <div class="vault-row">
+        <div class="vault-icon">🔒</div>
+        <div class="vault-meta">
+          <div class="vault-name">github-password</div>
+          <div class="vault-type">app_password · github</div>
+        </div>
+        <div class="vault-masked">••••••••••••</div>
+        <button class="vault-del">✕</button>
+      </div>
+
+      <button class="add-btn">＋ Add credential</button>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

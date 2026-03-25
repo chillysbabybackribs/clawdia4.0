@@ -3,7 +3,6 @@ import type { Message, ToolCall, FeedItem, ProcessInfo, RunApproval, RunHumanInt
 import InputBar from './InputBar';
 import { type ToolStreamMap } from './ToolActivity';
 import MarkdownRenderer from './MarkdownRenderer';
-import TerminalLogStrip from './TerminalLogStrip';
 import SwarmPanel from './SwarmPanel';
 
 
@@ -68,80 +67,6 @@ function ApprovalBanner({
         >
           Deny
         </button>
-      </div>
-    </div>
-  );
-}
-
-function WorkflowPlanCard({
-  planText,
-  isStreaming,
-  approval,
-  onApprove,
-  onRevise,
-  onDeny,
-  onOpenReview,
-}: {
-  planText: string;
-  isStreaming: boolean;
-  approval?: RunApproval | null;
-  onApprove?: () => void;
-  onRevise?: () => void;
-  onDeny?: () => void;
-  onOpenReview?: () => void;
-}) {
-  if (!planText && !isStreaming) return null;
-
-  return (
-    <div className="flex justify-start animate-slide-up">
-      <div className="max-w-[92%] px-1 py-1 text-text-primary">
-        <div className="rounded-2xl border border-white/[0.08] bg-white/[0.025] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-          <div className="flex items-center gap-2">
-            <div className="status-shimmer-dot" />
-            <div className="text-[13px] font-medium text-text-primary">
-              {isStreaming ? 'Drafting execution plan' : 'Execution plan ready'}
-            </div>
-            {isStreaming && (
-              <span className="status-shimmer-text text-[12px] tracking-wide text-text-secondary">
-                Streaming
-              </span>
-            )}
-          </div>
-          <div className="mt-1 text-2xs text-text-muted">
-            {isStreaming ? 'Clawdia is planning before execution starts.' : 'Review the plan before approving execution.'}
-          </div>
-          <div className="mt-3 rounded-xl border border-white/[0.04] bg-[#0f0f13] px-4 py-3">
-            <MarkdownRenderer content={planText || '## Objective\nDrafting execution plan...'} isStreaming={isStreaming} />
-          </div>
-          {approval && !isStreaming && (
-            <div className="mt-3 flex items-center gap-2">
-              <button
-                onClick={onApprove}
-                className="text-2xs px-2.5 py-1 rounded-md bg-white/[0.07] text-text-primary hover:bg-white/[0.1] transition-colors cursor-pointer"
-              >
-                Approve
-              </button>
-              <button
-                onClick={onRevise}
-                className="text-2xs px-2.5 py-1 rounded-md bg-white/[0.04] text-text-secondary hover:bg-white/[0.08] hover:text-text-primary transition-colors cursor-pointer"
-              >
-                Regenerate
-              </button>
-              <button
-                onClick={onDeny}
-                className="text-2xs px-2.5 py-1 rounded-md bg-white/[0.04] text-text-secondary hover:bg-white/[0.08] hover:text-text-primary transition-colors cursor-pointer"
-              >
-                Deny
-              </button>
-              <button
-                onClick={onOpenReview}
-                className="text-2xs px-2.5 py-1 rounded-md text-text-secondary hover:text-text-primary hover:bg-white/[0.06] transition-colors cursor-pointer"
-              >
-                Open review
-              </button>
-            </div>
-          )}
-        </div>
       </div>
     </div>
   );
@@ -367,6 +292,7 @@ const AssistantMessage = React.memo(function AssistantMessage({ message, shimmer
     }
 
     const hasText = textItems.length > 0;
+    if (!hasText && !shimmerText) return null;
 
     return (
       <div className="flex justify-start animate-slide-up group">
@@ -469,6 +395,9 @@ function InlineShimmer({ text }: { text: string }) {
 }
 
 export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrowser, onShowBrowser, calendarOpen, onToggleCalendar, onOpenSettings, onOpenPendingApproval, loadConversationId, replayBuffer }: ChatPanelProps) {
+  const MIN_THINKING_VISIBLE_MS = 2400;
+  const THINKING_PAIR_WINDOW_MS = 1400;
+  const MAX_THINKING_BATCH_LINES = 2;
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -489,6 +418,11 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
   const pendingUpdateRef = useRef(false);
   const isUserScrolledUpRef = useRef(false);
   const replayedBufferRef = useRef<string | null>(null);
+  const thinkingQueueRef = useRef<Array<{ text: string; at: number }>>([]);
+  const thinkingBatchRef = useRef<Array<{ text: string; at: number }>>([]);
+  const thinkingVisibleUntilRef = useRef(0);
+  const thinkingAppendWindowUntilRef = useRef(0);
+  const thinkingAdvanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const scrollToBottom = useCallback((behavior: 'auto' | 'smooth' = 'auto') => {
     if (scrollRef.current) scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior });
@@ -503,6 +437,38 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
   const autoScroll = useCallback(() => {
     if (!isUserScrolledUpRef.current) scrollToBottom();
   }, [scrollToBottom]);
+
+  const clearThinkingAdvanceTimer = useCallback(() => {
+    if (thinkingAdvanceTimeoutRef.current) {
+      clearTimeout(thinkingAdvanceTimeoutRef.current);
+      thinkingAdvanceTimeoutRef.current = null;
+    }
+  }, []);
+
+  const scheduleThinkingAdvance = useCallback(() => {
+    clearThinkingAdvanceTimer();
+    if (thinkingQueueRef.current.length === 0) return;
+    const delay = Math.max(0, thinkingVisibleUntilRef.current - Date.now());
+    thinkingAdvanceTimeoutRef.current = setTimeout(() => {
+      const nextBatch: Array<{ text: string; at: number }> = [];
+      const first = thinkingQueueRef.current.shift();
+      if (!first) return;
+      nextBatch.push(first);
+      while (
+        thinkingQueueRef.current.length > 0
+        && nextBatch.length < MAX_THINKING_BATCH_LINES
+        && thinkingQueueRef.current[0].at - nextBatch[0].at <= THINKING_PAIR_WINDOW_MS
+      ) {
+        nextBatch.push(thinkingQueueRef.current.shift()!);
+      }
+      thinkingBatchRef.current = nextBatch;
+      thinkingVisibleUntilRef.current = Date.now() + MIN_THINKING_VISIBLE_MS;
+      thinkingAppendWindowUntilRef.current = Date.now() + THINKING_PAIR_WINDOW_MS;
+      setShimmerText(nextBatch.map((item) => item.text).join('\n'));
+      autoScroll();
+      if (thinkingQueueRef.current.length > 0) scheduleThinkingAdvance();
+    }, delay);
+  }, [autoScroll, clearThinkingAdvanceTimer]);
 
   const flushStreamUpdate = useCallback(() => {
     if (!assistantMsgIdRef.current) return;
@@ -540,17 +506,15 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
       isStreaming: true,
     }]);
     setIsStreaming(true);
-    setShimmerText('Thinking…');
+    setShimmerText('');
     return assistantId;
   }, []);
 
   const handleStreamTextChunk = useCallback((chunk: string) => {
     ensureAssistantReplayMessage();
-    setShimmerText('');           // clear shimmer the moment text arrives
     if (chunk.includes('__RESET__')) {
-      const lastIdx = feedRef.current.length - 1;
-      if (lastIdx >= 0 && feedRef.current[lastIdx].kind === 'text') {
-        feedRef.current[lastIdx] = { ...feedRef.current[lastIdx], isStreaming: false } as FeedItem;
+      while (feedRef.current.length > 0 && feedRef.current[feedRef.current.length - 1].kind === 'text') {
+        feedRef.current.pop();
       }
       scheduleStreamUpdate();
       return;
@@ -568,11 +532,45 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
 
   const handleThinkingEvent = useCallback((thought: string) => {
     if (!thought) return; // empty = post-LLM clear signal; let stream-end handle it
-    // Use real thinking text when it's substantive; fall back to generic label
-    const isGeneric = thought === 'Thinking...' || thought.startsWith('Drafting') || thought.startsWith('Paused');
-    setShimmerText(isGeneric ? 'Thinking…' : thought);
+    const isGeneric =
+      thought === 'Thinking...'
+      || thought.startsWith('[Reasoning:')
+      || thought.startsWith('[Reasoning ')
+      || thought.startsWith('Paused');
+    if (isGeneric) return;
+    const next = { text: thought.trim(), at: Date.now() };
+    if (!next.text) return;
+
+    const canAppendToCurrent =
+      thinkingBatchRef.current.length > 0
+      && Date.now() <= thinkingAppendWindowUntilRef.current
+      && thinkingBatchRef.current.length < MAX_THINKING_BATCH_LINES;
+
+    if (canAppendToCurrent) {
+      const lastText = thinkingBatchRef.current[thinkingBatchRef.current.length - 1]?.text;
+      if (lastText !== next.text) {
+        thinkingBatchRef.current = [...thinkingBatchRef.current, next];
+        thinkingVisibleUntilRef.current = Math.max(thinkingVisibleUntilRef.current, Date.now() + 1800);
+        thinkingAppendWindowUntilRef.current = Date.now() + THINKING_PAIR_WINDOW_MS;
+        setShimmerText(thinkingBatchRef.current.map((item) => item.text).join('\n'));
+      }
+      autoScroll();
+      return;
+    }
+
+    if (thinkingBatchRef.current.length === 0 && !shimmerText) {
+      thinkingBatchRef.current = [next];
+      thinkingVisibleUntilRef.current = Date.now() + MIN_THINKING_VISIBLE_MS;
+      thinkingAppendWindowUntilRef.current = Date.now() + THINKING_PAIR_WINDOW_MS;
+      setShimmerText(next.text);
+      autoScroll();
+      return;
+    }
+
+    thinkingQueueRef.current.push(next);
+    scheduleThinkingAdvance();
     autoScroll();
-  }, [autoScroll]);
+  }, [autoScroll, scheduleThinkingAdvance, shimmerText]);
 
   const handleWorkflowPlanTextEvent = useCallback((chunk: string) => {
     setWorkflowPlanDraft(prev => prev + chunk);
@@ -599,7 +597,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
         feedRef.current[lastIdx] = { ...feedRef.current[lastIdx], isStreaming: false } as FeedItem;
       }
       scheduleStreamUpdate();
-      // Don't override shimmer with tool labels — keep "Thinking…" steady throughout
+      handleThinkingEvent(toolToShimmerLabel(activity.name, activity.detail));
     } else if (activity.status === 'awaiting_approval') {
       setShimmerText('Waiting for approval…');
       autoScroll();
@@ -607,7 +605,7 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
       setShimmerText('Needs your input…');
       autoScroll();
     }
-  }, [autoScroll, ensureAssistantReplayMessage, scheduleStreamUpdate]);
+  }, [autoScroll, ensureAssistantReplayMessage, handleThinkingEvent, scheduleStreamUpdate]);
 
   const handleToolStreamEvent = useCallback((payload: { toolId: string; toolName: string; chunk: string }) => {
     setStreamMap(prev => {
@@ -640,8 +638,11 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
     }
     setIsStreaming(false);
     setShimmerText('');
+    thinkingQueueRef.current = [];
+    thinkingBatchRef.current = [];
+    clearThinkingAdvanceTimer();
     assistantMsgIdRef.current = null;
-  }, [flushStreamUpdate]);
+  }, [clearThinkingAdvanceTimer, flushStreamUpdate]);
 
   useEffect(() => {
     if (!loadConversationId) return;
@@ -661,6 +662,9 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
       setIsWorkflowPlanStreaming(false);
       setIsStreaming(false);
       setShimmerText('');
+      thinkingQueueRef.current = [];
+      thinkingBatchRef.current = [];
+      clearThinkingAdvanceTimer();
       setMessages([]);
       setLoadedConversationId(loadConversationId);
       return;
@@ -675,6 +679,9 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
       setIsWorkflowPlanStreaming(false);
       setIsStreaming(false);
       setShimmerText('');
+      thinkingQueueRef.current = [];
+      thinkingBatchRef.current = [];
+      clearThinkingAdvanceTimer();
       setMessages(result.messages || []);
       setLoadedConversationId(loadConversationId);
       requestAnimationFrame(() => {
@@ -682,6 +689,8 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
       });
     }).catch(() => {});
   }, [loadConversationId, replayBuffer]);
+
+  useEffect(() => () => clearThinkingAdvanceTimer(), [clearThinkingAdvanceTimer]);
 
   useEffect(() => {
     if (!replayBuffer || replayBuffer.length === 0 || !loadConversationId || loadedConversationId !== loadConversationId) return;
@@ -995,17 +1004,6 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
               ? <AssistantMessage key={msg.id} message={msg} shimmerText={msg.isStreaming ? shimmerText : undefined} />
               : <UserMessage key={msg.id} message={msg} />
           )}
-          {(visiblePlanText || isWorkflowPlanStreaming) && (
-            <WorkflowPlanCard
-              planText={visiblePlanText}
-              isStreaming={isWorkflowPlanStreaming}
-              approval={workflowPlanApproval || null}
-              onApprove={() => handleApprovalDecision('approve')}
-              onRevise={() => handleApprovalDecision('revise')}
-              onDeny={() => handleApprovalDecision('deny')}
-              onOpenReview={() => pendingApprovalRunId && onOpenPendingApproval?.(pendingApprovalRunId)}
-            />
-          )}
           {pendingApprovalRunId && nonWorkflowApproval && (
             <div className="flex justify-start animate-slide-up">
               <div className="max-w-[92%] px-1 py-1 text-text-primary">
@@ -1023,13 +1021,6 @@ export default function ChatPanel({ browserVisible, onToggleBrowser, onHideBrows
       </div>
 
       <SwarmPanel />
-
-      {(() => {
-        const terminalLines = Object.values(streamMap).flat();
-        return (isStreaming || terminalLines.length > 0) ? (
-          <TerminalLogStrip lines={terminalLines} isStreaming={isStreaming} />
-        ) : null;
-      })()}
 
       <InputBar
         onSend={handleSend}

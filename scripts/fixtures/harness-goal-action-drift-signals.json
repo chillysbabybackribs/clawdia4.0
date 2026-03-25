@@ -1,0 +1,18 @@
+[
+  {
+    "kind": "tool_result",
+    "iterationIndex": 0,
+    "toolName": "browser_search",
+    "toolFamily": "browser",
+    "success": false,
+    "detail": "Search loop failed"
+  },
+  {
+    "kind": "tool_result",
+    "iterationIndex": 1,
+    "toolName": "browser_search",
+    "toolFamily": "browser",
+    "success": false,
+    "detail": "Search loop failed again"
+  }
+]

@@ -64,4 +64,25 @@ describe('run_artifacts', () => {
     expect(runMock).toHaveBeenCalled();
     expect(artifact.kind).toBe('execution_graph_state');
   });
+
+  it('passes evidence_ledger through the persistence layer', async () => {
+    getMock
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce({
+        id: 3,
+        run_id: 'run-3',
+        kind: 'evidence_ledger',
+        title: 'Evidence Ledger',
+        body: '{"facts":[{"key":"total_runs","value":20}]}',
+        created_at: '2026-03-25T00:00:00.000Z',
+        updated_at: '2026-03-25T00:00:00.000Z',
+      });
+    runMock.mockReturnValue({ lastInsertRowid: 3 });
+
+    const { upsertRunArtifact } = await import('../../src/main/db/run-artifacts');
+    const artifact = upsertRunArtifact('run-3', 'evidence_ledger', 'Evidence Ledger', '{"facts":[{"key":"total_runs","value":20}]}');
+
+    expect(runMock).toHaveBeenCalled();
+    expect(artifact.kind).toBe('evidence_ledger');
+  });
 });

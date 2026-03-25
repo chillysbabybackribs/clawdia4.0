@@ -12,6 +12,13 @@ export type View = 'chat' | 'conversations' | 'settings' | 'processes';
 
 type ReplayBufferItem = { type: string; data: any };
 
+interface UiSessionState {
+  activeConversationId: string | null;
+  activeView: View;
+  browserVisible: boolean;
+  calendarOpen: boolean;
+}
+
 export default function App() {
   const [activeView, setActiveView] = useState<View>('chat');
   const [browserVisible, setBrowserVisible] = useState(true);
@@ -21,6 +28,7 @@ export default function App() {
   const [selectedProcessId, setSelectedProcessId] = useState<string | null>(null);
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null); // null = loading
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [sessionHydrated, setSessionHydrated] = useState(false);
 
   // Check for API key on mount
   useEffect(() => {
@@ -30,6 +38,34 @@ export default function App() {
       setHasApiKey(Object.values(keys || {}).some(Boolean));
     });
   }, []);
+
+  useEffect(() => {
+    if (!hasApiKey) return;
+    const api = (window as any).clawdia;
+    if (!api?.settings) {
+      setSessionHydrated(true);
+      return;
+    }
+
+    api.settings.get('uiSession')
+      .then((session: UiSessionState | null) => {
+        if (session?.activeView) setActiveView(session.activeView);
+        if (typeof session?.browserVisible === 'boolean') setBrowserVisible(session.browserVisible);
+        if (typeof session?.calendarOpen === 'boolean') setCalendarOpen(session.calendarOpen);
+        if (session?.activeConversationId) setLoadConversationId(session.activeConversationId);
+      })
+      .finally(() => setSessionHydrated(true));
+  }, [hasApiKey]);
+
+  useEffect(() => {
+    if (!sessionHydrated || !hasApiKey) return;
+    (window as any).clawdia?.settings?.set('uiSession', {
+      activeConversationId: loadConversationId,
+      activeView,
+      browserVisible,
+      calendarOpen,
+    });
+  }, [sessionHydrated, hasApiKey, loadConversationId, activeView, browserVisible, calendarOpen]);
 
   useEffect(() => {
     if (!browserVisible) {
@@ -117,7 +153,11 @@ if (e.key === 'Escape' && activeView !== 'chat') setActiveView('chat');
       <div className="flex h-screen w-screen overflow-hidden rounded-[10px] border-[2px] border-white/[0.04] bg-surface-0">
         <WelcomeScreen onComplete={handleWelcomeComplete} />
       </div>
-    );
+      );
+  }
+
+  if (!sessionHydrated) {
+    return <div className="h-screen w-screen bg-surface-0" />;
   }
 
   return (

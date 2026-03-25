@@ -1,0 +1,24 @@
+[
+  {
+    "kind": "tool_result",
+    "iterationIndex": 0,
+    "toolName": "file_edit",
+    "toolFamily": "filesystem",
+    "success": true,
+    "detail": "Patched source file"
+  },
+  {
+    "kind": "tool_result",
+    "iterationIndex": 1,
+    "toolName": "file_write",
+    "toolFamily": "filesystem",
+    "success": true,
+    "detail": "Wrote updated file"
+  },
+  {
+    "kind": "verification_failed",
+    "iterationIndex": 2,
+    "verificationType": "file_exists",
+    "detail": "Expected output missing"
+  }
+]

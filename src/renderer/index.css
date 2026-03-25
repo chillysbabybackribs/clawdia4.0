@@ -116,9 +116,8 @@ textarea { field-sizing: content; }
   50% { opacity: 0; }
 }
 .streaming-cursor::after {
-  content: '▊'; display: inline; color: #FF5061;
-  animation: cursor-blink 0.8s ease-in-out infinite;
-  margin-left: 1px; font-size: 0.85em;
+  content: '';
+  display: none;
 }
 
 /* ══════════════════════════════════════════════════
@@ -155,6 +154,8 @@ textarea { field-sizing: content; }
 /* ── Inline shimmer indicator ── */
 .inline-shimmer {
   font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
   background: linear-gradient(90deg,
     rgba(120, 120, 136, 0.5) 0%, rgba(120, 120, 136, 0.5) 35%,
     rgba(200, 200, 215, 0.9) 50%, rgba(120, 120, 136, 0.5) 65%,
@@ -163,7 +164,7 @@ textarea { field-sizing: content; }
   background-clip: text;
   -webkit-background-clip: text;
   color: transparent;
-  animation: status-shimmer 2s linear infinite;
+  animation: status-shimmer 2.8s linear infinite reverse;
   display: inline-block;
 }
 

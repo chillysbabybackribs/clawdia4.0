@@ -1,0 +1,10 @@
+[
+  {
+    "kind": "tool_result",
+    "iterationIndex": 0,
+    "toolName": "gui_interact",
+    "toolFamily": "desktop",
+    "success": true,
+    "detail": "Opened unrelated app window"
+  }
+]

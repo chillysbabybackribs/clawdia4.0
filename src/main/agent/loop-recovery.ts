@@ -12,6 +12,7 @@ import type { ProviderClient } from './client';
 import type { LLMResponse, NormalizedMessage, NormalizedTextBlock, NormalizedToolDefinition, NormalizedToolResultBlock, NormalizedToolUseBlock } from './client';
 import { type VerificationResult } from './verification';
 import { dispatchTools, type DispatchContext } from './loop-dispatch';
+import type { RuntimeHarnessSignal } from './harness-resolver';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -100,6 +101,7 @@ export interface RecoveryOptions {
   tools: NormalizedToolDefinition[];
   staticPrompt: string;
   dynamicPrompt: string;
+  getDynamicPrompt?: () => string;
   signal?: AbortSignal;
   iterationIndex: number;
   onStreamText?: (text: string) => void;
@@ -107,6 +109,7 @@ export interface RecoveryOptions {
   onToolStream?: (payload: { toolId: string; toolName: string; chunk: string }) => void;
   allToolCalls: { name: string; status: string; detail?: string; input?: Record<string, any> }[];
   toolCallCount: number;
+  onRuntimeSignal?: (signal: RuntimeHarnessSignal) => void;
 }
 
 /**
@@ -119,7 +122,7 @@ export async function runRecoveryIteration(
   currentText: string,
   opts: RecoveryOptions,
 ): Promise<string> {
-  const { client, messages, tools, staticPrompt, dynamicPrompt, signal, onStreamText, onToolActivity, allToolCalls } = opts;
+  const { client, messages, tools, staticPrompt, dynamicPrompt, getDynamicPrompt, signal, onStreamText, onToolActivity, allToolCalls } = opts;
 
   console.warn(`[Verify] Task verification failed: ${issue}`);
   onStreamText?.('\n\n__RESET__');
@@ -133,8 +136,9 @@ export async function runRecoveryIteration(
 
   try {
     let recoveryText = '';
+    const firstDynamicPrompt = getDynamicPrompt ? getDynamicPrompt() : dynamicPrompt;
     const recoveryResponse = await client.chat(
-      messages, tools, staticPrompt, dynamicPrompt,
+      messages, tools, staticPrompt, firstDynamicPrompt,
       (chunk) => { recoveryText += chunk; onStreamText?.(chunk); },
       { signal },
     );
@@ -152,12 +156,15 @@ export async function runRecoveryIteration(
         executionPlan: null,
         toolGroup: 'full',
         iterationIndex: opts.iterationIndex,
+        recoveryMode: true,
         filesystemQuoteLookupMode: false,
         strongFilesystemQuoteMatch: false,
         escalatedToFull: false,
         toolCallCount: opts.toolCallCount,
         allToolCalls,
         allVerifications: [],
+        lastToolFamily: undefined,
+        onRuntimeSignal: opts.onRuntimeSignal,
         onToolActivity,
         onToolStream: opts.onToolStream,
       };
@@ -168,8 +175,9 @@ export async function runRecoveryIteration(
 
       // Final LLM call for updated response text
       let finalRecoveryText = '';
+      const secondDynamicPrompt = getDynamicPrompt ? getDynamicPrompt() : dynamicPrompt;
       await client.chat(
-        messages, [], staticPrompt, dynamicPrompt,
+        messages, [], staticPrompt, secondDynamicPrompt,
         (chunk) => { finalRecoveryText += chunk; onStreamText?.(chunk); },
         { signal },
       );

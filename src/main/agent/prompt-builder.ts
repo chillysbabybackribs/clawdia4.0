@@ -70,6 +70,8 @@ export function buildDynamicPrompt(opts: {
   desktopContext?: string;
   executionConstraint?: string;
   systemAwarenessContext?: string;
+  harnessDirectiveContext?: string;
+  evidenceLedgerContext?: string;
   shortcutContext?: string;
   guiStateContext?: string;
   calendarContext?: string;
@@ -130,6 +132,14 @@ export function buildDynamicPrompt(opts: {
 
   if (opts.systemAwarenessContext) {
     lines.push('', opts.systemAwarenessContext);
+  }
+
+  if (opts.harnessDirectiveContext) {
+    lines.push('', opts.harnessDirectiveContext);
+  }
+
+  if (opts.evidenceLedgerContext) {
+    lines.push('', opts.evidenceLedgerContext);
   }
 
   // Shortcut reference for detected app

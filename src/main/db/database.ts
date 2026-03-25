@@ -33,6 +33,8 @@
  *   task_sequences — distilled multi-surface task recordings for Bloodhound v2 (v28)
  *   audit_tool_telemetry — rolling per-tool runtime audit facts (v29)
  *   payment_methods, spending_budgets, spending_transactions — Clawdia Wallet (v30)
+ *   runs.tool_completed_count/tool_failed_count — explicit tool outcome counters (v33)
+ *   run_artifacts.kind widened for evidence_ledger (v34)
  */
 
 import Database from 'better-sqlite3';
@@ -236,6 +238,7 @@ function runMigrations(db: Database.Database): void {
         conversation_id  TEXT NOT NULL,
         title            TEXT NOT NULL,
         goal             TEXT NOT NULL,
+        scenario_id      TEXT,
         status           TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed', 'cancelled')),
         started_at       TEXT NOT NULL,
         updated_at       TEXT NOT NULL,
@@ -300,6 +303,7 @@ function runMigrations(db: Database.Database): void {
         conversation_id  TEXT NOT NULL,
         title            TEXT NOT NULL,
         goal             TEXT NOT NULL,
+        scenario_id      TEXT,
         status           TEXT NOT NULL CHECK(status IN ('running', 'awaiting_approval', 'completed', 'failed', 'cancelled')),
         started_at       TEXT NOT NULL,
         updated_at       TEXT NOT NULL,
@@ -310,11 +314,11 @@ function runMigrations(db: Database.Database): void {
       );
 
       INSERT INTO runs (
-        id, conversation_id, title, goal, status,
+        id, conversation_id, title, goal, scenario_id, status,
         started_at, updated_at, completed_at, tool_call_count, error, was_detached
       )
       SELECT
-        id, conversation_id, title, goal, status,
+        id, conversation_id, title, goal, NULL, status,
         started_at, updated_at, completed_at, tool_call_count, error, was_detached
       FROM runs_old;
 
@@ -372,6 +376,7 @@ function runMigrations(db: Database.Database): void {
         conversation_id  TEXT NOT NULL,
         title            TEXT NOT NULL,
         goal             TEXT NOT NULL,
+        scenario_id      TEXT,
         status           TEXT NOT NULL CHECK(status IN ('running', 'awaiting_approval', 'needs_human', 'completed', 'failed', 'cancelled')),
         started_at       TEXT NOT NULL,
         updated_at       TEXT NOT NULL,
@@ -382,11 +387,11 @@ function runMigrations(db: Database.Database): void {
       );
 
       INSERT INTO runs (
-        id, conversation_id, title, goal, status,
+        id, conversation_id, title, goal, scenario_id, status,
         started_at, updated_at, completed_at, tool_call_count, error, was_detached
       )
       SELECT
-        id, conversation_id, title, goal, status,
+        id, conversation_id, title, goal, NULL, status,
         started_at, updated_at, completed_at, tool_call_count, error, was_detached
       FROM runs_old;
 
@@ -852,5 +857,75 @@ function runMigrations(db: Database.Database): void {
     `);
   }
 
-  console.log(`[DB] Schema at version ${Math.max(currentVersion, 30)}`);
+  if (currentVersion < 31) {
+    console.log('[DB] Running migration v31: audit_tool_telemetry drift flags');
+    try { db.exec(`ALTER TABLE audit_tool_telemetry ADD COLUMN approval_required INTEGER NOT NULL DEFAULT 0 CHECK(approval_required IN (0, 1))`); } catch {}
+    try { db.exec(`ALTER TABLE audit_tool_telemetry ADD COLUMN recovery_invoked INTEGER NOT NULL DEFAULT 0 CHECK(recovery_invoked IN (0, 1))`); } catch {}
+    try { db.exec(`ALTER TABLE audit_tool_telemetry ADD COLUMN intervention_triggered INTEGER NOT NULL DEFAULT 0 CHECK(intervention_triggered IN (0, 1))`); } catch {}
+    try { db.exec(`ALTER TABLE audit_tool_telemetry ADD COLUMN intervention_resolved INTEGER NOT NULL DEFAULT 0 CHECK(intervention_resolved IN (0, 1))`); } catch {}
+    try { db.exec(`ALTER TABLE audit_tool_telemetry ADD COLUMN sub_agent_spawned INTEGER NOT NULL DEFAULT 0 CHECK(sub_agent_spawned IN (0, 1))`); } catch {}
+    db.exec(`INSERT INTO schema_version (version) VALUES (31)`);
+  }
+
+  if (currentVersion < 32) {
+    console.log('[DB] Running migration v32: runs scenario_id');
+    try { db.exec(`ALTER TABLE runs ADD COLUMN scenario_id TEXT`); } catch {}
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_runs_scenario ON runs(scenario_id, updated_at DESC)`);
+    db.exec(`INSERT INTO schema_version (version) VALUES (32)`);
+  }
+
+  if (currentVersion < 33) {
+    console.log('[DB] Running migration v33: explicit run tool outcome counters');
+    try { db.exec(`ALTER TABLE runs ADD COLUMN tool_completed_count INTEGER NOT NULL DEFAULT 0`); } catch {}
+    try { db.exec(`ALTER TABLE runs ADD COLUMN tool_failed_count INTEGER NOT NULL DEFAULT 0`); } catch {}
+    db.exec(`
+      UPDATE runs
+      SET tool_call_count = CASE
+            WHEN EXISTS (SELECT 1 FROM run_events e WHERE e.run_id = runs.id AND e.kind = 'tool_started')
+              THEN (SELECT COUNT(*) FROM run_events e WHERE e.run_id = runs.id AND e.kind = 'tool_started')
+            ELSE tool_call_count
+          END,
+          tool_completed_count = COALESCE(
+            (SELECT COUNT(*) FROM run_events e WHERE e.run_id = runs.id AND e.kind = 'tool_completed'),
+            0
+          ),
+          tool_failed_count = COALESCE(
+            (SELECT COUNT(*) FROM run_events e WHERE e.run_id = runs.id AND e.kind = 'tool_failed'),
+            0
+          )
+    `);
+    db.exec(`INSERT INTO schema_version (version) VALUES (33)`);
+  }
+
+  if (currentVersion < 34) {
+    console.log('[DB] Running migration v34: widen run_artifacts kinds for evidence ledger');
+    db.exec(`
+      ALTER TABLE run_artifacts RENAME TO run_artifacts_old;
+
+      CREATE TABLE IF NOT EXISTS run_artifacts (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id      TEXT NOT NULL,
+        kind        TEXT NOT NULL CHECK(kind IN ('execution_plan', 'execution_graph_scaffold', 'execution_graph_state', 'evidence_ledger')),
+        title       TEXT NOT NULL,
+        body        TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+
+      INSERT INTO run_artifacts (id, run_id, kind, title, body, created_at, updated_at)
+      SELECT id, run_id, kind, title, body, created_at, updated_at
+      FROM run_artifacts_old;
+
+      DROP TABLE run_artifacts_old;
+
+      CREATE INDEX IF NOT EXISTS idx_run_artifacts_run_id
+        ON run_artifacts(run_id, id ASC);
+      CREATE INDEX IF NOT EXISTS idx_run_artifacts_kind
+        ON run_artifacts(kind, updated_at DESC);
+
+      INSERT INTO schema_version (version) VALUES (34);
+    `);
+  }
+
+  console.log(`[DB] Schema at version ${Math.max(currentVersion, 34)}`);
 }

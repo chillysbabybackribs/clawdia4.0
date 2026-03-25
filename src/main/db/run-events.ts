@@ -29,6 +29,13 @@ export interface RunEventRecord {
   payload: Record<string, any>;
 }
 
+interface DanglingToolStart {
+  toolUseId: string;
+  toolName: string;
+  surface?: string | null;
+  detail?: string;
+}
+
 export interface AppendRunEventInput {
   kind: string;
   phase?: string;
@@ -65,6 +72,77 @@ export function listRunEvents(runId: string): RunEventRow[] {
   return getDb()
     .prepare('SELECT * FROM run_events WHERE run_id = ? ORDER BY seq ASC')
     .all(runId) as RunEventRow[];
+}
+
+export function hasRunEventKind(runId: string, kind: string): boolean {
+  const row = getDb()
+    .prepare('SELECT 1 AS ok FROM run_events WHERE run_id = ? AND kind = ? LIMIT 1')
+    .get(runId, kind) as { ok?: number } | undefined;
+  return row?.ok === 1;
+}
+
+export function hasWorkflowStageEvent(runId: string, workflowStage: string): boolean {
+  const row = getDb()
+    .prepare(`
+      SELECT 1 AS ok
+      FROM run_events
+      WHERE run_id = ?
+        AND kind = 'workflow_stage_changed'
+        AND payload_json LIKE ?
+      LIMIT 1
+    `)
+    .get(runId, `%"workflowStage":"${workflowStage}"%`) as { ok?: number } | undefined;
+  return row?.ok === 1;
+}
+
+export function closeDanglingToolExecutions(runId: string, terminalStatus: 'completed' | 'failed' | 'cancelled'): number {
+  const rows = getDb()
+    .prepare(`
+      SELECT
+        tool_name,
+        surface,
+        json_extract(payload_json, '$.toolUseId') AS tool_use_id,
+        json_extract(payload_json, '$.detail') AS detail
+      FROM run_events started
+      WHERE run_id = ?
+        AND kind = 'tool_started'
+        AND json_extract(payload_json, '$.toolUseId') IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM run_events closed
+          WHERE closed.run_id = started.run_id
+            AND closed.kind IN ('tool_completed', 'tool_failed')
+            AND json_extract(closed.payload_json, '$.toolUseId') = json_extract(started.payload_json, '$.toolUseId')
+        )
+      ORDER BY seq ASC
+    `)
+    .all(runId) as Array<{ tool_name?: string | null; surface?: string | null; tool_use_id?: string | null; detail?: string | null }>;
+
+  for (const row of rows) {
+    const started: DanglingToolStart = {
+      toolUseId: row.tool_use_id || '',
+      toolName: row.tool_name || 'unknown_tool',
+      surface: row.surface,
+      detail: row.detail || undefined,
+    };
+    appendRunEvent(runId, {
+      kind: 'tool_failed',
+      phase: 'dispatch',
+      surface: started.surface || undefined,
+      toolName: started.toolName,
+      payload: {
+        toolUseId: started.toolUseId,
+        detail: started.detail || 'Tool execution did not record a terminal result before run finalization.',
+        durationMs: null,
+        resultPreview: `[Synthetic closeout] Tool execution was left open when the run ended with status ${terminalStatus}.`,
+        status: 'error',
+        synthesized: true,
+        terminalStatus,
+      },
+    });
+  }
+
+  return rows.length;
 }
 
 export function getRunEventRecords(runId: string): RunEventRecord[] {

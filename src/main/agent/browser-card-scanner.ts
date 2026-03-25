@@ -6,6 +6,13 @@ import type { NewPaymentMethod, CardType } from '../db/payment-methods';
 
 export type PaymentMethodCandidate = NewPaymentMethod & { browserSource: 'chrome' | 'firefox' };
 
+interface ChromeCardMetadataRow {
+  name_on_card: string;
+  last_four: string;
+  expiration_month: number;
+  expiration_year: number;
+}
+
 const CHROME_WEB_DATA_PATHS = [
   path.join(os.homedir(), '.config/google-chrome/Default/Web Data'),
   path.join(os.homedir(), '.config/chromium/Default/Web Data'),
@@ -31,16 +38,11 @@ function scanChrome(): PaymentMethodCandidate[] {
       const db = new Database(tmpPath, { readonly: true });
       try {
         // CRITICAL: Only read display metadata columns. NEVER read card_number_encrypted.
-        const rows = db.prepare<Array<{
-          name_on_card: string;
-          last_four: string;
-          expiration_month: number;
-          expiration_year: number;
-        }>>(`
+        const rows = db.prepare(`
           SELECT name_on_card, last_four, expiration_month, expiration_year
           FROM credit_cards
           WHERE use_count > 0
-        `).all();
+        `).all() as ChromeCardMetadataRow[];
 
         return rows.map(row => ({
           label: `${inferCardType(row.name_on_card)} ••••${row.last_four}`,

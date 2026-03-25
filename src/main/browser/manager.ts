@@ -24,6 +24,7 @@ import { app, BrowserView, BrowserWindow, Menu } from 'electron';
 import { randomUUID } from 'crypto';
 import { IPC_EVENTS } from '../../shared/ipc-channels';
 import type { BrowserExecutionMode } from '../../shared/types';
+import { getUiSession, patchUiSession } from '../store';
 import { BROWSER_PARTITION, getBrowserSession } from './session';
 import { wait, waitForDomSettled, waitForLoad, waitForPageReady, waitForPotentialNavigation, waitForSelector, waitForText, waitForUrlMatch, withTimeout } from './waits';
 import { fillFieldWithInputEvents } from './native-input';
@@ -84,6 +85,7 @@ let isolatedTabsByRunId: Map<string, string> = new Map();
 let currentBounds = { x: 0, y: 0, width: 0, height: 0 };
 let executionMode: BrowserExecutionMode = 'headed';
 let browserSessionInitialized = false;
+let restoringPersistedTabs = false;
 let pageStateByTabId = new Map<string, {
   extractedEntities: Record<string, any>;
   recentExtractionResults: Array<{ kind: string; recordedAt: string; data: any }>;
@@ -130,9 +132,49 @@ export function matchUrlHistory(prefix: string): string {
 export function initBrowser(win: BrowserWindow): void {
   mainWindow = win;
   initBrowserSession();
-  createTab('https://www.google.com');
+  restorePersistedTabs();
   emitModeChanged('init');
   console.log('[Browser] Initialized with tabs');
+}
+
+function persistVisibleTabs(): void {
+  if (restoringPersistedTabs) return;
+  const visibleTabs = Array.from(tabs.values()).filter((tab) => !tab.hidden);
+  const activeIndex = Math.max(0, visibleTabs.findIndex((tab) => tab.id === activeTabId));
+  patchUiSession({
+    browserTabs: {
+      tabs: visibleTabs.map((tab) => ({
+        url: tab.url || 'about:blank',
+        title: tab.title || 'New Tab',
+      })),
+      activeIndex,
+    },
+  });
+}
+
+function restorePersistedTabs(): void {
+  const snapshot = getUiSession().browserTabs;
+  const tabsToRestore = snapshot.tabs.filter((tab) => typeof tab.url === 'string' && tab.url.trim());
+  if (tabsToRestore.length === 0) {
+    createTab('https://www.google.com');
+    persistVisibleTabs();
+    return;
+  }
+
+  restoringPersistedTabs = true;
+  const restoredIds: string[] = [];
+  try {
+    for (const tab of tabsToRestore) {
+      const id = createTab(tab.url, { activate: false });
+      if (id) restoredIds.push(id);
+    }
+    const activeIndex = Math.max(0, Math.min(snapshot.activeIndex, restoredIds.length - 1));
+    if (restoredIds[activeIndex]) switchTab(restoredIds[activeIndex]);
+    else if (restoredIds[0]) switchTab(restoredIds[0]);
+  } finally {
+    restoringPersistedTabs = false;
+  }
+  persistVisibleTabs();
 }
 
 function getChromeLikeUserAgent(): string {
@@ -295,6 +337,7 @@ export function createTab(url?: string, opts: { hidden?: boolean; activate?: boo
 
   console.log(`[Browser] Created tab ${id} (${tabs.size} total)`);
   emitTabsChanged();
+  persistVisibleTabs();
   return id;
 }
 
@@ -324,6 +367,7 @@ export function switchTab(id: string): void {
   mainWindow.webContents.send(IPC_EVENTS.BROWSER_TITLE_CHANGED, tab.title);
   mainWindow.webContents.send(IPC_EVENTS.BROWSER_LOADING, tab.isLoading);
   emitTabsChanged();
+  persistVisibleTabs();
 }
 
 export function closeTab(id: string): void {
@@ -351,6 +395,7 @@ export function closeTab(id: string): void {
 
   console.log(`[Browser] Closed tab ${id} (${tabs.size} remaining)`);
   emitTabsChanged();
+  persistVisibleTabs();
 }
 
 export function allocateIsolatedTab(runId: string, url = 'about:blank'): string {
@@ -521,6 +566,7 @@ function wireTabEvents(tab: Tab): void {
       mainWindow?.webContents.send(IPC_EVENTS.BROWSER_TITLE_CHANGED, tab.title);
     }
     emitTabsChanged();
+    persistVisibleTabs();
   });
 
   wc.on('did-navigate-in-page', (_event, url) => {
@@ -530,6 +576,7 @@ function wireTabEvents(tab: Tab): void {
       mainWindow?.webContents.send(IPC_EVENTS.BROWSER_URL_CHANGED, url);
     }
     emitTabsChanged();
+    persistVisibleTabs();
   });
 
   wc.on('page-title-updated', (_event, title) => {
@@ -538,6 +585,7 @@ function wireTabEvents(tab: Tab): void {
       mainWindow?.webContents.send(IPC_EVENTS.BROWSER_TITLE_CHANGED, title);
     }
     emitTabsChanged();
+    persistVisibleTabs();
   });
 
   wc.on('page-favicon-updated', (_event, favicons: string[]) => {
@@ -555,6 +603,7 @@ function wireTabEvents(tab: Tab): void {
         mainWindow?.webContents.send(IPC_EVENTS.BROWSER_LOADING, true);
       }
       emitTabsChanged();
+      persistVisibleTabs();
     }
   });
 
@@ -567,6 +616,7 @@ function wireTabEvents(tab: Tab): void {
         mainWindow?.webContents.send(IPC_EVENTS.BROWSER_LOADING, false);
       }
       emitTabsChanged();
+      persistVisibleTabs();
     }, 300);
   };
 

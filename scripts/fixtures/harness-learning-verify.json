@@ -1,0 +1,71 @@
+{
+  "windowSize": 100,
+  "observedToolCalls": 16,
+  "observedRuns": 4,
+  "mostReliableTools": [],
+  "leastReliableTools": [],
+  "averageDurationByTool": {},
+  "repeatedRecentFailures": [],
+  "recoveryHeavyTools": [],
+  "rarelyUsedTools": [],
+  "categoryReliability": [],
+  "interventionObservedRecently": false,
+  "interventionResolvedRecently": false,
+  "subAgentSpawnObservedRecently": false,
+  "approvalObservedRecently": false,
+  "capabilityHealth": [],
+  "capabilityCategories": [],
+  "scenarioSummaries": [],
+  "workflowSummary": {
+    "strongestWorkflows": [],
+    "weakestWorkflows": [],
+    "highestFrictionWorkflows": [],
+    "sparseDataWarnings": []
+  },
+  "overallScore": 6.1,
+  "autoTuningHints": [],
+  "harnessLearningSummaries": [
+    {
+      "patternKey": "coding:modify_workspace",
+      "harnessId": "coding",
+      "baseGoal": "modify_workspace",
+      "sampleSize": 4,
+      "completionRate": 0.5,
+      "successfulHarnesses": [{ "harnessId": "coding", "count": 2 }],
+      "failingHarnesses": [{ "harnessId": "coding", "count": 2 }],
+      "successfulStartingStrategies": [{ "strategy": "verify_before_write", "count": 2 }],
+      "failingStartingStrategies": [{ "strategy": "direct_balanced", "count": 2 }],
+      "repeatedGoalTightenings": [{ "goal": "safely_apply_change", "count": 3 }],
+      "repeatedStageStalls": [{ "subGoal": "verify_change", "count": 3 }],
+      "repeatedFragileTransitions": [{ "transition": "browser -> filesystem", "count": 2 }],
+      "repeatedFailingToolFamilies": [{ "family": "filesystem", "count": 2 }],
+      "optimizationHints": [
+        {
+          "id": "prefer_verify_before_write",
+          "kind": "tighten_goal_posture",
+          "reason": "Recent similar runs repeatedly tightened toward safe-change verification posture.",
+          "effect": "Start with stronger verify-before-write and safe-change caution.",
+          "confidence": { "score": 0.8, "sampleSize": 4, "recentWindowSize": 12, "sparse": false },
+          "preferStrategy": "verify_before_write",
+          "preferGoal": "safely_apply_change",
+          "retryGuidance": "verify_before_retry"
+        },
+        {
+          "id": "stage_caution_verify_change",
+          "kind": "stage_caution",
+          "reason": "Recent similar runs repeatedly stalled at verify_change.",
+          "effect": "Start with stronger verification and branching caution around verify_change.",
+          "confidence": { "score": 0.8, "sampleSize": 4, "recentWindowSize": 12, "sparse": false },
+          "cautionSubGoal": "verify_change",
+          "branchingGuidance": "narrow_path"
+        }
+      ],
+      "evidenceSummary": [
+        "coding:modify_workspace completed 2/4 recent runs.",
+        "Frequent goal tightening: safely_apply_change.",
+        "Repeated stage stall: verify_change."
+      ],
+      "confidence": { "score": 0.8, "sampleSize": 4, "recentWindowSize": 12, "sparse": false }
+    }
+  ]
+}

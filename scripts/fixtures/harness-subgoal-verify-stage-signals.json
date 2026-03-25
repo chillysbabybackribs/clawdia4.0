@@ -1,0 +1,32 @@
+[
+  {
+    "kind": "tool_result",
+    "iterationIndex": 0,
+    "toolName": "file_read",
+    "toolFamily": "filesystem",
+    "success": true,
+    "detail": "Inspected current file"
+  },
+  {
+    "kind": "tool_result",
+    "iterationIndex": 1,
+    "toolName": "file_edit",
+    "toolFamily": "filesystem",
+    "success": true,
+    "detail": "Prepared change"
+  },
+  {
+    "kind": "tool_result",
+    "iterationIndex": 2,
+    "toolName": "file_write",
+    "toolFamily": "filesystem",
+    "success": true,
+    "detail": "Applied change"
+  },
+  {
+    "kind": "verification_failed",
+    "iterationIndex": 3,
+    "verificationType": "file_exists",
+    "detail": "Expected output missing"
+  }
+]

@@ -1,0 +1,10 @@
+[
+  {
+    "kind": "tool_result",
+    "iterationIndex": 0,
+    "toolName": "file_write",
+    "toolFamily": "filesystem",
+    "success": false,
+    "detail": "Write attempted before inspection"
+  }
+]

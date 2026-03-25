@@ -1,0 +1,59 @@
+{
+  "windowSize": 100,
+  "observedToolCalls": 4,
+  "observedRuns": 1,
+  "mostReliableTools": [],
+  "leastReliableTools": [],
+  "averageDurationByTool": {},
+  "repeatedRecentFailures": [],
+  "recoveryHeavyTools": [],
+  "rarelyUsedTools": [],
+  "categoryReliability": [],
+  "interventionObservedRecently": false,
+  "interventionResolvedRecently": false,
+  "subAgentSpawnObservedRecently": false,
+  "approvalObservedRecently": false,
+  "capabilityHealth": [],
+  "capabilityCategories": [],
+  "scenarioSummaries": [],
+  "workflowSummary": {
+    "strongestWorkflows": [],
+    "weakestWorkflows": [],
+    "highestFrictionWorkflows": [],
+    "sparseDataWarnings": []
+  },
+  "overallScore": 4.5,
+  "autoTuningHints": [],
+  "harnessLearningSummaries": [
+    {
+      "patternKey": "coding:modify_workspace",
+      "harnessId": "coding",
+      "baseGoal": "modify_workspace",
+      "sampleSize": 1,
+      "completionRate": 1,
+      "successfulHarnesses": [{ "harnessId": "coding", "count": 1 }],
+      "failingHarnesses": [],
+      "successfulStartingStrategies": [{ "strategy": "low_shell_dependence", "count": 1 }],
+      "failingStartingStrategies": [],
+      "repeatedGoalTightenings": [],
+      "repeatedStageStalls": [],
+      "repeatedFragileTransitions": [],
+      "repeatedFailingToolFamilies": [{ "family": "shell", "count": 1 }],
+      "optimizationHints": [
+        {
+          "id": "prefer_low_shell_dependence",
+          "kind": "prefer_strategy_start",
+          "reason": "One run shifted away from shell-heavy execution.",
+          "effect": "Start with lower shell dependence.",
+          "confidence": { "score": 0.2, "sampleSize": 1, "recentWindowSize": 12, "sparse": true },
+          "preferStrategy": "low_shell_dependence",
+          "demoteFamily": "shell"
+        }
+      ],
+      "evidenceSummary": [
+        "Only 1 recent run matched coding:modify_workspace; learning stayed advisory."
+      ],
+      "confidence": { "score": 0.2, "sampleSize": 1, "recentWindowSize": 12, "sparse": true }
+    }
+  ]
+}

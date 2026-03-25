@@ -33,11 +33,16 @@ const DOCUMENT_RE = /(?:create|generate|make|write|draft|prepare|export).*(?:doc
 
 // Expanded to cover: open-source creative apps, proprietary apps, media control,
 // GUI interaction phrases, and common desktop actions
-const DESKTOP_APP_RE = /gimp|blender|inkscape|libreoffice|audacity|obs\b|kdenlive|shotcut|vlc|firefox|chrome|spotify|discord|slack|steam|figma|zoom|thunderbird|nautilus|thunar|dolphin|terminal|vscode|vs code|visual studio code|claude code|claude-code|sublime|atom|krita|darktable|rawtherapee|openshot|pitivi|handbrake|transmission|qbittorrent|telegram|signal|teams|skype|(launch|open|start|run|control|close|quit|interact).*app|play.*music|pause.*music|next.*track|prev.*track|volume\b|take.*screenshot|click.*button|type.*into|press.*key|dbus\b|xdotool|wmctrl|gui\b.*interact|desktop.*control|window.*manage|list.*windows/i;
+const DESKTOP_APP_RE = /gimp|blender|inkscape|libreoffice|audacity|obs\b|kdenlive|shotcut|vlc|firefox|chrome|spotify|discord|slack|steam|figma|zoom|thunderbird|nautilus|thunar|dolphin|terminal|vscode|vs code|visual studio code|sublime|atom|krita|darktable|rawtherapee|openshot|pitivi|handbrake|transmission|qbittorrent|telegram|signal|teams|skype|(launch|open|start|run|control|close|quit|interact).*app|play.*music|pause.*music|next.*track|prev.*track|volume\b|take.*screenshot|click.*button|type.*into|press.*key|dbus\b|xdotool|wmctrl|gui\b.*interact|desktop.*control|window.*manage|list.*windows/i;
 
 const SELF_RE = /clawdia|your (code|source|memory|data|settings|config)|this app|clear (my|your|all) (data|history|memory)|reset/i;
 
 const OPUS_RE = /\bassess\b|evaluate|deep analysis|think carefully|plan.*approach/i;
+
+function isExplicitClaudeCodeInvocation(message: string): boolean {
+  return /\b(?:use|run|launch|open|start|invoke|ask|have)\s+claude(?:\s+code|-code)\b/i.test(message)
+    || /\bclaude(?:\s+code|-code)\s+(?:to|for)\s+(?:review|inspect|analyze|check|fix|edit|write|run)\b/i.test(message);
+}
 
 export function classify(message: string): TaskProfile {
   const trimmed = message.trim();
@@ -61,7 +66,7 @@ export function classify(message: string): TaskProfile {
   const matchesCoding = CODING_RE.test(trimmed);
   const matchesFilesystemAgent = FILESYSTEM_AGENT_RE.test(trimmed);
   const matchesDocument = DOCUMENT_RE.test(trimmed);
-  const matchesDesktopApp = DESKTOP_APP_RE.test(trimmed);
+  const matchesDesktopApp = DESKTOP_APP_RE.test(trimmed) || isExplicitClaudeCodeInvocation(trimmed);
   const matchesSelf = SELF_RE.test(trimmed);
   const matchesResearch = RESEARCH_RE.test(trimmed);
 

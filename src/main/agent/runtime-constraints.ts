@@ -1,0 +1,4 @@
+export const LOOP_MAX_WALL_MS = 10 * 60 * 1000;
+export const DEFAULT_SHELL_TIMEOUT_SECONDS = 30;
+export const MAX_SHELL_TIMEOUT_SECONDS = 300;
+export const EXECUTION_PLANNING_ENABLED = false;

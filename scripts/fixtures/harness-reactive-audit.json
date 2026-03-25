@@ -1,0 +1,209 @@
+{
+  "windowSize": 100,
+  "observedToolCalls": 42,
+  "observedRuns": 8,
+  "mostReliableTools": [],
+  "leastReliableTools": [],
+  "averageDurationByTool": {
+    "gui_interact": 2200,
+    "shell_exec": 1800
+  },
+  "repeatedRecentFailures": [
+    { "toolName": "shell_exec", "streak": 3 }
+  ],
+  "recoveryHeavyTools": [
+    { "toolName": "gui_interact", "count": 3 },
+    { "toolName": "shell_exec", "count": 2 }
+  ],
+  "rarelyUsedTools": [],
+  "categoryReliability": [],
+  "interventionObservedRecently": true,
+  "interventionResolvedRecently": true,
+  "subAgentSpawnObservedRecently": false,
+  "approvalObservedRecently": true,
+  "capabilityHealth": [
+    {
+      "subsystem": "browser_automation",
+      "category": "browser",
+      "status": "healthy",
+      "declaredAvailable": true,
+      "observedRecently": true,
+      "successRateRecent": 0.92,
+      "sampleSize": 8,
+      "degraded": false,
+      "disabledStaticConstraint": false,
+      "functionalityScore": 8,
+      "reliabilityScore": 8,
+      "uxScore": 8,
+      "completenessScore": 8,
+      "confidenceScore": 0.9
+    },
+    {
+      "subsystem": "gui_automation",
+      "category": "gui",
+      "status": "degraded",
+      "declaredAvailable": true,
+      "observedRecently": true,
+      "successRateRecent": 0.45,
+      "sampleSize": 8,
+      "degraded": true,
+      "disabledStaticConstraint": false,
+      "functionalityScore": 4,
+      "reliabilityScore": 3,
+      "uxScore": 4,
+      "completenessScore": 4,
+      "confidenceScore": 0.85
+    },
+    {
+      "subsystem": "planning",
+      "category": "planning",
+      "status": "unproven",
+      "declaredAvailable": true,
+      "observedRecently": false,
+      "sampleSize": 1,
+      "degraded": false,
+      "disabledStaticConstraint": true,
+      "functionalityScore": 2,
+      "reliabilityScore": 2,
+      "uxScore": 2,
+      "completenessScore": 2,
+      "confidenceScore": 0.25
+    },
+    {
+      "subsystem": "shell_cli",
+      "category": "shell",
+      "status": "degraded",
+      "declaredAvailable": true,
+      "observedRecently": true,
+      "successRateRecent": 0.5,
+      "sampleSize": 6,
+      "degraded": true,
+      "disabledStaticConstraint": false,
+      "functionalityScore": 5,
+      "reliabilityScore": 4,
+      "uxScore": 4,
+      "completenessScore": 5,
+      "confidenceScore": 0.8
+    },
+    {
+      "subsystem": "sub_agent_swarm",
+      "category": "autonomy",
+      "status": "degraded",
+      "declaredAvailable": true,
+      "observedRecently": true,
+      "successRateRecent": 0.4,
+      "sampleSize": 5,
+      "degraded": true,
+      "disabledStaticConstraint": false,
+      "functionalityScore": 3,
+      "reliabilityScore": 3,
+      "uxScore": 4,
+      "completenessScore": 3,
+      "confidenceScore": 0.7
+    }
+  ],
+  "capabilityCategories": [],
+  "scenarioSummaries": [
+    {
+      "scenario": {
+        "id": "browser_to_filesystem_report",
+        "name": "Browser to Filesystem Report",
+        "description": "Research something in the browser and write it to disk",
+        "tags": ["browser", "filesystem", "report"]
+      },
+      "runCount": 5,
+      "completionRate": 0.4,
+      "avgDurationMs": 42000,
+      "avgToolCalls": 9,
+      "workflowCompletionRate": 0.4,
+      "averageDurationMs": 42000,
+      "averageToolCalls": 9,
+      "earlyFailureRate": 0.6,
+      "lateFailureRate": 0.4,
+      "interventionRate": 0.2,
+      "approvalRate": 0.4,
+      "recoveryRate": 0.6,
+      "crossSubsystemCount": 2,
+      "retryBurden": 2.8,
+      "workflowEfficiencyScore": 3.8,
+      "workflowCohesionScore": 4.2,
+      "workflowConfidenceScore": 0.82,
+      "mostCommonPath": "browser_read_page -> browser_extract -> shell_exec -> shell_exec",
+      "mostCommonSuccessfulPath": "browser_read_page -> browser_extract -> shell_exec",
+      "mostCommonFailedPath": "browser_read_page -> browser_extract -> shell_exec -> shell_exec",
+      "mostCommonRecoveryPath": "shell_exec -> shell_exec",
+      "mostCommonFailureStepIndex": 1,
+      "mostCommonFailureTool": "shell_exec",
+      "mostCommonFailureSubsystem": "shell_cli",
+      "failureStepDistribution": [
+        { "stepIndex": 1, "count": 3 }
+      ],
+      "fragileTransitions": [
+        { "transition": "browser -> filesystem", "failingRuns": 3, "totalRuns": 4, "failureRate": 0.75 }
+      ],
+      "repeatedFailureClusterCount": 2,
+      "toolBeforeRecovery": "shell_exec",
+      "postRecoveryContinuationPath": "shell_exec -> shell_exec",
+      "pathSummary": {
+        "mostCommonPath": "browser_read_page -> browser_extract -> shell_exec -> shell_exec",
+        "mostCommonSuccessfulPath": "browser_read_page -> browser_extract -> shell_exec",
+        "mostCommonFailedPath": "browser_read_page -> browser_extract -> shell_exec -> shell_exec"
+      },
+      "failureLocalizationSummary": {
+        "mostCommonFailureStepIndex": 1,
+        "mostCommonFailureTool": "shell_exec",
+        "mostCommonFailureSubsystem": "shell_cli",
+        "failureStepDistribution": [
+          { "stepIndex": 1, "count": 3 }
+        ],
+        "repeatedFailureClusterCount": 2
+      },
+      "transitionSummary": {
+        "mostCommonSuccessfulTransition": "browser -> filesystem",
+        "mostCommonFailedTransition": "browser -> filesystem",
+        "fragileTransitions": [
+          { "transition": "browser -> filesystem", "failingRuns": 3, "totalRuns": 4, "failureRate": 0.75 }
+        ]
+      },
+      "recoveryPathSummary": {
+        "mostCommonRecoveryPath": "shell_exec -> shell_exec",
+        "toolBeforeRecovery": "shell_exec",
+        "postRecoveryContinuationPath": "shell_exec -> shell_exec"
+      },
+      "primaryFailureTools": [
+        { "toolName": "shell_exec", "count": 3 }
+      ],
+      "primaryFailureSubsystems": [
+        { "subsystem": "shell_cli", "count": 3 }
+      ]
+    }
+  ],
+  "workflowSummary": {
+    "strongestWorkflows": [],
+    "weakestWorkflows": [
+      { "scenarioId": "browser_to_filesystem_report", "score": 3.8, "note": "low cohesion and high retry burden" }
+    ],
+    "highestFrictionWorkflows": [
+      { "scenarioId": "browser_to_filesystem_report", "score": 2.8, "note": "fragile browser->filesystem transition" }
+    ],
+    "sparseDataWarnings": []
+  },
+  "overallScore": 5.1,
+  "autoTuningHints": [
+    {
+      "kind": "prefer_browser_over_gui",
+      "reason": "GUI automation is degraded relative to browser automation.",
+      "effect": "Prefer browser tools when both are viable."
+    },
+    {
+      "kind": "chunk_shell_commands",
+      "reason": "Shell commands are timing out or retrying heavily.",
+      "effect": "Verify progress before retrying shell-heavy steps."
+    },
+    {
+      "kind": "treat_sub_agents_as_optional",
+      "reason": "Sub-agent swarm health is weak.",
+      "effect": "Avoid unnecessary branching."
+    }
+  ]
+}

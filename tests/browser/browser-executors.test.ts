@@ -108,4 +108,11 @@ describe('browser executors', () => {
     expect(manager.typeText).not.toHaveBeenCalled();
     expect(result).toBe('filled');
   });
+
+  it('rejects about:blank navigations before calling the browser manager', async () => {
+    const { executeBrowserNavigate } = await import('../../src/main/agent/executors/browser-executors');
+    const result = await executeBrowserNavigate({ url: 'about:blank', __runId: 'run-4' });
+    expect(manager.navigate).not.toHaveBeenCalled();
+    expect(result).toContain('Refusing blank navigation target');
+  });
 });

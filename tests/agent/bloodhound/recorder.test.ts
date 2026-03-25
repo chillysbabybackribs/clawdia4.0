@@ -48,6 +48,8 @@ function makeRunRow(overrides: Record<string, any> = {}) {
     updated_at: new Date().toISOString(),
     completed_at: new Date().toISOString(),
     tool_call_count: 3,
+    tool_completed_count: 3,
+    tool_failed_count: 0,
     error: null,
     was_detached: 0,
     provider: 'anthropic',

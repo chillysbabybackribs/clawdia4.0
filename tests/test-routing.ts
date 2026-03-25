@@ -143,6 +143,20 @@ section('extractAppName — registered apps');
   assertEq(extractAppName('convert with ffmpeg'), 'ffmpeg', 'Extracts ffmpeg');
 }
 
+section('extractAppName — Claude mention without invocation');
+{
+  assertEq(
+    extractAppName('analyze the clawdia codebase and compare it to a Claude Code harness repo'),
+    null,
+    'Does not extract claude for repo-analysis questions',
+  );
+  assertEq(
+    extractAppName('search github for a Claude Code harness and compare it to this source tree'),
+    null,
+    'Does not extract claude for research queries',
+  );
+}
+
 section('extractAppName — programmatic aliases');
 {
   assertEq(extractAppName('use pillow to process the image'), 'imagemagick', 'pillow → imagemagick');

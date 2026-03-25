@@ -86,6 +86,7 @@ contextBridge.exposeInMainWorld('clawdia', {
     events: (runId: string) => invoke('run:events', runId),
     artifacts: (runId: string) => invoke('run:artifacts', runId),
     changes: (runId: string) => invoke('run:changes', runId),
+    scorecard: () => invoke('run:scorecard'),
     approvals: (runId: string) => invoke('run:approvals', runId),
     humanInterventions: (runId: string) => invoke('run:human-interventions', runId),
     approve: (approvalId: number) => invoke('run:approve', approvalId),
