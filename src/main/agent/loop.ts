@@ -13,12 +13,12 @@
 import type { BrowserWindow } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
-import { classify, type TaskProfile, type ToolGroup } from './classifier';
+import { classify, hasStrongYtdlpIntent, type TaskProfile, type ToolGroup } from './classifier';
 import { applyAgentProfileOverride } from './agent-profile-override';
 import { isFilesystemQuoteLookupTask } from './filesystem-agent-routing';
 import { buildStaticPrompt, buildDynamicPrompt } from './prompt-builder';
 import { getToolsForGroup, filterTools } from './tool-builder';
-import { createProviderClient, resolveModelForProvider, type LLMResponse, type NormalizedMessage, type NormalizedTextBlock, type NormalizedToolUseBlock } from './client';
+import { createProviderClient, resolveModelForProvider, type LLMResponse, type NormalizedMessage, type NormalizedTextBlock, type NormalizedToolResultBlock, type NormalizedToolUseBlock } from './client';
 import * as appRegistry from '../db/app-registry';
 import type { ExecutionPlan } from '../db/app-registry';
 import { savePlaybook, shouldAutoSavePlaybook, validatePlaybookCandidate, writeBloodhoundExecutorArtifacts, executeSavedBloodhoundPlaybook } from '../db/browser-playbooks';
@@ -30,20 +30,17 @@ import { dispatchTools, type DispatchContext } from './loop-dispatch';
 import { buildEvidenceLedgerPromptBlock, createEvidenceLedgerState } from './evidence-ledger';
 import { verifyFileOutcomes, runRecoveryIteration, logVerificationSummary } from './loop-recovery';
 import { createExecutionPlan, requireExecutionPlanApproval, shouldCreateExecutionPlan } from './workflow';
-import { buildBrowserStepControllerPrompt, extractStepDoneMarker, stripStepDoneMarkers } from './task-compiler';
 import { cancelPendingApprovals } from './approval-manager';
 import { cancelPendingHumanInterventions } from './human-intervention-manager';
 import { appendRunEvent } from '../db/run-events';
 import { upsertRunArtifact } from '../db/run-artifacts';
-import { runExists } from '../db/runs';
 import { getSelectedPerformanceStance, getUnrestrictedMode } from '../store';
 import type { AgentProfile, PerformanceStance, ProviderId } from '../../shared/types';
 import { setProcessAgentProfile, setProcessExecutionInfo, setProcessWorkflowStage } from './process-manager';
-import { getCurrentUrl, runHarness } from '../browser/manager';
+import { countRunBackgroundTabs, getCurrentUrl, preserveRunBackgroundTabs, runHarness } from '../browser/manager';
 import { prepareHarnessExecutionFromMessage } from '../browser/site-harness';
 import { calendarList } from '../db/calendar';
 import type { NormalizedMessageContentBlock } from './provider/types';
-import * as graphExecutor from './graph-executor';
 import { EXECUTION_PLANNING_ENABLED, LOOP_MAX_WALL_MS } from './runtime-constraints';
 import { getSystemAuditSummary, getSystemAwarenessBlock } from './system-audit';
 import {
@@ -63,10 +60,211 @@ const MAX_HISTORY_TURNS = 16;
 const MAX_HISTORY_TOKENS = 80_000;
 const WRAP_UP_THRESHOLD = 25;
 const GUI_BATCH_NUDGE_AT = 2;
+const MAX_BROWSER_SEARCH_ROUNDS = 2;
+const MAX_BROWSER_INSPECTED_TARGETS = 6;
+const MAX_BROWSER_SCROLL_FALLBACKS_PER_TARGET = 2;
+const MAX_BROWSER_BACKGROUND_TABS = 6;
 
 const NARRATION_RE = /^(?:I'll start by|Let me (?:start|begin|first)|I need to (?:first|read|check|look)|Here's my (?:plan|approach)|I want to (?:start|begin)|I'll (?:begin|first)|To (?:start|begin|complete|accomplish|do) this|First,? I(?:'ll| will| need)|I'm going to start)/i;
 const CAPABILITY_DENIAL_RE = /(?:I (?:can't|cannot|don't have|am unable to|lack the ability to|do not have) (?:access|browse|execute|run|open|launch|read|write|interact with|control|use))/i;
 const MULTI_STEP_CONNECTOR_RE = /\b(and then|then|after that|afterwards|next|followed by)\b/i;
+
+interface BrowserRuntimeBudgetState {
+  searchRounds: number;
+  inspectedTargets: Set<string>;
+  scrollFallbackCounts: Map<string, number>;
+  lastTargetKey: string | null;
+  pendingBackgroundTabIds: string[];
+  successfulExtractions: number;
+  successfulArticleOrListingExtractions: number;
+  successfulDiscussionExtractions: number;
+  firstWaveComplete: boolean;
+}
+
+function inferBrowserTargetKey(toolName: string, input: Record<string, any>, fallbackTargetKey?: string | null): string | null {
+  if (typeof input.tabId === 'string' && input.tabId.trim()) return `tab:${input.tabId.trim()}`;
+  if (typeof input.url === 'string' && input.url.trim()) return `url:${input.url.trim()}`;
+  if (toolName.startsWith('browser_') && typeof input.__runId === 'string' && input.__runId.trim()) {
+    return fallbackTargetKey || `run:${input.__runId.trim()}:active`;
+  }
+  return fallbackTargetKey || null;
+}
+
+function detectBrowserPolicyViolation(
+  toolUseBlocks: NormalizedToolUseBlock[],
+  state: BrowserRuntimeBudgetState,
+  runId?: string,
+): string | null {
+  const requestedBackgroundOpens = toolUseBlocks.filter((block) => block.name === 'browser_tab_open_background').length;
+  const hasSinglePageTunnelTurn =
+    state.searchRounds >= 1
+    && state.successfulExtractions === 0
+    && state.pendingBackgroundTabIds.length === 0
+    && requestedBackgroundOpens === 0
+    && toolUseBlocks.some((block) => ['browser_navigate', 'browser_read_page', 'browser_scroll'].includes(block.name));
+  if (hasSinglePageTunnelTurn) {
+    return 'Before drilling into one page, open a small balanced first wave of promising sources in parallel and inspect those first. Prefer 2 guide/review sources plus 1 listing or store source.';
+  }
+
+  if (state.firstWaveComplete) {
+    const hasNewSearch = toolUseBlocks.some((block) => block.name === 'browser_search');
+    if (hasNewSearch) {
+      return 'The first evidence wave is already complete. Do not issue more browser_search calls unless a required field is still missing from the current sources.';
+    }
+    if (requestedBackgroundOpens > 0) {
+      return 'The first evidence wave is already complete. Use the sources you already opened and synthesize before opening more tabs.';
+    }
+    const hasReadPressure = toolUseBlocks.some((block) => block.name === 'browser_read_page');
+    const hasFreshExtract = toolUseBlocks.some((block) => block.name === 'browser_extract');
+    if (hasReadPressure && !hasFreshExtract && state.successfulArticleOrListingExtractions >= 2) {
+      return 'You already have a successful first-wave extract batch. Avoid browser_read_page unless a specific missing field cannot be obtained from the extracted results.';
+    }
+  }
+
+  const hasUntargetedInspectWithPendingTabs = state.pendingBackgroundTabIds.length > 0
+    && toolUseBlocks.some((block) => ['browser_navigate', 'browser_extract', 'browser_read_page'].includes(block.name)
+      && !(typeof (block.input as Record<string, any>)?.tabId === 'string' && String((block.input as Record<string, any>).tabId).trim()));
+  if (hasUntargetedInspectWithPendingTabs) {
+    const tabIds = state.pendingBackgroundTabIds.slice(0, 6).join(', ');
+    return `Background tabs are already open. Target inspection explicitly with tabId instead of using the active tab. Pending tabIds: ${tabIds}`;
+  }
+
+  const hasSearch = toolUseBlocks.some((block) => block.name === 'browser_search');
+  if (hasSearch && state.searchRounds >= MAX_BROWSER_SEARCH_ROUNDS) {
+    return 'Search budget reached. Select from the sources you already found and inspect or synthesize instead of issuing more browser_search calls.';
+  }
+
+  if (requestedBackgroundOpens > 0 && runId) {
+    const openTabs = countRunBackgroundTabs(runId);
+    if (openTabs + requestedBackgroundOpens > MAX_BROWSER_BACKGROUND_TABS) {
+      return 'Background tab budget reached. Close stale background tabs or use the sources you already opened before opening more.';
+    }
+  }
+
+  const projectedTargets = new Set(state.inspectedTargets);
+  for (const block of toolUseBlocks) {
+    if (!['browser_navigate', 'browser_extract', 'browser_read_page'].includes(block.name)) continue;
+    const targetKey = inferBrowserTargetKey(block.name, block.input as Record<string, any>, state.lastTargetKey);
+    if (targetKey) projectedTargets.add(targetKey);
+  }
+  if (projectedTargets.size > MAX_BROWSER_INSPECTED_TARGETS) {
+    return 'Inspection budget reached. Use the evidence from the current pages and synthesize instead of opening or inspecting additional sources.';
+  }
+
+  for (const block of toolUseBlocks) {
+    if (block.name !== 'browser_scroll') continue;
+    const targetKey = inferBrowserTargetKey(block.name, block.input as Record<string, any>, state.lastTargetKey) || 'active';
+    if ((state.scrollFallbackCounts.get(targetKey) || 0) >= MAX_BROWSER_SCROLL_FALLBACKS_PER_TARGET) {
+      return 'Scroll fallback budget reached on the current page. Use browser_extract or browser_read_page once, or finish from the evidence already gathered.';
+    }
+  }
+
+  return null;
+}
+
+function updateBrowserBudgetState(
+  toolUseBlocks: NormalizedToolUseBlock[],
+  toolResults: NormalizedToolResultBlock[],
+  state: BrowserRuntimeBudgetState,
+): void {
+  if (toolUseBlocks.some((block) => block.name === 'browser_search')) {
+    state.searchRounds += 1;
+  }
+
+  toolUseBlocks.forEach((block, index) => {
+    const result = toolResults[index];
+    const content = typeof result?.content === 'string'
+      ? result.content
+      : Array.isArray(result?.content)
+        ? result.content.map((entry) => ('text' in entry ? entry.text : '')).join('\n')
+        : '';
+    const failed = result?.is_error === true || /^\[Error/.test(content);
+    if (failed) return;
+
+    const input = block.input as Record<string, any>;
+    const targetKey = inferBrowserTargetKey(block.name, input, state.lastTargetKey) || 'active';
+    if (['browser_navigate', 'browser_extract', 'browser_read_page'].includes(block.name)) {
+      state.inspectedTargets.add(targetKey);
+      state.lastTargetKey = targetKey;
+      if (typeof input.tabId === 'string' && input.tabId.trim()) {
+        state.pendingBackgroundTabIds = state.pendingBackgroundTabIds.filter((tabId) => tabId !== input.tabId.trim());
+      }
+      if (block.name === 'browser_extract') {
+        const extractedPageType = extractStructuredPageType(content);
+        if (extractedPageType) {
+          state.successfulExtractions += 1;
+          if (extractedPageType === 'article' || extractedPageType === 'listing') {
+            state.successfulArticleOrListingExtractions += 1;
+          } else if (extractedPageType === 'discussion') {
+            state.successfulDiscussionExtractions += 1;
+          }
+          state.firstWaveComplete =
+            state.successfulArticleOrListingExtractions >= 2
+            || state.successfulExtractions >= 3
+            || (state.successfulArticleOrListingExtractions >= 1 && state.successfulDiscussionExtractions >= 1 && state.successfulExtractions >= 2);
+        }
+      }
+    } else if (block.name === 'browser_scroll') {
+      state.lastTargetKey = targetKey;
+      state.scrollFallbackCounts.set(targetKey, (state.scrollFallbackCounts.get(targetKey) || 0) + 1);
+    } else if (block.name === 'browser_tab_open_background') {
+      const openedTabId = extractOpenedBackgroundTabId(content);
+      if (openedTabId && !state.pendingBackgroundTabIds.includes(openedTabId)) {
+        state.pendingBackgroundTabIds.push(openedTabId);
+        state.lastTargetKey = `tab:${openedTabId}`;
+      } else {
+        state.lastTargetKey = targetKey;
+      }
+    } else if (block.name === 'browser_tab_close_background' && typeof input.tabId === 'string' && input.tabId.trim()) {
+      state.pendingBackgroundTabIds = state.pendingBackgroundTabIds.filter((tabId) => tabId !== input.tabId.trim());
+    }
+  });
+}
+
+function extractOpenedBackgroundTabId(content: string): string | null {
+  if (!content || /^\[Error/.test(content)) return null;
+  try {
+    const parsed = JSON.parse(content);
+    return typeof parsed?.tabId === 'string' && parsed.tabId.trim() ? parsed.tabId.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractStructuredPageType(content: string): string | null {
+  if (!content || /^\[Error/.test(content)) return null;
+  try {
+    const parsed = JSON.parse(content);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return typeof parsed.pageType === 'string' && parsed.pageType.trim() ? parsed.pageType.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildBlockedToolResults(
+  toolUseBlocks: NormalizedToolUseBlock[],
+  message: string,
+): NormalizedToolResultBlock[] {
+  return toolUseBlocks.map((block) => ({
+    type: 'tool_result',
+    tool_use_id: block.id,
+    content: `[Error] ${message}`,
+    is_error: true,
+  }));
+}
+
+function detectToolPolicyViolation(toolUseBlocks: NormalizedToolUseBlock[]): string | null {
+  for (const block of toolUseBlocks) {
+    if (block.name !== 'create_document') continue;
+    const input = block.input as Record<string, any>;
+    const rawFilename = String(input?.filename || '').trim();
+    if (rawFilename && path.isAbsolute(rawFilename)) {
+      return 'create_document does not accept explicit absolute output paths. Use file_write for absolute paths like /home/... and reserve create_document for default artifact locations.';
+    }
+  }
+  return null;
+}
 
 // Seed registry on first import
 let registrySeeded = false;
@@ -84,23 +282,6 @@ function ensureRegistry(): void {
   } catch (e) {
     console.warn('[Registry] Seed failed:', e);
   }
-}
-
-function shouldRunGraphScaffold(setup: Awaited<ReturnType<typeof runPreLLMSetup>>): boolean {
-  if (!graphExecutor.canExecuteGraphScaffold(setup.executionGraphScaffold)) return false;
-  const workerCount = setup.executionGraphScaffold?.planner.graph.nodes.filter((node) => node.kind === 'worker').length || 0;
-  // Single-worker graph runs duplicate the classic loop without adding user-visible value
-  // when they later fail verifier/merge checks. Reserve graph execution for true multi-worker
-  // or dependency-chain scaffolds.
-  return workerCount > 1;
-}
-
-function resolveGraphExecutorFns() {
-  return {
-    canExecuteGraphScaffold: typeof graphExecutor.canExecuteGraphScaffold === 'function' ? graphExecutor.canExecuteGraphScaffold : null,
-    executeGraphScaffold: typeof graphExecutor.executeGraphScaffold === 'function' ? graphExecutor.executeGraphScaffold : null,
-    getWorkerDependencyChain: typeof graphExecutor.getWorkerDependencyChain === 'function' ? graphExecutor.getWorkerDependencyChain : null,
-  };
 }
 
 // ═══════════════════════════════════
@@ -336,6 +517,11 @@ export async function runAgentLoop(
 
   // ── Classify ──
   const profile = applyAgentProfileOverride(classify(userMessage), options.forcedAgentProfile);
+  const preserveBrowserRunTabs = () => {
+    if (!runId || profile.toolGroup !== 'browser') return;
+    try { preserveRunBackgroundTabs(runId); } catch {}
+  }
+
   console.log(`[Agent] Classified: profile=${profile.agentProfile} group=${profile.toolGroup} modules=[${[...profile.promptModules]}] model=${profile.model} greeting=${profile.isGreeting}`);
   if (runId) {
     appendRunEvent(runId, {
@@ -449,9 +635,6 @@ export async function runAgentLoop(
 
   // ── Pre-LLM Setup (extracted to loop-setup.ts) ──
   const setup = await runPreLLMSetup(userMessage, profile, client, options.onProgress, {
-    enableExecutionGraphScaffold:
-      (options.graphExecutionMode ?? 'auto') !== 'disabled'
-      && currentHarness.actualExecutionMode === 'step_controlled',
     allowedTools: options.allowedTools,
   });
   const { executionPlan } = setup;
@@ -465,31 +648,14 @@ export async function runAgentLoop(
         disallowedTools: executionPlan?.disallowedTools || [],
       },
     });
-    if (setup.executionGraphScaffold) {
-      upsertRunArtifact(
-        runId,
-        'execution_graph_scaffold',
-        'Execution Graph Scaffold',
-        JSON.stringify(setup.executionGraphScaffold.planner, null, 2),
-      );
-      appendRunEvent(runId, {
-        kind: 'execution_graph_scaffold_created',
-        phase: 'planning',
-        payload: {
-          summary: setup.executionGraphScaffold.planner.summary,
-          nodeCount: setup.executionGraphScaffold.planner.graph.nodes.length,
-          edgeCount: setup.executionGraphScaffold.planner.graph.edges.length,
-          parallelBranches: setup.executionGraphScaffold.planner.topology.parallelBranches,
-        },
-      });
-    }
   }
 
   // ── Extractor agent short-circuit ──
-  if (profile.agentProfile === 'ytdlp') {
+  if (profile.agentProfile === 'ytdlp' && hasStrongYtdlpIntent(userMessage)) {
     if (!client.supportsHarnessGeneration) {
       options.onStreamText?.('Extractor requires a provider that supports nested agent loops (Anthropic). Switch providers to use it.');
       options.onStreamEnd?.();
+      preserveBrowserRunTabs();
       cleanupRunControl(runKey);
       detachParentAbort();
       return { response: '', toolCalls: [] };
@@ -499,7 +665,7 @@ export async function runAgentLoop(
       ytdlpResult = await runYtdlpPipeline(userMessage, {
         client,
         apiKey: options.apiKey,
-        onProgress: (text) => options.onStreamText?.(text),
+        onThinking: (text) => options.onThinking?.(text),
         onRegisterCancel: registerNestedCancel,
       });
     } finally {
@@ -510,6 +676,7 @@ export async function runAgentLoop(
       : `Extractor failed: ${ytdlpResult.reason}`;
     options.onStreamText?.(summary);
     options.onStreamEnd?.();
+    preserveBrowserRunTabs();
     cleanupRunControl(runKey);
     detachParentAbort();
     return { response: summary, toolCalls: [] };
@@ -541,6 +708,7 @@ export async function runAgentLoop(
               },
             });
           }
+          preserveBrowserRunTabs();
           cleanupRunControl(runKey);
           detachParentAbort();
           return { response: harnessRun, toolCalls: [] };
@@ -565,6 +733,7 @@ export async function runAgentLoop(
           },
         });
       }
+      preserveBrowserRunTabs();
       cleanupRunControl(runKey);
       detachParentAbort();
       return { response: executorRun.response, toolCalls: [] };
@@ -612,8 +781,6 @@ export async function runAgentLoop(
     siteContext: setup.siteContext,
     playbookContext: setup.playbookContext,
     harnessContext: setup.harnessContext,
-    executionSketchContext: setup.executionSketchContext,
-    executionGraphContext: setup.executionGraphContext,
     desktopContext: setup.desktopContext,
     executionConstraint: executionPlan?.constraint,
     systemAwarenessContext: getSystemAwarenessBlock() || undefined,
@@ -625,130 +792,6 @@ export async function runAgentLoop(
     performanceStance: control.performanceStance,
   });
   let dynamicPrompt = buildCurrentDynamicPrompt();
-
-  const graphExecutorFns = resolveGraphExecutorFns();
-  if ((options.graphExecutionMode ?? 'auto') !== 'disabled' && shouldRunGraphScaffold(setup)) {
-    const graph = setup.executionGraphScaffold!.planner.graph;
-    const workerNodes = graph.nodes.filter((node) => node.kind === 'worker');
-    const isDependentGraphChain = !!graphExecutorFns.getWorkerDependencyChain?.(graph, workerNodes);
-    const graphTelemetryEnabled = !!runId && runExists(runId);
-    const safeAppendGraphEvent = (event: { kind: string; phase?: string; payload?: Record<string, any> }) => {
-      if (!runId || !graphTelemetryEnabled) return;
-      try {
-        appendRunEvent(runId, {
-          kind: event.kind,
-          phase: event.phase,
-          payload: event.payload,
-        });
-      } catch (error: any) {
-        console.warn(`[GraphExecutor] Skipping graph event persistence: ${error?.message || String(error)}`);
-      }
-    };
-    const safeUpsertGraphState = (snapshot: unknown) => {
-      if (!runId || !graphTelemetryEnabled) return;
-      try {
-        upsertRunArtifact(
-          runId,
-          'execution_graph_state',
-          'Execution Graph State',
-          JSON.stringify(snapshot, null, 2),
-        );
-      } catch (error: any) {
-        console.warn(`[GraphExecutor] Skipping graph state persistence: ${error?.message || String(error)}`);
-      }
-    };
-    try {
-      if (!graphExecutorFns.executeGraphScaffold) {
-        throw new Error('graph executor export unavailable');
-      }
-      const graphResult = await graphExecutorFns.executeGraphScaffold({
-        scaffold: setup.executionGraphScaffold!,
-        originalUserMessage: userMessage,
-        client,
-        staticPrompt,
-        dynamicPrompt,
-        runWorkerLoop: (workerOptions) => runAgentLoop(workerOptions.userMessage, workerOptions.history, {
-          runId: workerOptions.runId,
-          provider: workerOptions.provider,
-          apiKey: workerOptions.apiKey,
-          forcedAgentProfile: workerOptions.forcedAgentProfile,
-          allowedTools: workerOptions.allowedTools,
-          graphExecutionMode: workerOptions.graphExecutionMode,
-          parentSignal: control.abortController.signal,
-          model: workerOptions.model,
-          onStreamText: workerOptions.onStreamText,
-          onThinking: workerOptions.onThinking,
-          onToolActivity: workerOptions.onToolActivity,
-          onToolStream: workerOptions.onToolStream,
-          onProgress: workerOptions.onProgress,
-        }),
-        workerBaseOptions: {
-          runId,
-          provider: options.provider,
-          apiKey,
-          model: modelId,
-          onStreamText: undefined,
-          onThinking: undefined,
-          onToolActivity: undefined,
-          onToolStream: undefined,
-          onProgress: undefined,
-          graphExecutionMode: 'disabled',
-        },
-        onGraphEvent: graphTelemetryEnabled ? (event) => safeAppendGraphEvent(event) : undefined,
-        onGraphState: graphTelemetryEnabled ? (snapshot) => safeUpsertGraphState(snapshot) : undefined,
-      });
-      if (graphResult.handled && graphResult.response) {
-        onStreamText?.(graphResult.response);
-        onStreamEnd?.();
-        cleanupRunControl(runKey);
-        detachParentAbort();
-        return { response: graphResult.response, toolCalls: [] };
-      }
-      if (isDependentGraphChain) {
-        const failureMessage = 'Graph execution could not validate the dependent worker chain, so the run was stopped before falling back into the legacy loop. Check the graph state and verification events in the run detail view.';
-        console.warn('[GraphExecutor] Dependent graph chain failed verification; stopping instead of falling back to classic loop.');
-        safeAppendGraphEvent({
-          kind: 'execution_graph_chain_stopped',
-          phase: 'reviewing',
-          payload: {
-            message: failureMessage,
-            graphId: graph.id,
-            workerNodeIds: workerNodes.map((node) => node.id),
-          },
-        });
-        onStreamText?.(failureMessage);
-        onStreamEnd?.();
-        cleanupRunControl(runKey);
-        detachParentAbort();
-        return { response: failureMessage, toolCalls: [] };
-      }
-    } catch (error: any) {
-      if (isDependentGraphChain) {
-        const failureMessage = `Graph execution failed before the dependent worker chain could complete: ${error?.message || String(error)}`;
-        console.warn(`[GraphExecutor] ${failureMessage}`);
-        safeAppendGraphEvent({
-          kind: 'execution_graph_chain_stopped',
-          phase: 'reviewing',
-          payload: {
-            message: failureMessage,
-            graphId: graph.id,
-            workerNodeIds: workerNodes.map((node) => node.id),
-          },
-        });
-        onStreamText?.(failureMessage);
-        onStreamEnd?.();
-        cleanupRunControl(runKey);
-        detachParentAbort();
-        return { response: failureMessage, toolCalls: [] };
-      }
-      console.warn(`[GraphExecutor] Falling back to classic loop: ${error?.message || String(error)}`);
-      safeAppendGraphEvent({
-        kind: 'execution_graph_scaffold_fallback',
-        phase: 'planning',
-        payload: { message: error?.message || String(error) },
-      });
-    }
-  }
 
   if (EXECUTION_PLANNING_ENABLED && shouldCreateExecutionPlan(userMessage, profile)) {
     let executionPlanText: string | null = null;
@@ -808,6 +851,7 @@ export async function runAgentLoop(
         payload: { workflowStage: 'planning' },
       });
       onStreamEnd?.();
+      preserveBrowserRunTabs();
       cleanupRunControl(runKey);
       clearNestedCancel();
       detachParentAbort();
@@ -905,6 +949,9 @@ export async function runAgentLoop(
   dispatchCtx.onRuntimeSignal = applyRuntimeHarnessSignal;
 
   let guiBatchNudgeSent = false;
+  let browserSearchBudgetNudgeSent = false;
+  let browserTabBudgetNudgeSent = false;
+  let browserScrollBudgetNudgeKey: string | null = null;
   const guiBatchNudgeAt = control.performanceStance === 'aggressive'
     ? 1
     : control.performanceStance === 'conservative'
@@ -917,11 +964,19 @@ export async function runAgentLoop(
       : WRAP_UP_THRESHOLD;
   const startTime = Date.now();
   let finalText = '';
-  const browserExecutionSketch = setup.browserExecutionSketch;
-  let currentBrowserSketchStep = 0;
-  let announcedBrowserSketchStep = -1;
   let swarmCompleted = false;
   const maxIterations = Math.max(1, options.maxIterations ?? MAX_ITERATIONS);
+    const browserBudgetState: BrowserRuntimeBudgetState = {
+      searchRounds: 0,
+      inspectedTargets: new Set<string>(),
+      scrollFallbackCounts: new Map<string, number>(),
+      lastTargetKey: null,
+      pendingBackgroundTabIds: [],
+      successfulExtractions: 0,
+      successfulArticleOrListingExtractions: 0,
+      successfulDiscussionExtractions: 0,
+      firstWaveComplete: false,
+    };
 
   // ═══════════════════════════════════
   // Iteration Loop
@@ -1032,14 +1087,35 @@ export async function runAgentLoop(
       messages.push({ role: 'user', content: `[SYSTEM] ${dispatchCtx.toolCallCount} tool calls used (limit: ${maxIterations}). Wrap up.` });
     }
 
-    if (browserExecutionSketch
-        && currentBrowserSketchStep < browserExecutionSketch.steps.length
-        && announcedBrowserSketchStep !== currentBrowserSketchStep) {
-      messages.push({
-        role: 'user',
-        content: buildBrowserStepControllerPrompt(browserExecutionSketch, currentBrowserSketchStep),
-      });
-      announcedBrowserSketchStep = currentBrowserSketchStep;
+    if (profile.toolGroup === 'browser') {
+      if (!browserSearchBudgetNudgeSent && browserBudgetState.searchRounds >= MAX_BROWSER_SEARCH_ROUNDS) {
+        messages.push({
+          role: 'user',
+          content: '[SYSTEM] Search budget reached. Use the sources you already found and inspect or synthesize instead of issuing more browser_search calls.',
+        });
+        browserSearchBudgetNudgeSent = true;
+      }
+      if (browserBudgetState.firstWaveComplete && !messages.some((msg) => typeof msg.content === 'string' && msg.content.includes('first evidence wave is complete'))) {
+        messages.push({
+          role: 'user',
+          content: '[SYSTEM] The first evidence wave is complete. Prefer synthesis or one targeted follow-up for missing fields instead of more search or more source-opening.',
+        });
+      }
+      if (runId && !browserTabBudgetNudgeSent && countRunBackgroundTabs(runId) >= MAX_BROWSER_BACKGROUND_TABS) {
+        messages.push({
+          role: 'user',
+          content: '[SYSTEM] Background tab budget reached. Close stale background tabs before opening more, or continue from the tabs you already have.',
+        });
+        browserTabBudgetNudgeSent = true;
+      }
+      const stalledScrollEntry = [...browserBudgetState.scrollFallbackCounts.entries()].find(([, count]) => count >= MAX_BROWSER_SCROLL_FALLBACKS_PER_TARGET);
+      if (stalledScrollEntry && browserScrollBudgetNudgeKey !== stalledScrollEntry[0]) {
+        messages.push({
+          role: 'user',
+          content: '[SYSTEM] Stop repeated scrolling on the current page. Use browser_extract or browser_read_page once, or synthesize from the evidence already gathered.',
+        });
+        browserScrollBudgetNudgeKey = stalledScrollEntry[0];
+      }
     }
 
     // ── LLM Call ──
@@ -1088,8 +1164,6 @@ export async function runAgentLoop(
     }
 
     if (toolUseBlocks.length === 0) {
-      const completedSketchStep = extractStepDoneMarker(responseText);
-      const cleanResponseText = stripStepDoneMarkers(responseText);
       const isShortNarration = iteration === 0 && responseText.length < 300 && NARRATION_RE.test(responseText) && dispatchCtx.toolCallCount === 0;
 
       if (isShortNarration && iteration < maxIterations - 1) {
@@ -1114,67 +1188,52 @@ export async function runAgentLoop(
         continue;
       }
 
-      if (browserExecutionSketch && currentBrowserSketchStep < browserExecutionSketch.steps.length) {
-        const expectedStep = currentBrowserSketchStep + 1;
-        const totalSteps = browserExecutionSketch.steps.length;
-
-        if (completedSketchStep !== null && completedSketchStep >= expectedStep) {
-          // Advance to the completed step (may jump multiple steps if LLM
-          // emitted [STEP_DONE:1] [STEP_DONE:2] [STEP_DONE:3] in one response)
-          currentBrowserSketchStep = completedSketchStep;
-          announcedBrowserSketchStep = -1;
-
-          if (currentBrowserSketchStep >= totalSteps) {
-            // ALL steps are done — let the response through, don't force continuation
-            finalText = cleanResponseText;
-            if (runId) {
-              appendRunEvent(runId, {
-                kind: 'assistant_response',
-                phase: 'llm',
-                payload: { iteration, text: cleanResponseText.slice(0, 1000) },
-              });
-            }
-            break;
-          }
-
-          // More steps remain — continue to the next one
-          if (iteration < maxIterations - 1) {
-            onStreamText?.('\n\n__RESET__');
-            messages.push({ role: 'assistant', content: cleanResponseText || `[STEP ${completedSketchStep} COMPLETE]` });
-            messages.push({
-              role: 'user',
-              content: `[SYSTEM] Step ${completedSketchStep} is complete. Continue with step ${currentBrowserSketchStep + 1}/${totalSteps} now.`,
-            });
-            continue;
-          }
-        } else if (currentBrowserSketchStep < totalSteps - 1 && iteration < maxIterations - 1) {
-          onStreamText?.('\n\n__RESET__');
-          messages.push({ role: 'assistant', content: cleanResponseText || response.content as any });
-          messages.push({
-            role: 'user',
-            content: `[SYSTEM] Do not conclude the overall task yet. You are still on step ${expectedStep}/${totalSteps}. When step ${expectedStep} is complete, include [STEP_DONE:${expectedStep}] in your next text response and then continue to the next step.`,
-          });
-          continue;
-        }
-      }
-
-      finalText = cleanResponseText;
+      finalText = responseText;
       if (runId) {
         appendRunEvent(runId, {
           kind: 'assistant_response',
           phase: 'llm',
-          payload: { iteration, text: cleanResponseText.slice(0, 1000) },
+          payload: { iteration, text: responseText.slice(0, 1000) },
         });
       }
       break;
     }
 
     // ── Tool dispatch (extracted to loop-dispatch.ts) ──
+    const toolPolicyViolation = detectToolPolicyViolation(toolUseBlocks);
+    if (toolPolicyViolation && iteration < maxIterations - 1) {
+      onStreamText?.('\n\n__RESET__');
+      messages.push({ role: 'assistant', content: response.content as any });
+      messages.push({
+        role: 'user',
+        content: buildBlockedToolResults(toolUseBlocks, toolPolicyViolation) as any,
+      });
+      messages.push({ role: 'user', content: `[SYSTEM] ${toolPolicyViolation}` });
+      continue;
+    }
+
+    if (profile.toolGroup === 'browser') {
+      const browserPolicyViolation = detectBrowserPolicyViolation(toolUseBlocks, browserBudgetState, runId);
+      if (browserPolicyViolation && iteration < maxIterations - 1) {
+        onStreamText?.('\n\n__RESET__');
+        messages.push({ role: 'assistant', content: response.content as any });
+        messages.push({
+          role: 'user',
+          content: buildBlockedToolResults(toolUseBlocks, browserPolicyViolation) as any,
+        });
+        messages.push({ role: 'user', content: `[SYSTEM] ${browserPolicyViolation}` });
+        continue;
+      }
+    }
+
     if (iterationText) onStreamText?.('\n\n__RESET__');
     messages.push({ role: 'assistant', content: response.content as any });
 
     dispatchCtx.iterationIndex = iteration;
     const toolResults = await dispatchTools(toolUseBlocks, dispatchCtx);
+    if (profile.toolGroup === 'browser') {
+      updateBrowserBudgetState(toolUseBlocks, toolResults, browserBudgetState);
+    }
     messages.push({ role: 'user', content: toolResults as any });
 
     const successfulSwarmOnlyTurn =
@@ -1436,6 +1495,7 @@ export async function runAgentLoop(
   }
 
   // Clean up
+  preserveBrowserRunTabs();
   cleanupRunControl(runKey);
   clearNestedCancel();  // guard: clears any registered nested cancel fn on all exit paths
   detachParentAbort();

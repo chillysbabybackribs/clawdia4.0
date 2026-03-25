@@ -9,6 +9,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { searchMemory, remember, type MemoryEntry } from '../../db/memory';
 import { searchPastConversations } from '../../db/conversation-recall';
+import { normalizeFsPath } from './core/fs-paths';
 
 const execAsync = promisify(exec);
 const DOCS_DIR = path.join(homedir(), 'Documents', 'Clawdia');
@@ -285,8 +286,15 @@ export async function executeCreateDocument(input: Record<string, any>): Promise
   const dir = output_dir || DOCS_DIR;
 
   try {
-    fs.mkdirSync(dir, { recursive: true });
-    const filePath = path.join(dir, filename);
+    const rawFilename = String(filename || '').trim();
+    if (!rawFilename) return '[Error creating document]: filename is required';
+    if (path.isAbsolute(rawFilename)) {
+      return '[Error creating document]: absolute paths are not allowed for create_document. Use file_write for explicit absolute paths.';
+    }
+
+    const filePath = path.join(normalizeFsPath(dir), rawFilename);
+
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
 
     // Text-native formats — direct file write
     if (['md', 'txt', 'html'].includes(format)) {

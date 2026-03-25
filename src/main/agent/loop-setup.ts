@@ -22,13 +22,6 @@ import { getDesktopCapabilities, getGuiState, warmCoordinatesForApp } from './ex
 import { getStateSummary } from './gui/ui-state';
 import { getShortcutPromptBlock } from './gui/shortcuts';
 import {
-  compileBrowserExecutionSketch,
-  compileTaskExecutionGraphScaffold,
-  formatBrowserExecutionSketch,
-  type BrowserExecutionSketch,
-  type TaskExecutionGraphScaffold,
-} from './task-compiler';
-import {
   extractAppName, discoverApps, routeTask, scanHarnesses,
   recordSurfaceUsage, autoInstallHarness, getAppProfile,
 } from '../db/app-registry';
@@ -68,10 +61,6 @@ export interface SetupResult {
   playbookContext: string;
   harnessContext: string;
   desktopContext: string;
-  executionSketchContext: string;
-  browserExecutionSketch: BrowserExecutionSketch | null;
-  executionGraphContext: string;
-  executionGraphScaffold: TaskExecutionGraphScaffold | null;
   executionPlan: ExecutionPlan | null;
   shortcutContext: string;
   guiStateContext: string;
@@ -88,7 +77,7 @@ export async function runPreLLMSetup(
   profile: TaskProfile,
   client: ProviderClient,
   onProgress?: (text: string) => void,
-  options: { enableExecutionGraphScaffold?: boolean; allowedTools?: string[] } = {},
+  options: { allowedTools?: string[] } = {},
 ): Promise<SetupResult> {
   const result: SetupResult = {
     memoryContext: '',
@@ -97,10 +86,6 @@ export async function runPreLLMSetup(
     playbookContext: '',
     harnessContext: '',
     desktopContext: '',
-    executionSketchContext: '',
-    browserExecutionSketch: null,
-    executionGraphContext: '',
-    executionGraphScaffold: null,
     executionPlan: null,
     shortcutContext: '',
     guiStateContext: '',
@@ -144,29 +129,6 @@ export async function runPreLLMSetup(
                 console.log('[Harness] Injecting site harness context for current page');
               }
             }
-          } catch {}
-        }
-        if (profile.promptModules.has('browser')) {
-          try {
-            const sketch = compileBrowserExecutionSketch(userMessage);
-            result.browserExecutionSketch = sketch;
-            result.executionSketchContext = formatBrowserExecutionSketch(sketch);
-            if (result.executionSketchContext) {
-              console.log('[TaskCompiler] Injecting browser execution sketch for compound task');
-            }
-          } catch {}
-        }
-        if (options.enableExecutionGraphScaffold !== false) {
-          try {
-            const scaffold = compileTaskExecutionGraphScaffold(userMessage);
-            result.executionGraphScaffold = scaffold;
-            result.executionGraphContext = [
-              '[EXECUTION GRAPH SCAFFOLD]',
-              `Summary: ${scaffold.planner.summary}`,
-              `Topology: serial_stages=${scaffold.planner.topology.serialStages}, parallel_branches=${scaffold.planner.topology.parallelBranches}`,
-              `Nodes: ${scaffold.planner.graph.nodes.map((node) => `${node.id}:${node.executor.kind}`).join(', ')}`,
-            ].join('\n');
-            console.log('[TaskCompiler] Generated execution graph scaffold');
           } catch {}
         }
       }

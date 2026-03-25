@@ -47,11 +47,15 @@ description: |
   Re-read the current page's visible text and interactive elements. Only
   needed if the page changed since last navigation (JavaScript-heavy SPAs,
   after clicking a button that loads new content). Not needed after
-  browser_navigate — that already returns page content.
+  browser_navigate — that already returns page content. Pass tabId to read
+  from a specific tab opened with browser_tab_open_background.
 
 input_schema:
   type: object
-  properties: {}
+  properties:
+    tabId:
+      type: string
+      description: Optional tab ID returned by browser_tab_open_background
 
 
 ## browser_click
@@ -99,7 +103,8 @@ description: |
   Extract targeted structured data from the current page. Pass a natural
   language instruction describing what to extract: "the pricing table",
   "all navigation links", "form fields", "product prices". More efficient
-  than parsing raw browser_read_page output for specific data.
+  than parsing raw browser_read_page output for specific data. Pass tabId
+  to extract from a specific tab opened with browser_tab_open_background.
 
 input_schema:
   type: object
@@ -107,6 +112,9 @@ input_schema:
     instruction:
       type: string
       description: What to extract — be specific (e.g. "pricing table", "form fields", "navigation links")
+    tabId:
+      type: string
+      description: Optional tab ID returned by browser_tab_open_background
   required: [instruction]
 
 

@@ -65,7 +65,8 @@ async function defaultExec(cmd: string): Promise<string> {
 export interface YtdlpPipelineOptions {
   client: ProviderClient;          // only .provider is read — never mutated
   apiKey: string;
-  onProgress: (text: string) => void;
+  onProgress?: (text: string) => void;
+  onThinking?: (text: string) => void;
   onRegisterCancel: (fn: () => void) => void;
 }
 
@@ -105,12 +106,17 @@ export async function runYtdlpPipeline(
   query: string,
   options: YtdlpPipelineOptions,
 ): Promise<YtdlpResult> {
-  const { client, apiKey, onProgress, onRegisterCancel } = options;
+  const { client, apiKey, onProgress, onThinking, onRegisterCancel } = options;
+  const emitProgress = (text: string): void => {
+    if (!text.trim()) return;
+    onThinking?.(text);
+    onProgress?.(text);
+  };
 
   // Pre-flight: verify yt-dlp is installed
   const ytdlpInstalled = await checkYtdlpInstalled();
   if (!ytdlpInstalled) {
-    onProgress('[Extractor] yt-dlp is not installed. Install it with: pip install yt-dlp (or: sudo apt install yt-dlp)');
+    emitProgress('[Extractor] yt-dlp is not installed. Install it with: pip install yt-dlp (or: sudo apt install yt-dlp)');
     return { success: false, files: [], reason: 'yt-dlp not installed' };
   }
 
@@ -139,15 +145,15 @@ export async function runYtdlpPipeline(
   const files: string[] = [];
   const startMs = Date.now();
 
-  onProgress('[Extractor] Starting video download pipeline...');
+  emitProgress('[Extractor] Starting video download pipeline...');
 
   for (let iteration = 0; iteration < EXTRACTOR_MAX_ITERATIONS; iteration++) {
     if (abortController.signal.aborted) {
-      onProgress('[Extractor] Download cancelled.');
+      emitProgress('[Extractor] Download cancelled.');
       return { success: false, files, reason: 'cancelled' };
     }
     if (Date.now() - startMs > EXTRACTOR_MAX_MS) {
-      onProgress('[Extractor] Download timed out after 10 minutes.');
+      emitProgress('[Extractor] Download timed out after 10 minutes.');
       return { success: false, files, reason: 'timed out' };
     }
 
@@ -159,7 +165,7 @@ export async function runYtdlpPipeline(
         EXTRACTOR_SYSTEM_PROMPT,
         '',
         (text) => {
-          if (text.trim()) onProgress(text);
+          emitProgress(text);
         },
         { signal: abortController.signal },
       );
@@ -184,7 +190,7 @@ export async function runYtdlpPipeline(
     for (const f of newFiles) {
       if (!files.includes(f)) {
         files.push(f);
-        onProgress(`[Extractor] Downloaded: ${f}`);
+        emitProgress(`[Extractor] Downloaded: ${f}`);
       }
     }
 
@@ -192,9 +198,9 @@ export async function runYtdlpPipeline(
     if (toolUseBlocks.length === 0) {
       const success = files.length > 0;
       if (success) {
-        onProgress(`[Extractor] Complete. Downloaded ${files.length} file(s).`);
+        emitProgress(`[Extractor] Complete. Downloaded ${files.length} file(s).`);
       } else {
-        onProgress(`[Extractor] Agent finished with no files downloaded.`);
+        emitProgress(`[Extractor] Agent finished with no files downloaded.`);
       }
       return { success, files };
     }
@@ -227,7 +233,7 @@ export async function runYtdlpPipeline(
       for (const f of toolFiles) {
         if (!files.includes(f)) {
           files.push(f);
-          onProgress(`[Extractor] Downloaded: ${f}`);
+          emitProgress(`[Extractor] Downloaded: ${f}`);
         }
       }
 

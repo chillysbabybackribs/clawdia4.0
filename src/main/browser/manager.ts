@@ -40,7 +40,7 @@ import { buildDomSnapshot, type DomSnapshotResult } from './dom-snapshot';
 import { buildCommerceExtractionScript, buildComparisonResult, isCommerceInstruction, pickExtractionKind } from './commerce-extract';
 import { executeBrowserBatchSteps } from './batch';
 import { buildEvalErrorEnvelope, buildEvalSuccessEnvelope, normalizeEvalException, normalizeThrownEvalError } from './eval-envelope';
-import { buildPageStateSnapshot, summarizeExtraction } from './page-state';
+import { buildPageStateSnapshot, classifyPageType, summarizeExtraction } from './page-state';
 import type {
   BrowserBatchResult,
   BrowserBatchStep,
@@ -49,7 +49,7 @@ import type {
   StructuredExtractionEnvelope,
 } from './runtime-types';
 
-const MAX_TABS = 6;
+const MAX_TABS = 12;
 const MAX_HISTORY = 200;
 const CHROME_FALLBACK_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36';
 const AUTH_POPUP_PATH_RE = /\/oauth|\/authorize|\/login|\/signin|\/sign-in|\/auth|\/sso|\/saml/i;
@@ -64,6 +64,7 @@ interface Tab {
   faviconUrl: string;
   hidden: boolean;
   ownerRunId?: string;
+  cleanupRunId?: string;
 }
 
 export interface BrowserTarget {
@@ -82,6 +83,7 @@ let mainWindow: BrowserWindow | null = null;
 let tabs: Map<string, Tab> = new Map();
 let activeTabId: string | null = null;
 let isolatedTabsByRunId: Map<string, string> = new Map();
+let backgroundTabsByRunId: Map<string, Set<string>> = new Map();
 let currentBounds = { x: 0, y: 0, width: 0, height: 0 };
 let executionMode: BrowserExecutionMode = 'headed';
 let browserSessionInitialized = false;
@@ -139,7 +141,7 @@ export function initBrowser(win: BrowserWindow): void {
 
 function persistVisibleTabs(): void {
   if (restoringPersistedTabs) return;
-  const visibleTabs = Array.from(tabs.values()).filter((tab) => !tab.hidden);
+  const visibleTabs = Array.from(tabs.values()).filter((tab) => !tab.hidden && !tab.cleanupRunId && !tab.ownerRunId);
   const activeIndex = Math.max(0, visibleTabs.findIndex((tab) => tab.id === activeTabId));
   patchUiSession({
     browserTabs: {
@@ -204,7 +206,12 @@ function initBrowserSession(): void {
 }
 
 function getActiveView(target?: BrowserTarget): BrowserView | null {
-  return resolveTab(target)?.view || null;
+  const tab = resolveTab(target);
+  if (!tab) return null;
+  if (target?.tabId && !tab.hidden && activeTabId !== tab.id) {
+    switchTab(tab.id);
+  }
+  return tab.view;
 }
 
 function emitTabsChanged(): void {
@@ -291,11 +298,11 @@ function recordExtraction(target: BrowserTarget | undefined, kind: string, data:
   });
 }
 
-export function createTab(url?: string, opts: { hidden?: boolean; activate?: boolean; ownerRunId?: string } = {}): string {
+export function createTab(url?: string, opts: { hidden?: boolean; activate?: boolean; ownerRunId?: string; cleanupRunId?: string } = {}): string {
   if (!mainWindow) throw new Error('Browser not initialized');
   if (tabs.size >= MAX_TABS) {
     console.warn(`[Browser] Tab limit reached (${MAX_TABS}).`);
-    return activeTabId || '';
+    throw new Error('TAB_LIMIT_REACHED');
   }
 
   const id = randomUUID().slice(0, 8);
@@ -322,9 +329,17 @@ export function createTab(url?: string, opts: { hidden?: boolean; activate?: boo
     faviconUrl: '',
     hidden: opts.hidden === true,
     ownerRunId: opts.ownerRunId,
+    cleanupRunId: typeof opts.cleanupRunId === 'string' && opts.cleanupRunId.trim()
+      ? opts.cleanupRunId.trim()
+      : undefined,
   };
   tabs.set(id, tab);
   if (opts.ownerRunId) isolatedTabsByRunId.set(opts.ownerRunId, id);
+  if (tab.cleanupRunId) {
+    const runTabs = backgroundTabsByRunId.get(tab.cleanupRunId) || new Set<string>();
+    runTabs.add(id);
+    backgroundTabsByRunId.set(tab.cleanupRunId, runTabs);
+  }
   wireTabEvents(tab);
   if (opts.activate !== false && !tab.hidden) switchTab(id);
 
@@ -338,6 +353,23 @@ export function createTab(url?: string, opts: { hidden?: boolean; activate?: boo
   console.log(`[Browser] Created tab ${id} (${tabs.size} total)`);
   emitTabsChanged();
   persistVisibleTabs();
+  return id;
+}
+
+export async function createReadyTab(
+  url?: string,
+  opts: { hidden?: boolean; activate?: boolean; ownerRunId?: string; cleanupRunId?: string } = {},
+): Promise<string> {
+  const id = createTab(url, opts);
+  const tab = tabs.get(id);
+  if (!tab) throw new Error(`Failed to resolve tab ${id} after creation`);
+
+  if (url && url !== 'about:blank') {
+    await waitForPageReady(tab.view, { timeoutMs: 12_000, settleMs: 200 });
+  } else {
+    await waitForDomSettled(tab.view, { timeoutMs: 1_000, settleMs: 100 });
+  }
+
   return id;
 }
 
@@ -386,6 +418,13 @@ export function closeTab(id: string): void {
   pageStateByTabId.delete(id);
   tabs.delete(id);
   if (tab.ownerRunId) isolatedTabsByRunId.delete(tab.ownerRunId);
+  if (tab.cleanupRunId) {
+    const runTabs = backgroundTabsByRunId.get(tab.cleanupRunId);
+    if (runTabs) {
+      runTabs.delete(id);
+      if (runTabs.size === 0) backgroundTabsByRunId.delete(tab.cleanupRunId);
+    }
+  }
 
   if (activeTabId === id) {
     const remaining = Array.from(tabs.values()).filter(candidate => !candidate.hidden).map(candidate => candidate.id);
@@ -402,6 +441,51 @@ export function allocateIsolatedTab(runId: string, url = 'about:blank'): string 
   const existing = isolatedTabsByRunId.get(runId);
   if (existing && tabs.has(existing)) return existing;
   return createTab(url, { hidden: true, activate: false, ownerRunId: runId });
+}
+
+export async function allocateReadyIsolatedTab(runId: string, url = 'about:blank'): Promise<string> {
+  const existing = isolatedTabsByRunId.get(runId);
+  if (existing && tabs.has(existing)) return existing;
+  return await createReadyTab(url, { hidden: true, activate: false, ownerRunId: runId });
+}
+
+export function countRunBackgroundTabs(runId: string): number {
+  return backgroundTabsByRunId.get(runId)?.size || 0;
+}
+
+export async function openBackgroundTabForRun(runId: string | undefined, url = 'about:blank', maxTabsPerRun = 6): Promise<string> {
+  if (!runId) {
+    return await createReadyTab(url, { activate: false });
+  }
+  if (countRunBackgroundTabs(runId) >= maxTabsPerRun) {
+    throw new Error('RUN_BACKGROUND_TAB_LIMIT_REACHED');
+  }
+  return await createReadyTab(url, { activate: false, cleanupRunId: runId });
+}
+
+export function releaseRunBackgroundTabs(runId: string): void {
+  const tabIds = [...(backgroundTabsByRunId.get(runId) || new Set<string>())];
+  for (const tabId of tabIds) {
+    if (tabs.has(tabId)) closeTab(tabId);
+  }
+  backgroundTabsByRunId.delete(runId);
+}
+
+export function preserveRunBackgroundTabs(runId: string): void {
+  const tabIds = [...(backgroundTabsByRunId.get(runId) || new Set<string>())];
+  for (const tabId of tabIds) {
+    const tab = tabs.get(tabId);
+    if (!tab) continue;
+    tab.cleanupRunId = undefined;
+  }
+  backgroundTabsByRunId.delete(runId);
+}
+
+export function releaseAllRunBackgroundTabs(): void {
+  const runIds = [...backgroundTabsByRunId.keys()];
+  for (const runId of runIds) {
+    releaseRunBackgroundTabs(runId);
+  }
 }
 
 export function releaseIsolatedTab(runId: string): void {
@@ -716,8 +800,14 @@ export async function navigate(url: string, target?: BrowserTarget): Promise<{ t
     if (!err.message?.includes('ERR_ABORTED')) console.warn(`[Browser] Nav error: ${err.message}`);
   }
   await waitForPageReady(view, { timeoutMs: 12_000, settleMs: 200 });
-  // Fetch text + interactive elements in parallel
-  const [content, elements] = await Promise.all([getVisibleText(target), getInteractiveElements(target)]);
+  // For SPA pages the JS renders content asynchronously after load — if the
+  // initial text is thin, wait for the DOM to settle with real content.
+  let content = await getVisibleText(target);
+  if (content.length < 300) {
+    await waitForDomSettled(view, { timeoutMs: 3_000, settleMs: 300 });
+    content = await getVisibleText(target);
+  }
+  const elements = await getInteractiveElements(target);
   recordLastAction(target, 'navigate', `Loaded ${wc.getURL()}`, true);
   return { title: wc.getTitle(), url: wc.getURL(), content, elements };
 }
@@ -735,7 +825,23 @@ export async function getVisibleText(target?: BrowserTarget): Promise<string> {
   const view = getActiveView(target);
   if (!view) return '';
   try {
-    const text = await view.webContents.executeJavaScript(`(function(){const c=document.body.cloneNode(true);c.querySelectorAll('script,style,noscript,svg,iframe').forEach(e=>e.remove());return c.innerText.trim()})()`);
+    const text = await view.webContents.executeJavaScript(`(function(){
+      var c=document.body.cloneNode(true);
+      c.querySelectorAll('script,style,noscript,svg,iframe').forEach(function(e){e.remove();});
+      var light=c.innerText.trim();
+      if(light.length>200) return light;
+      // Light DOM is thin — sweep shadow roots (Web Component SPAs like Reddit)
+      var parts=[];
+      document.querySelectorAll('*').forEach(function(el){
+        if(parts.length>=30) return;
+        var root=el.shadowRoot;
+        if(!root) return;
+        var t=(root.textContent||'').trim().replace(/\\s+/g,' ');
+        if(t.length>30) parts.push(t.slice(0,500));
+      });
+      if(parts.length>0) return parts.join('\\n').slice(0,15000);
+      return light;
+    })()`);
     return text.length > 15000 ? text.slice(0, 15000) + '\n\n[Truncated]' : text;
   } catch (err: any) { return '[Failed to extract text]'; }
 }
@@ -1110,92 +1216,262 @@ export async function scrollPage(direction: 'down' | 'up' | 'top' | 'bottom', am
 export async function extractData(instruction: string, target?: BrowserTarget): Promise<string> {
   const view = getActiveView(target);
   if (!view) throw new Error('No active tab');
-  if (isCommerceInstruction(instruction)) {
-    const kind = pickExtractionKind(instruction);
-    const result = await view.webContents.executeJavaScript(buildCommerceExtractionScript(kind));
-    recordExtraction(target, result.kind, result.data);
-    recordLastAction(target, 'extract', summarizeExtraction(result.kind, result.data), true);
-    return JSON.stringify(result, null, 2);
-  }
 
   try {
-    const result = await view.webContents.executeJavaScript(`(function(){
-      var instruction = ${JSON.stringify(instruction)}.toLowerCase();
-      var out = [];
-      if (instruction.match(/table|row|column|header|cell|grid/)) {
-        document.querySelectorAll('table').forEach(function(table, ti) {
-          if (ti >= 3) return;
-          var rows = [];
-          table.querySelectorAll('tr').forEach(function(tr, ri) {
-            if (ri >= 50) return;
-            var cells = [];
-            tr.querySelectorAll('th, td').forEach(function(td) {
-              cells.push(td.textContent.trim().replace(/\\s+/g, ' ').slice(0, 100));
-            });
-            if (cells.length > 0) rows.push(cells.join(' | '));
+    try {
+      await waitForPageReady(view, { timeoutMs: 12_000, settleMs: 200 });
+    } catch {
+      await waitForDomSettled(view, { timeoutMs: 2_000, settleMs: 200 });
+    }
+
+    const result = await view.webContents.executeJavaScript(`(() => {
+      const normalize = (value, max = 240) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, max);
+      const uniq = (items) => {
+        const out = [];
+        const seen = new Set();
+        for (const item of items) {
+          const key = JSON.stringify(item);
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          out.push(item);
+        }
+        return out;
+      };
+      const textFrom = (node, max = 12000) => normalize(node && (node.innerText || node.textContent || ''), max);
+      const main = document.querySelector('main, [role=main], article, [data-testid=\"post-container\"], .markdown, .repository-content') || document.body;
+      const visibleText = textFrom(main, 12000) || textFrom(document.body, 12000);
+      const headings = uniq(Array.from(document.querySelectorAll('h1,h2,h3')).map((node) => ({
+        level: node.tagName.toLowerCase(),
+        text: normalize(node.textContent, 200),
+      })).filter((entry) => entry.text)).slice(0, 12);
+      const paragraphs = uniq(Array.from((main || document.body).querySelectorAll('p, article p, [data-testid=\"comment\"] p')).map((node) => normalize(node.textContent, 500)).filter(Boolean)).slice(0, 12);
+      const lists = uniq(Array.from(document.querySelectorAll('ul, ol, [role=list]')).map((list) => {
+        const items = Array.from(list.querySelectorAll('li, [role=listitem], [role=option]')).map((item) => normalize(item.textContent, 220)).filter(Boolean).slice(0, 8);
+        return items.length ? items : null;
+      }).filter(Boolean)).slice(0, 6);
+      const tables = uniq(Array.from(document.querySelectorAll('table')).map((table) => {
+        const rows = Array.from(table.querySelectorAll('tr')).map((tr) =>
+          Array.from(tr.querySelectorAll('th,td')).map((cell) => normalize(cell.textContent, 120)).filter(Boolean)
+        ).filter((row) => row.length > 0).slice(0, 10);
+        return rows.length ? rows : null;
+      }).filter(Boolean)).slice(0, 4);
+      const links = uniq(Array.from(document.querySelectorAll('a[href]')).map((a) => {
+        const text = normalize(a.textContent, 120);
+        const href = a.href || a.getAttribute('href') || '';
+        if (!href || href.startsWith('javascript:') || href.startsWith('#')) return null;
+        return { text, href: normalize(href, 240) };
+      }).filter(Boolean)).slice(0, 20);
+      const forms = uniq(Array.from(document.querySelectorAll('form, input, textarea, select')).map((el) => ({
+        tag: el.tagName.toLowerCase(),
+        type: normalize(el.getAttribute && el.getAttribute('type'), 40),
+        name: normalize(el.getAttribute && el.getAttribute('name'), 80),
+        placeholder: normalize(el.getAttribute && el.getAttribute('placeholder'), 120),
+      }))).slice(0, 12);
+      const metadata = {
+        description: normalize(document.querySelector('meta[name=\"description\"]')?.getAttribute('content'), 240),
+        ogDescription: normalize(document.querySelector('meta[property=\"og:description\"]')?.getAttribute('content'), 240),
+        ogTitle: normalize(document.querySelector('meta[property=\"og:title\"]')?.getAttribute('content'), 200),
+        siteName: normalize(document.querySelector('meta[property=\"og:site_name\"]')?.getAttribute('content'), 120),
+      };
+
+      const extractRoundupCandidates = () => {
+        const blocks = Array.from(document.querySelectorAll(
+          'article li, main li, article h2, article h3, main h2, main h3, .entry-content li, .entry-content h2, .entry-content h3, [itemprop="reviewBody"] li'
+        ));
+        const priceRe = /\\$\\s?\\d{1,4}(?:\\.\\d{2})?/;
+        const recommendationLexicon = /\\b(best|good for|ideal for|great for|recommended|budget|beginner|control|power|spin|lightweight|forgiving|value|durable|comfortable|entry-level|advanced|performance)\\b/i;
+        const rankingRe = /^\\s*(?:#?\\d+[.):-]\\s+|best\\s+|top\\s+|runner-up\\b|honou?rable mention\\b)/i;
+        const specLexicon = /\\b(?:weight|size|material|price|rating|core|surface|shape|thickness|grip|length|width|battery|speed|capacity|storage|memory|range|warranty|rpm|handle|face|foam|carbon)\\b/i;
+        const candidates = [];
+        const pushCandidate = (candidate) => {
+          if (!candidate || !candidate.title) return;
+          candidates.push({
+            rank: candidate.rank || '',
+            title: normalize(candidate.title, 140),
+            price: normalize(candidate.price, 40),
+            summary: normalize(candidate.summary, 320),
+            pros: normalize(candidate.pros, 180),
+            cons: normalize(candidate.cons, 180),
+            bestFor: normalize(candidate.bestFor, 180),
+            specs: Array.isArray(candidate.specs) ? candidate.specs.map((entry) => normalize(entry, 180)).filter(Boolean).slice(0, 6) : [],
           });
-          if (rows.length > 0) out.push('Table ' + (ti + 1) + ':\\n' + rows.join('\\n'));
-        });
-      }
-      if (instruction.match(/list|items|bullet|options|menu/)) {
-        document.querySelectorAll('ul, ol, [role=list], [role=listbox]').forEach(function(list, li) {
-          if (li >= 5 || out.length >= 3) return;
-          var items = [];
-          list.querySelectorAll('li, [role=option], [role=listitem]').forEach(function(item, ii) {
-            if (ii >= 30) return;
-            var t = item.textContent.trim().replace(/\\s+/g, ' ').slice(0, 150);
-            if (t) items.push('- ' + t);
+        };
+
+        for (const node of blocks) {
+          const text = normalize(node.textContent, 320);
+          if (!text || text.length < 20) continue;
+          if (!priceRe.test(text) && !recommendationLexicon.test(text) && !rankingRe.test(text)) continue;
+          const heading = node.matches('h2,h3')
+            ? text
+            : normalize(node.closest('section, article, div')?.querySelector('h2,h3,h4')?.textContent, 160);
+          const linkedTitle = normalize(node.querySelector?.('a, strong, b')?.textContent, 140);
+          const title = linkedTitle || heading || text.replace(rankingRe, '').split(/[:.-]/)[0].slice(0, 140);
+          const pros = text.match(/\\b(?:pros?|great for|best for|good for)\\b[:\\s-]*(.*)$/i)?.[1] || '';
+          const cons = text.match(/\\b(?:cons?|downsides?)\\b[:\\s-]*(.*)$/i)?.[1] || '';
+          const bestFor = text.match(/\\b(?:best for|good for|ideal for|recommended for)\\b[:\\s-]*(.*?)(?:\\.|$)/i)?.[1] || '';
+          const rank = text.match(/^\\s*#?(\\d{1,2})[.):-]/)?.[1] || '';
+          const specs = Array.from(node.closest('section, article, div')?.querySelectorAll('li, p, td') || [])
+            .map((entry) => normalize(entry.textContent, 180))
+            .filter((entry) => entry && entry !== text && specLexicon.test(entry))
+            .slice(0, 5);
+          pushCandidate({
+            rank,
+            title,
+            price: (text.match(priceRe) || [])[0] || '',
+            summary: text,
+            pros: normalize(pros, 180),
+            cons: normalize(cons, 180),
+            bestFor: normalize(bestFor, 180),
+            specs,
           });
-          if (items.length > 0) out.push('List:\\n' + items.join('\\n'));
-        });
+          if (candidates.length >= 8) break;
+        }
+
+        const headingSections = Array.from(document.querySelectorAll('article h2, article h3, main h2, main h3, .entry-content h2, .entry-content h3'))
+          .slice(0, 16);
+        for (const heading of headingSections) {
+          if (candidates.length >= 10) break;
+          const title = normalize(heading.textContent, 140);
+          if (!title || !(/[A-Z]/.test(title) || recommendationLexicon.test(title) || rankingRe.test(title))) continue;
+
+          const sectionTexts = [];
+          let sibling = heading.nextElementSibling;
+          let hops = 0;
+          while (sibling && hops < 6 && !/^H[23]$/.test(sibling.tagName)) {
+            const sectionText = normalize(sibling.textContent, 220);
+            if (sectionText) sectionTexts.push(sectionText);
+            sibling = sibling.nextElementSibling;
+            hops += 1;
+          }
+          const joined = normalize(sectionTexts.join(' '), 500);
+          if (!joined) continue;
+          if (!priceRe.test(joined) && !recommendationLexicon.test(joined) && !specLexicon.test(joined)) continue;
+
+          const listSpecs = Array.from(heading.parentElement?.querySelectorAll('li, p, td') || [])
+            .map((entry) => normalize(entry.textContent, 180))
+            .filter((entry) => entry && entry !== title && specLexicon.test(entry))
+            .slice(0, 6);
+          pushCandidate({
+            rank: title.match(/^#?(\\d{1,2})[.):-]/)?.[1] || '',
+            title: title.replace(rankingRe, ''),
+            price: (joined.match(priceRe) || [])[0] || '',
+            summary: joined,
+            pros: joined.match(/\\b(?:pros?|great for|best for|good for)\\b[:\\s-]*(.*?)(?:\\.|$)/i)?.[1] || '',
+            cons: joined.match(/\\b(?:cons?|downsides?)\\b[:\\s-]*(.*?)(?:\\.|$)/i)?.[1] || '',
+            bestFor: joined.match(/\\b(?:best for|good for|ideal for|recommended for)\\b[:\\s-]*(.*?)(?:\\.|$)/i)?.[1] || '',
+            specs: listSpecs,
+          });
+        }
+
+        return uniq(candidates.filter((entry) => entry.title && (entry.price || entry.summary || entry.bestFor || (entry.specs && entry.specs.length)))).slice(0, 10);
+      };
+
+      const lowerUrl = location.href.toLowerCase();
+      const lowerTitle = document.title.toLowerCase();
+      const lowerText = visibleText.toLowerCase();
+      let pageType = 'unknown';
+      if (/\\/dp\\/|\\/gp\\/product\\/|\\badd to cart\\b|\\bbuy now\\b/.test(lowerUrl + ' ' + lowerTitle + ' ' + lowerText)) pageType = 'product';
+      else if (/[?&](k|q|query|search)=|\\/products?\\/|\\/shop\\/|\\/store\\/|\\/category\\/|\\/collections?\\/|\\bresults for\\b|\\bsort by\\b|\\bfilter\\b|\\bshowing \\d+ of \\d+\\b|\\bshop all\\b/.test(lowerUrl + ' ' + lowerTitle + ' ' + lowerText)) pageType = 'listing';
+      else {
+        const repositoryScore =
+          Number(/github\\.com/.test(lowerUrl))
+          + Number(/\\/issues\\b|\\/pulls\\b|\\/blob\\b|\\/tree\\b|\\/releases\\b|\\/commits\\b/.test(lowerUrl))
+          + Number(/\\bstars?\\b/.test(lowerText))
+          + Number(/\\bforks?\\b/.test(lowerText))
+          + Number(/\\breadme\\b/.test(lowerText));
+        if (/github\\.com/.test(lowerUrl) && repositoryScore >= 2) pageType = 'repository';
       }
-      if (instruction.match(/price|cost|\\$|amount|total|fee/)) {
-        document.querySelectorAll('[class*=price], [class*=cost], [class*=amount], [data-price]').forEach(function(el, i) {
-          if (i >= 20) return;
-          var t = el.textContent.trim();
-          if (t && t.match(/[\\$\\d]/)) out.push(t.slice(0, 100));
-        });
+      if (pageType === 'unknown' && (/reddit\\.com/.test(lowerUrl) || /\\/r\\//.test(lowerUrl) || /\\/comments\\//.test(lowerUrl) || /\\bupvotes?\\b|\\bposted by\\b|\\breply\\b/.test(lowerText))
+        && ((/\\bcomments?\\b/.test(lowerText) && /\\breply\\b|\\bshare\\b/.test(lowerText)) || /\\/comments\\//.test(lowerUrl))) pageType = 'discussion';
+      else if (pageType === 'unknown' && !/\\/comments\\//.test(lowerUrl) && forms.length > 0 && /(checkout|payment|billing|shipping address|email address|password|enter your email|enter your password)/.test(lowerText)) pageType = 'form';
+      else if (pageType === 'unknown' && (paragraphs.length >= 5 || /article|blog|reading time|minutes read|best\\b|top \\d+|guide\\b|comparison\\b|review\\b|reviews\\b|roundup\\b|buying guide/.test(lowerTitle + ' ' + lowerText))) pageType = 'article';
+
+      const roundupCandidates = pageType === 'article' ? extractRoundupCandidates() : [];
+      const semantic = { headings, lists, tables, links, forms, metadata };
+      const readable = {
+        title: normalize(document.title, 200),
+        summary: metadata.description || metadata.ogDescription || paragraphs[0] || '',
+        keyParagraphs: paragraphs.slice(0, 8),
+      };
+
+      let kind = 'generic';
+      let confidence = visibleText.length > 160 ? 0.42 : 0.25;
+      let data = visibleText.slice(0, 8000);
+      let count = undefined;
+
+      if (pageType === 'article' && roundupCandidates.length >= 1) {
+        kind = 'article_roundup';
+        confidence = 0.84;
+        count = roundupCandidates.length;
+        data = {
+          readable,
+          candidates: roundupCandidates,
+          headings: headings.slice(0, 8),
+          visibleText: visibleText.slice(0, 3000),
+        };
+      } else if (headings.length >= 2 || tables.length > 0 || lists.length > 0 || forms.length > 0 || (links.length >= 8 && paragraphs.length >= 2)) {
+        kind = 'structured';
+        confidence = 0.88;
+        count = headings.length + lists.length + tables.length + links.length;
+        data = {
+          semantic,
+          readable,
+          visibleText: visibleText.slice(0, 3000),
+        };
+      } else if (paragraphs.length > 0 || links.length > 0 || metadata.description || metadata.ogDescription) {
+        kind = 'semi_structured';
+        confidence = 0.68;
+        count = paragraphs.length + links.length;
+        data = {
+          readable,
+          links: links.slice(0, 10),
+          visibleText: visibleText.slice(0, 4000),
+        };
       }
-      if (instruction.match(/link|url|href|navigation|nav/)) {
-        document.querySelectorAll('a[href]').forEach(function(a, i) {
-          if (i >= 30) return;
-          var t = (a.textContent||'').trim().slice(0,80);
-          var h = a.getAttribute('href')||'';
-          if (t && h && !h.startsWith('#') && !h.startsWith('javascript:')) out.push(t + ' → ' + h.slice(0, 100));
-        });
-      }
-      if (instruction.match(/form|field|input|label|submit/)) {
-        document.querySelectorAll('input, textarea, select').forEach(function(el, i) {
-          if (i >= 20) return;
-          var t = el.tagName.toLowerCase();
-          var ty = el.getAttribute('type') || '';
-          var nm = el.getAttribute('name') || '';
-          var p = el.getAttribute('placeholder') || '';
-          out.push(t + (ty ? '['+ty+']' : '') + (nm ? ' name='+nm : '') + (p ? ' ('+p+')' : ''));
-        });
-      }
-      if (instruction.match(/heading|title|section|structure|outline/)) {
-        document.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(function(h, i) {
-          if (i >= 20) return;
-          var t = h.textContent.trim().slice(0, 120);
-          if (t) out.push(h.tagName + ': ' + t);
-        });
-      }
-      if (out.length === 0) {
-        var main = document.querySelector('main, [role=main], article');
-        return ((main || document.body).innerText || '').trim().slice(0, 8000);
-      }
-      return out.join('\\n\\n').slice(0, 10000);
+
+      return {
+        kind,
+        confidence,
+        pageType,
+        url: location.href,
+        title: document.title,
+        count,
+        data,
+        visibleText,
+        formsCount: forms.length,
+      };
     })()`);
+
+    const classifiedPageType = classifyPageType({
+      url: result.url,
+      title: result.title,
+      visibleText: result.visibleText || '',
+      interactiveElements: [],
+      forms: Array.from({ length: Number(result.formsCount) || 0 }, () => ({} as any)),
+    });
+
+    if (isCommerceInstruction(instruction) && (classifiedPageType === 'product' || classifiedPageType === 'listing')) {
+      const kind = pickExtractionKind(instruction);
+      const commerceKind = kind === 'auto'
+        ? (classifiedPageType === 'product' ? 'product_details' : 'listings')
+        : kind;
+      const commerceResult = await view.webContents.executeJavaScript(buildCommerceExtractionScript(commerceKind));
+      recordExtraction(target, commerceResult.kind, commerceResult.data);
+      recordLastAction(target, 'extract', summarizeExtraction(commerceResult.kind, commerceResult.data), true);
+      return JSON.stringify(commerceResult, null, 2);
+    }
+
     const envelope: StructuredExtractionEnvelope<any> = {
-      kind: 'generic',
-      pageType: 'unknown',
-      url: view.webContents.getURL(),
-      title: view.webContents.getTitle(),
-      data: result,
+      kind: result.kind,
+      confidence: result.confidence,
+      pageType: classifiedPageType,
+      url: result.url,
+      title: result.title,
+      count: typeof result.count === 'number' ? result.count : undefined,
+      data: result.data,
     };
-    recordExtraction(target, envelope.kind, result);
-    recordLastAction(target, 'extract', summarizeExtraction(envelope.kind, result), true);
+    recordExtraction(target, envelope.kind, envelope.data);
+    recordLastAction(target, 'extract', summarizeExtraction(envelope.kind, envelope.data), true);
     return JSON.stringify(envelope, null, 2);
   } catch {
     const text = await getVisibleText(target);
@@ -1203,6 +1479,7 @@ export async function extractData(instruction: string, target?: BrowserTarget): 
     recordLastAction(target, 'extract', 'generic: fallback to visible text', true);
     return JSON.stringify({
       kind: 'generic',
+      confidence: text.trim().length > 160 ? 0.4 : 0.2,
       pageType: 'unknown',
       url: view.webContents.getURL(),
       title: view.webContents.getTitle(),
@@ -1311,9 +1588,94 @@ export async function search(query: string, target?: BrowserTarget): Promise<str
       return JSON.stringify(r);
     })()`);
     const parsed = JSON.parse(results || '[]');
-    if (parsed.length === 0) return `Search for "${query}":\n\n` + (await getVisibleText(target)).slice(0, 4000);
-    return `Search results for "${query}":\n\n` + parsed.map((r: any, i: number) => `[${i+1}] ${r.title}\n    ${r.url}${r.snippet ? '\n    ' + r.snippet : ''}`).join('\n\n');
+    const filtered = rankSearchResults(query, Array.isArray(parsed) ? parsed : []);
+    if (filtered.length === 0) return `Search for "${query}":\n\n` + (await getVisibleText(target)).slice(0, 4000);
+    return `Search results for "${query}":\n\n` + filtered.map((r: any, i: number) => `[${i+1}] ${r.title}${r.sourceType ? ` [${r.sourceType}]` : ''}\n    ${r.url}${r.snippet ? '\n    ' + r.snippet : ''}`).join('\n\n');
   } catch (err: any) { return '[Error searching]: ' + err.message; }
+}
+
+type SearchSourceType = 'guide_review' | 'listing_store' | 'discussion' | 'video' | 'reference' | 'unknown';
+
+function inferSearchSourceType(url: string, title: string, snippet: string): SearchSourceType {
+  const lowerUrl = url.toLowerCase();
+  const haystack = `${title} ${snippet}`.toLowerCase();
+  if (/youtube\.com|youtu\.be|tiktok\.com|instagram\.com\/reel|vimeo\.com/.test(lowerUrl)) return 'video';
+  if (/reddit\.com|forum|community|discourse|stackexchange|stackoverflow/.test(lowerUrl)) return 'discussion';
+  if (/github\.com|docs\.|wikipedia\.org|developer\./.test(lowerUrl)) return 'reference';
+  if (/\/product|\/products|\/shop|\/store|\/category|\/collections?/.test(lowerUrl)) return 'listing_store';
+  if (/\/review|\/reviews|\/best|\/guide|\/compare|\/comparison|\/blog|\/article/.test(lowerUrl)
+    || /\b(best|top|review|reviews|guide|comparison|under|budget|beginner|recommended|tested|ranked)\b/.test(haystack)) {
+    return 'guide_review';
+  }
+  return 'unknown';
+}
+
+function rankSearchResults(query: string, results: Array<{ title?: string; url?: string; snippet?: string }>): Array<{ title: string; url: string; snippet: string; sourceType: SearchSourceType }> {
+  const lowerQuery = query.toLowerCase();
+  const wantsVideo = /\b(video|youtube|watch|clip|shorts?|podcast|listen)\b/i.test(query);
+  const wantsShopping = /\b(best|top|under \$?\d+|buy|price|priced|review|reviews|compare|comparison|beginner|affordable|budget)\b/i.test(query);
+  const wantsDiscussion = /\b(reddit|forum|forums|discussion|community|what do people say|opinions?)\b/i.test(query);
+
+  const ranked = results
+    .map((result) => ({
+      title: String(result.title || '').trim(),
+      url: String(result.url || '').trim(),
+      snippet: String(result.snippet || '').trim(),
+    }))
+    .filter((result) => result.title && result.url)
+    .map((result) => {
+      let score = 0;
+      const haystack = `${result.title} ${result.snippet}`.toLowerCase();
+      const url = result.url.toLowerCase();
+      const sourceType = inferSearchSourceType(result.url, result.title, result.snippet);
+      const isVideo = sourceType === 'video';
+      const isDiscussion = sourceType === 'discussion';
+      const isGuideOrReview = sourceType === 'guide_review';
+      const isCommerceListing = sourceType === 'listing_store';
+
+      if (isVideo) score -= wantsVideo ? 0 : 8;
+      if (sourceType === 'reference') score += 2;
+      if (wantsShopping) {
+        if (isGuideOrReview) score += 4;
+        if (isCommerceListing) score += 3;
+        if (isDiscussion) score += wantsDiscussion ? 1 : -3;
+      } else if (isDiscussion && wantsDiscussion) {
+        score += 3;
+      } else if (isDiscussion) {
+        score += 1;
+      }
+      if (lowerQuery.includes('2026') && /\b2026\b/.test(haystack)) score += 1;
+      if (lowerQuery.includes('2025') && /\b2025\b/.test(haystack)) score += 1;
+
+      return { ...result, sourceType, score };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  const selected: typeof ranked = [];
+  const usedDomains = new Set<string>();
+  const typeCounts = new Map<SearchSourceType, number>();
+
+  for (const result of ranked) {
+    if (selected.length >= 6) break;
+    let domain = '';
+    try { domain = new URL(result.url).hostname.replace(/^www\./, ''); } catch {}
+    const usedTypeCount = typeCounts.get(result.sourceType) || 0;
+    const domainAlreadyUsed = domain ? usedDomains.has(domain) : false;
+
+    if (wantsShopping) {
+      if (result.sourceType === 'discussion' && usedTypeCount >= 1) continue;
+      if (result.sourceType === 'guide_review' && usedTypeCount >= 2 && domainAlreadyUsed) continue;
+      if (result.sourceType === 'listing_store' && usedTypeCount >= 1 && domainAlreadyUsed) continue;
+    } else if (domainAlreadyUsed && usedTypeCount >= 1) {
+      continue;
+    }
+
+    selected.push(result);
+    if (domain) usedDomains.add(domain);
+    typeCounts.set(result.sourceType, usedTypeCount + 1);
+  }
+
+  return selected.map(({ score: _score, ...result }) => result);
 }
 
 import { executeHarness as _executeHarness, findHarnessByUrl, saveHarness, getHarnessesForDomain, getHarnessContextForUrl } from './site-harness';

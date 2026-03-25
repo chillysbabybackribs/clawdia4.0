@@ -374,7 +374,31 @@ export async function executeBrowserCompareProducts(input: Record<string, any>):
 }
 
 // ── Tab management tools (for agent swarm parallelism) ──
-import { createTab, switchTab, closeTab, getTabList } from '../../browser/manager';
+import { createTab, switchTab, closeTab, getTabList, openBackgroundTabForRun } from '../../browser/manager';
+
+export async function executeBrowserTabOpenBackground(input: Record<string, any>): Promise<string> {
+  try {
+    const url = typeof input.url === 'string' ? input.url.trim() : undefined;
+    const tabId = await openBackgroundTabForRun(
+      typeof input.__runId === 'string' ? input.__runId : undefined,
+      url || 'about:blank',
+    );
+    return JSON.stringify({ tabId, url: url || 'about:blank' });
+  } catch (err: any) {
+    return `[Error: browser_tab_open_background] ${err.message}`;
+  }
+}
+
+export async function executeBrowserTabCloseBackground(input: Record<string, any>): Promise<string> {
+  try {
+    const tabId = String(input.tabId || '').trim();
+    if (!tabId) return '[Error: browser_tab_close_background] tabId required';
+    closeTab(tabId);
+    return `Background tab ${tabId} closed.`;
+  } catch (err: any) {
+    return `[Error: browser_tab_close_background] ${err.message}`;
+  }
+}
 
 export async function executeBrowserTabNew(input: Record<string, any>): Promise<string> {
   try {

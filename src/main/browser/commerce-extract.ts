@@ -50,14 +50,14 @@ function matchHref(html: string, patterns: RegExp[], baseUrl: string): string | 
 }
 
 export function isCommerceInstruction(instruction: string): boolean {
-  return /\b(product|listing|results|price|rating|review|seller|ships from|delivery|compare|commerce|amazon|about this item|feature list|features?|bullets?)\b/i.test(instruction);
+  return /\b(product details?|seller|ships from|delivery|about this item|feature list|buy box|review summary|ratings histogram|search results?|listing cards?)\b/i.test(instruction);
 }
 
 export function pickExtractionKind(instruction: string): CommerceExtractionKind {
   const lower = instruction.toLowerCase();
-  if (/\breview/.test(lower)) return 'reviews_summary';
-  if (/\b(detail|product|seller|ships from|delivery|bullets?|features?|about this item|feature list)\b/.test(lower)) return 'product_details';
-  if (/\b(listing|results|candidates?|products?)\b/.test(lower)) return 'listings';
+  if (/\breview summary|ratings histogram|review highlights?\b/.test(lower)) return 'reviews_summary';
+  if (/\b(product details?|seller|ships from|delivery|about this item|feature list|buy box)\b/.test(lower)) return 'product_details';
+  if (/\b(listing cards?|search results?|search page|catalog page)\b/.test(lower)) return 'listings';
   return 'auto';
 }
 

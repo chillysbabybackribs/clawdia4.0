@@ -34,13 +34,18 @@ const SEQUENTIAL_TOOLS = new Set([
   'gui_interact', 'app_control', 'dbus_control', 'shell_exec',
 ]);
 
-function isSequentialTool(toolName: string): boolean {
+function isSequentialTool(toolName: string, input?: Record<string, unknown>): boolean {
   if (SEQUENTIAL_TOOLS.has(toolName)) return true;
   // Browser workers operate against one active tab unless they explicitly manage tabs.
   // Running stateful browser tools in parallel on the same worker causes tab clobbering
-  // and non-deterministic reads. Keep browser_search parallel-safe, but serialize the
-  // rest of the browser tool surface by default.
-  if (toolName.startsWith('browser_') && toolName !== 'browser_search') return true;
+  // and non-deterministic reads. Keep browser_search parallel-safe, and also allow
+  // parallel dispatch when the tool carries a tabId — that means it targets an isolated
+  // background tab and cannot clobber the active session.
+  if (toolName.startsWith('browser_') && toolName !== 'browser_search') {
+    if (toolName === 'browser_tab_open_background') return false;
+    if (input && typeof input.tabId === 'string' && input.tabId.length > 0) return false;
+    return true;
+  }
   return false;
 }
 
@@ -60,7 +65,7 @@ export function partitionIntoBatches(
   const seenNames: string[] = [];
 
   for (const block of blocks) {
-    const isSeq = isSequentialTool(block.name);
+    const isSeq = isSequentialTool(block.name, block.input as Record<string, unknown>);
     const inputStr = JSON.stringify(block.input).toLowerCase();
     const referencesPrev = seenNames.some(n => inputStr.includes(n.toLowerCase()));
 

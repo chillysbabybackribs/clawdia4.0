@@ -9,7 +9,7 @@
 import type { ToolGroup } from './classifier';
 import type { NormalizedToolDefinition } from './client';
 import { executeShellExec, executeCalendarManage, executeFileRead, executeFileWrite, executeFileEdit, executeDirectoryTree, executeFsQuoteLookup, executeFsFolderSummary, executeFsReorgPlan, executeFsDuplicateScan, executeFsApplyPlan } from './executors/core-executors';
-import { executeBrowserSearch, executeBrowserNavigate, executeBrowserReadPage, executeBrowserClick, executeBrowserType, executeBrowserExtract, executeBrowserExtractListings, executeBrowserExtractProductDetails, executeBrowserExtractReviewsSummary, executeBrowserScreenshot, executeBrowserScroll, executeBrowserFocusField, executeBrowserDetectForm, executeBrowserFillField, executeBrowserRunHarness, executeBrowserRegisterHarness, executeBrowserTabNew, executeBrowserTabSwitch, executeBrowserTabClose, executeBrowserTabList, executeBrowserEval, executeBrowserDomSnapshot, executeBrowserPageState, executeBrowserNetworkWatch, executeBrowserWait, executeBrowserBatch, executeBrowserCompareProducts } from './executors/browser-executors';
+import { executeBrowserSearch, executeBrowserNavigate, executeBrowserReadPage, executeBrowserClick, executeBrowserType, executeBrowserExtract, executeBrowserExtractListings, executeBrowserExtractProductDetails, executeBrowserExtractReviewsSummary, executeBrowserScreenshot, executeBrowserScroll, executeBrowserFocusField, executeBrowserDetectForm, executeBrowserFillField, executeBrowserRunHarness, executeBrowserRegisterHarness, executeBrowserTabNew, executeBrowserTabSwitch, executeBrowserTabClose, executeBrowserTabList, executeBrowserTabOpenBackground, executeBrowserTabCloseBackground, executeBrowserEval, executeBrowserDomSnapshot, executeBrowserPageState, executeBrowserNetworkWatch, executeBrowserWait, executeBrowserBatch, executeBrowserCompareProducts } from './executors/browser-executors';
 import { executeCreateDocument, executeMemorySearch, executeMemoryStore, executeRecallContext } from './executors/extra-executors';
 import { executeAppControl, executeGuiInteract, executeDbusControl } from './executors/desktop-executors';
 import { spawnSwarm } from './agent-spawn-executor';
@@ -180,11 +180,11 @@ const CORE_TOOLS: NormalizedToolDefinition[] = [
 
 const BROWSER_TOOLS: NormalizedToolDefinition[] = [
   { name: 'browser_search', description: 'Web search via Google. Returns top 5 results.', input_schema: { type: 'object' as const, properties: { query: { type: 'string', description: 'Search query' } }, required: ['query'] } },
-  { name: 'browser_navigate', description: 'Navigate to URL. Returns title, URL, visible text, AND a numbered list of interactive elements (buttons, links, inputs) with their types, labels, and aria attributes. Use element indices from this list for precise clicking.', input_schema: { type: 'object' as const, properties: { url: { type: 'string', description: 'URL' } }, required: ['url'] } },
-  { name: 'browser_read_page', description: 'Re-read current page text + interactive elements. Use after SPA navigation or dynamic content changes. Returns the same format as browser_navigate (text + element list).', input_schema: { type: 'object' as const, properties: {} } },
+  { name: 'browser_navigate', description: 'Navigate to URL. Returns title, URL, visible text, AND a numbered list of interactive elements. Pass tabId to operate on a background tab opened with browser_tab_open_background.', input_schema: { type: 'object' as const, properties: { url: { type: 'string', description: 'URL' }, tabId: { type: 'string', description: 'Optional background tab ID from browser_tab_open_background' } }, required: ['url'] } },
+  { name: 'browser_read_page', description: 'Re-read current page text + interactive elements. Use after SPA navigation or dynamic content changes. Returns the same format as browser_navigate (text + element list). Pass tabId to read from a tab opened with browser_tab_open_background.', input_schema: { type: 'object' as const, properties: { tabId: { type: 'string', description: 'Optional tab ID returned by browser_tab_open_background' } } } },
   { name: 'browser_click', description: 'Click element by index number (from element list), CSS selector, or visible text match. Returns click confirmation + updated interactive elements. Use index for precision: browser_click("3") clicks element [3]. Use CSS selector for specifics: browser_click("[aria-label=Compose]"). Use text for simple cases: browser_click("Submit").', input_schema: { type: 'object' as const, properties: { target: { type: 'string', description: 'Element index number, CSS selector, or text to match' } }, required: ['target'] } },
   { name: 'browser_type', description: 'Type text into input field.', input_schema: { type: 'object' as const, properties: { text: { type: 'string', description: 'Text to type' }, selector: { type: 'string', description: 'Optional CSS selector' } }, required: ['text'] } },
-  { name: 'browser_extract', description: 'Extract targeted structured data from the current page. For commerce pages, this now returns typed structured extraction for listings, product details, pricing, ratings, review counts, delivery, seller, and similar product links before falling back to generic extraction.', input_schema: { type: 'object' as const, properties: { instruction: { type: 'string', description: 'What to extract — be specific (e.g. "pricing table", "product details", "reviews summary", "navigation links")' } }, required: ['instruction'] } },
+  { name: 'browser_extract', description: 'Extract targeted structured data from the current page. Pass tabId to extract from a background tab.', input_schema: { type: 'object' as const, properties: { instruction: { type: 'string', description: 'What to extract — be specific (e.g. "pricing table", "product details", "reviews summary", "navigation links")' }, tabId: { type: 'string', description: 'Optional background tab ID from browser_tab_open_background' } }, required: ['instruction'] } },
   { name: 'browser_extract_listings', description: 'Extract structured candidate listings from the current results page. Returns bounded JSON-like listing objects with title, URL, price, rating, review count, delivery info, and seller when available.', input_schema: { type: 'object' as const, properties: {} } },
   { name: 'browser_extract_product_details', description: 'Extract structured product-detail data from the current page. Returns title, URL, price, rating, review count, delivery info, seller, ships-from info, key bullets, and selected product links.', input_schema: { type: 'object' as const, properties: {} } },
   { name: 'browser_extract_reviews_summary', description: 'Extract a bounded structured review summary from the current page. Returns rating, review count, highlights, and a compact histogram when present.', input_schema: { type: 'object' as const, properties: {} } },
@@ -294,12 +294,13 @@ const BROWSER_TOOLS: NormalizedToolDefinition[] = [
   },
   {
     name: 'browser_scroll',
-    description: 'Scroll the browser page. Use to access content below the fold or return to the top. Returns visible text after scrolling plus scroll position (percentage, at-top/at-bottom indicators). Default scrolls ~80% of viewport height.',
+    description: 'Scroll the browser page. Use to access content below the fold or return to the top. Returns visible text after scrolling plus scroll position (percentage, at-top/at-bottom indicators). Default scrolls ~80% of viewport height. Pass tabId to scroll a specific tab opened with browser_tab_open_background.',
     input_schema: {
       type: 'object' as const,
       properties: {
         direction: { type: 'string', enum: ['down', 'up', 'top', 'bottom'], description: 'Scroll direction. "down"/"up" scroll incrementally, "top"/"bottom" jump to page edges.' },
         amount: { type: 'number', description: 'Pixels to scroll (optional — defaults to 80% of viewport)' },
+        tabId: { type: 'string', description: 'Optional tab ID returned by browser_tab_open_background' },
       },
       required: ['direction'],
     },
@@ -399,8 +400,30 @@ const BROWSER_TOOLS: NormalizedToolDefinition[] = [
     },
   },
   {
+    name: 'browser_tab_open_background',
+    description: 'Open a visible non-focused browser tab, optionally navigating to a URL. Returns a tabId. Pass that tabId to browser_navigate, browser_extract, browser_read_page, or browser_scroll to inspect that tab. Leave these tabs open by default so the user can keep reading them; only close them when the user asks or you need to free tab budget. Use this to fetch multiple URLs in parallel.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        url: { type: 'string', description: 'Optional URL to load immediately in the background tab' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'browser_tab_close_background',
+    description: 'Close a tab opened with browser_tab_open_background. Do this only when the user asks or you need to free tab budget for more sources.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        tabId: { type: 'string', description: 'Tab ID returned by browser_tab_open_background' },
+      },
+      required: ['tabId'],
+    },
+  },
+  {
     name: 'browser_tab_new',
-    description: 'Open a new browser tab, optionally navigating to a URL. Returns the new tab ID. Use for parallel browsing in agent swarms — each agent works in its own tab.',
+    description: 'Open a new visible browser tab, optionally navigating to a URL. Returns the new tab ID. For silent parallel fetches use browser_tab_open_background instead.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -442,11 +465,16 @@ const BROWSER_TOOLS: NormalizedToolDefinition[] = [
   },
   {
     name: 'browser_run_playbook',
-    description: 'Replay a saved browser playbook by ID. Use when the prompt context already identified a matching Bloodhound executor and you want to reuse that validated route instead of rediscovering the navigation path with primitive browser actions.',
+    description: 'Replay a saved browser playbook by ID. Use when the prompt context already identified a matching Bloodhound executor and you want to reuse that validated route instead of rediscovering the navigation path with primitive browser actions. If the playbook has template slots, pass filled values in the params object.',
     input_schema: {
       type: 'object' as const,
       properties: {
         playbook_id: { type: 'number', description: 'Saved browser playbook ID from prompt context or planner output' },
+        params: {
+          type: 'object',
+          description: 'Optional slot values to fill into the playbook template (e.g. {"subreddit": "MachineLearning", "search_query": "rust async"}). Only needed when the playbook has template slots listed in the prompt context.',
+          additionalProperties: { type: 'string' },
+        },
       },
       required: ['playbook_id'],
     },
@@ -579,7 +607,7 @@ const EXTRA_TOOLS: NormalizedToolDefinition[] = [
 export function getToolsForGroup(group: ToolGroup): NormalizedToolDefinition[] {
   switch (group) {
     case 'core': return [...CORE_TOOLS, ...EXTRA_TOOLS.filter(t => t.name === 'agent_spawn')];
-    case 'browser': return [...BROWSER_TOOLS];
+    case 'browser': return [...BROWSER_TOOLS, ...CORE_TOOLS.filter(t => t.name === 'file_write'), ...EXTRA_TOOLS.filter(t => t.name === 'create_document')];
     case 'full': return [...CORE_TOOLS, ...BROWSER_TOOLS, ...EXTRA_TOOLS];
   }
 }
@@ -645,6 +673,8 @@ const DISPATCH: Record<string, ToolExecutor> = {
   browser_fill_field:  executeBrowserFillField,
   browser_run_harness: executeBrowserRunHarness,
   browser_register_harness: executeBrowserRegisterHarness,
+  browser_tab_open_background: executeBrowserTabOpenBackground,
+  browser_tab_close_background: executeBrowserTabCloseBackground,
   browser_tab_new:    executeBrowserTabNew,
   browser_tab_switch: executeBrowserTabSwitch,
   browser_tab_close:  executeBrowserTabClose,
@@ -660,7 +690,10 @@ const DISPATCH: Record<string, ToolExecutor> = {
           tabId: typeof input.tabId === 'string' ? input.tabId : undefined,
         }
       : undefined;
-    const result = await executeSavedBloodhoundPlaybookById(playbookId, { target });
+    const params = input.params && typeof input.params === 'object' && !Array.isArray(input.params)
+      ? input.params as Record<string, string>
+      : undefined;
+    const result = await executeSavedBloodhoundPlaybookById(playbookId, { target, params });
     if (!result) return `[Error] No saved Bloodhound playbook found for ID ${playbookId}`;
     return result.response;
   },

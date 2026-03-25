@@ -359,11 +359,12 @@ function ensureUnique<T>(values: T[]): T[] {
 
 function inferBaseGoal(input: HarnessResolutionInput): { goal: HarnessGoalId; confidence: number } {
   const message = input.userMessage;
+  const isBrowserComparePrompt = input.profile.promptModules.has('browser')
+    && /\b(compare|comparison|versus|vs\.?|report|best|recommend)\b/i.test(message);
   if (isHighSafetyPrompt(message)) return { goal: 'safely_apply_change', confidence: 0.9 };
-  if (input.profile.promptModules.has('research') && /\b(compare|comparison|versus|vs\.?|report)\b/i.test(message)) {
+  if (isBrowserComparePrompt) {
     return { goal: 'compare_and_report', confidence: 0.9 };
   }
-  if (input.profile.promptModules.has('research')) return { goal: 'gather_evidence', confidence: 0.85 };
   if (input.profile.promptModules.has('coding') || input.profile.promptModules.has('filesystem')) {
     return { goal: 'modify_workspace', confidence: 0.85 };
   }
@@ -375,6 +376,9 @@ function inferBaseGoal(input: HarnessResolutionInput): { goal: HarnessGoalId; co
   }
   if (/\b(write|save|create|generate|export|document|markdown|report)\b/i.test(message)) {
     return { goal: 'produce_artifact', confidence: 0.75 };
+  }
+  if (input.profile.promptModules.has('browser')) {
+    return { goal: 'gather_evidence', confidence: 0.75 };
   }
   return { goal: 'complete_action', confidence: 0.6 };
 }
@@ -529,11 +533,11 @@ export const HARNESS_DEFINITIONS: HarnessDefinition[] = [
     },
   },
   {
-    id: 'research',
-    description: 'Evidence-oriented browser research and extraction harness.',
+    id: 'browser_general',
+    description: 'Bounded browser search and inspection harness for general web tasks.',
     priority: 60,
-    applies: (input) => input.profile.promptModules.has('research') || (input.profile.promptModules.has('browser') && isResearchPrompt(input.userMessage)),
-    executionMode: 'step_controlled',
+    applies: (input) => input.profile.toolGroup === 'browser' && !isBrowserTransactionPrompt(input.userMessage),
+    executionMode: 'direct',
     toolPolicy: {
       preferFamilies: ['browser', 'memory'],
       discourageFamilies: ['desktop'],
@@ -548,12 +552,18 @@ export const HARNESS_DEFINITIONS: HarnessDefinition[] = [
       requireVerificationSummary: true,
     },
     promptPolicy: {
-      addModules: ['research', 'browser'],
+      addModules: ['browser'],
       directiveLines: [
-        'Prefer evidence-backed extraction and concise synthesis.',
+        'Prefer bounded source collection, concise synthesis, and predictable browser behavior.',
         'Avoid GUI unless browser or filesystem tooling cannot complete the task.',
-        'Never navigate to about:blank or any empty URL during research. Blank navigations are invalid.',
+        'Never navigate to about:blank or any empty URL during search. Blank navigations are invalid.',
         'If the needed information may already be on the current page, use browser_read_page or browser_extract instead of navigating away.',
+        'Open all target URLs in one turn with browser_tab_open_background so they dispatch in parallel.',
+        'Extract each tab exactly once with browser_extract using the returned tabId.',
+        'Leave inspected tabs open by default so the user can continue reading them. Only close tabs if the user asks or tab budget pressure makes it necessary.',
+        'Do not re-open, re-navigate, or re-search unless the current evidence is clearly insufficient.',
+        'Use exactly one write tool per artifact: file_write for explicit paths, create_document only for default artifacts.',
+        'Do not use browser_eval for filesystem writes.',
       ],
     },
   },

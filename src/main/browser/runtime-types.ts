@@ -1,7 +1,7 @@
 import type { BrowserNetworkEntry } from './debugger-session';
 import type { DomSnapshotResult } from './dom-snapshot';
 
-export type BrowserPageType = 'listing' | 'product' | 'form' | 'article' | 'unknown';
+export type BrowserPageType = 'listing' | 'product' | 'form' | 'article' | 'repository' | 'discussion' | 'unknown';
 
 export interface CommerceListing {
   title: string;
@@ -38,10 +38,11 @@ export interface ReviewsSummary {
 }
 
 export interface StructuredExtractionEnvelope<T> {
-  kind: 'listings' | 'product_details' | 'reviews_summary' | 'generic';
+  kind: 'listings' | 'product_details' | 'reviews_summary' | 'article_roundup' | 'structured' | 'semi_structured' | 'generic';
   pageType: BrowserPageType;
   url: string;
   title: string;
+  confidence?: number;
   count?: number;
   data: T;
 }
